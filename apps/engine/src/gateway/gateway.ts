@@ -114,10 +114,16 @@ export interface ApprovalStore {
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean;
   // Attempts recovery may own: in_flight or unknown and older than the
   // cutoff, so no live request can still be working them.
-  listRecoverableAttempts(olderThanIso: string): Attempt[];
-  // True when any attempt is in_flight or unknown. The agent schedules
-  // a durable recovery run while this holds.
+  // A failing lookup waits for its next time, and one the sweep stopped on
+  // is left out.
+  listRecoverableAttempts(olderThanIso: string, nowIso?: string): Attempt[];
+  // True when any attempt is in_flight or unknown and the sweep has not
+  // stopped looking for it. The agent schedules a durable recovery run while
+  // this holds.
   hasUnresolvedAttempts(): boolean;
+  // When lookups began failing for this attempt and when to look next. Both
+  // null clears it; a time with no next lookup ends the sweep's looking.
+  setLookupSchedule(key: string, failingSince: string | null, nextLookupAt: string | null): void;
   updateAttempt(key: string, status: Attempt["status"]): void;
   // Retires an approved approval, in one guarded step: only while its
   // attempt is still failed at version and no receipt exists for its key.
@@ -142,6 +148,11 @@ export const SUPERSEDED_REASON = "A newer request replaced this one, so it can n
 // Statuses that hold an action key, in the order a lookup prefers them:
 // a NO first, then a revocation, then the consumed approval, then the
 // live one.
+// How the recovery sweep backs off a lookup with no answer: each wait is as
+// long as it has been failing, starting here, until the window ends.
+const FIRST_LOOKUP_DELAY_MS = 5 * 60_000;
+const LOOKUP_WINDOW_MS = 24 * 3600_000;
+
 export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "retired", "approved", "pending"];
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
@@ -360,13 +371,22 @@ export class MemoryApprovalStore implements ApprovalStore {
     this.attempts.set(key, { ...current, updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
-  listRecoverableAttempts(olderThanIso: string) {
+  listRecoverableAttempts(olderThanIso: string, nowIso = new Date().toISOString()) {
     return [...this.attempts.values()].filter(
-      (a) => (a.status === "in_flight" || a.status === "unknown") && a.updatedAt < olderThanIso,
+      (a) =>
+        (a.status === "in_flight" || a.status === "unknown") &&
+        a.updatedAt < olderThanIso &&
+        (!a.lookupFailingSince || (!!a.nextLookupAt && a.nextLookupAt <= nowIso)),
     );
   }
   hasUnresolvedAttempts() {
-    return [...this.attempts.values()].some((a) => a.status === "in_flight" || a.status === "unknown");
+    return [...this.attempts.values()].some(
+      (a) => (a.status === "in_flight" || a.status === "unknown") && (!a.lookupFailingSince || !!a.nextLookupAt),
+    );
+  }
+  setLookupSchedule(key: string, failingSince: string | null, nextLookupAt: string | null) {
+    const current = this.attempts.get(key);
+    if (current) this.attempts.set(key, { ...current, lookupFailingSince: failingSince, nextLookupAt });
   }
   updateAttempt(key: string, status: Attempt["status"]) {
     const current = this.attempts.get(key);
@@ -934,6 +954,7 @@ export class ActionGateway {
       actionType: stored.type,
       recipient: stored.recipient,
       personId: stored.personId,
+      provider: this.executor.providerOf?.(stored) ?? null,
     };
     const consumed = this.store.consumeApprovalAndClaim(approvalId, humanId, attempt, {
       personId: approval.personId,
@@ -1071,7 +1092,7 @@ export class ActionGateway {
     try {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+      await this.noteLookupFailed(req.idempotencyKey, err, now, keyHash);
       if (err instanceof UnconfirmedSendError) {
         return { kind: "unavailable", result: { status: "blocked", reason: err.message, unconfirmed: true } };
       }
@@ -1085,6 +1106,7 @@ export class ActionGateway {
         },
       };
     }
+    if (this.store.getAttempt(req.idempotencyKey)?.lookupFailingSince) this.store.setLookupSchedule(req.idempotencyKey, null, null);
     if (outcome.found) {
       const attempt = this.store.getAttempt(req.idempotencyKey);
       const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, outcome.simulated, now, attempt);
@@ -1149,6 +1171,7 @@ export class ActionGateway {
       actionType: req.type,
       recipient: req.recipient,
       personId: req.personId,
+      provider: this.executor.providerOf?.(req) ?? null,
     };
     if (!this.store.insertAttempt(fresh, generation)) {
       if (stale()) return STALE;
@@ -1260,7 +1283,7 @@ export class ActionGateway {
     try {
       outcome = await this.executor.check(key, attempt.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+      await this.noteLookupFailed(key, err, now, keyHash);
       return {
         status: "blocked",
         reason: "The gateway cannot reach the outside system to reconcile this action. Recovery will retry.",
@@ -1286,6 +1309,25 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.recover_absent", keyHash });
       return { status: "blocked", reason: "The outside system has no record of this key. Send the action again." };
     });
+  }
+
+  // A lookup with no answer. For an attempt against a real provider or one
+  // that could not be confirmed, the sweep looks less often as time passes
+  // and stops after a day, leaving it unknown and logging only the first
+  // failure. The attempt is never resent from here, and a person's own YES
+  // still looks. Others keep their usual sweep and log each failure.
+  private async noteLookupFailed(key: string, err: unknown, now: Date, keyHash: AuditDigest): Promise<void> {
+    const attempt = this.store.getAttempt(key);
+    const backsOff = err instanceof UnconfirmedSendError || !!attempt?.provider;
+    if (attempt && backsOff) {
+      if (attempt.lookupFailingSince && !attempt.nextLookupAt) return;
+      const since = attempt.lookupFailingSince ?? now.toISOString();
+      const elapsed = now.getTime() - Date.parse(since);
+      const next = elapsed >= LOOKUP_WINDOW_MS ? null : new Date(now.getTime() + Math.max(FIRST_LOOKUP_DELAY_MS, elapsed)).toISOString();
+      this.store.setLookupSchedule(key, since, next);
+      if (attempt.lookupFailingSince) return;
+    }
+    this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
   }
 
   // Records a receipt, marks its attempt done and applies the action's own

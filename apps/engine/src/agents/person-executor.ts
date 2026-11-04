@@ -35,6 +35,10 @@ export class ConsentDeliveringExecutor implements Executor {
     return this.inner.execute(req);
   }
 
+  providerOf(req: ActionRequest): string | null {
+    return req.type === "share" ? null : (this.inner.providerOf?.(req) ?? null);
+  }
+
   refuse(req: ActionRequest): string | null | Promise<string | null> {
     if (req.type === "share") return null;
     return this.inner.refuse?.(req) ?? null;

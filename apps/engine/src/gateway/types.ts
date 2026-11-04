@@ -92,6 +92,15 @@ export interface Attempt {
   // Bumped by every write to the attempt, so a step that read it before an
   // await can tell whether anything claimed or ran it since.
   version?: number;
+  // The real provider this attempt began against, recorded when it starts,
+  // or null on a stand-in. It answers for the attempt from then on: with
+  // that provider gone, the attempt stays unknown, in any mode.
+  provider?: string | null;
+  // When lookups for this attempt began failing to give an answer, and when
+  // the recovery sweep looks again. Failing since a time with no next
+  // lookup means the sweep has stopped; a person's own YES still looks.
+  lookupFailingSince?: string | null;
+  nextLookupAt?: string | null;
 }
 
 export interface GatewayResult {
@@ -129,6 +138,10 @@ export interface Executor {
   // True when this executor simulates outside systems instead of calling
   // them. Receipts carry the flag so drills never read as real filings.
   readonly simulated: boolean;
+  // The real outside provider this executor sends through, if it has one.
+  readonly provider?: string;
+  // Which real provider a new attempt for this request would begin against.
+  providerOf?(req: ActionRequest): string | null;
   // Runs the action. An execution may override the simulated label for
   // its own receipt when the action is real even though the executor is
   // a stand-in for other actions (consent delivery to a live org agent).

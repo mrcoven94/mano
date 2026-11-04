@@ -66,6 +66,7 @@ export interface FaxClientState {
 
 export class FaxExecutor implements Executor {
   readonly simulated = false;
+  readonly provider = "telnyx";
 
   constructor(
     private config: FaxConfig,
@@ -112,7 +113,9 @@ export class FaxExecutor implements Executor {
     const media = new FormData();
     media.set("media", new Blob([outgoing.pdf], { type: "application/pdf" }), "fax.pdf");
     media.set("media_name", mediaName);
-    // The provider keeps its copy of the document only as long as sending takes.
+    // The upload is the provider's copy of the person's document, and it
+    // deletes it at this expiry. The fax itself stores no media of its own:
+    // store_media, off by default, cannot be sent with media_name anyway.
     media.set("ttl_secs", "3600");
     await this.post("/media", { body: media });
     this.config.sendLog.markSent(key);
@@ -124,7 +127,6 @@ export class FaxExecutor implements Executor {
         to: this.config.ownNumber,
         from: this.config.fromNumber,
         client_state: bytesToBase64(new TextEncoder().encode(JSON.stringify(state))),
-        store_media: false,
       }),
     });
     const data = JSON.parse(res.text) as { data?: { id?: unknown } };

@@ -33,6 +33,13 @@ function rig(tag: string) {
   return { person, call };
 }
 
+async function getHeaders(tag: string): Promise<RequestInit> {
+  const handle = Array.from(new TextEncoder().encode(tag.padEnd(32, "0").slice(0, 32)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return { headers: { authorization: `Bearer ${AGENT_TOKEN}`, "x-mano-handle-grant": await mintHandleGrant(handle, GRANT_SECRET) } };
+}
+
 async function samplePdf(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.addPage([612, 792]).drawText("Synthetic renewal letter", { x: 72, y: 700 });
@@ -101,6 +108,20 @@ describe("replaying a sent letter", () => {
     expect(replay.reason).toBeUndefined();
     expect(replay.status).toBe("completed");
     expect(replay.receipt?.id).toBe(first.receipt.id);
+  });
+
+  it("tells the agent when Mano has stopped checking on a send", async () => {
+    const { person, call } = rig("outbound-ended");
+    await call("POST", "/documents", { id: "g0t1i0-ended", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN);
+    const asked = (await (await call("POST", "/action", { ...LETTER, documentId: "g0t1i0-ended", idempotencyKey: "ended-1" })).json()) as { approval: { id: string } };
+    await call("POST", `/approvals/${asked.approval.id}/approve`, {});
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
+    await runInDurableObject(stub, async (_agent, state) => {
+      state.storage.sql.exec("UPDATE attempts SET status = 'unknown', lookup_failing_since = '2026-11-03T10:00:00.000Z', next_lookup_at = NULL");
+    });
+    const res = await SELF.fetch(`https://engine.test/api/persons/${person}/approvals`, await getHeaders("outbound-ended"));
+    const { approvals } = (await res.json()) as { approvals: { id: string; outcome: { attempt: string; lookupsEnded: boolean } }[] };
+    expect(approvals.find((a) => a.id === asked.approval.id)?.outcome).toMatchObject({ attempt: "unknown", lookupsEnded: true });
   });
 
   it("still refuses the same key with different content", async () => {

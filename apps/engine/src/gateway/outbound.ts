@@ -1,4 +1,4 @@
-import { PDFDict, PDFDocument, PDFName, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, StandardFonts, degrees, type PDFFont, type PDFPage } from "pdf-lib";
 import { base64ToBytes, sha256Hex } from "../hash.js";
 import type { ActionRequest } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
@@ -172,11 +172,11 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
   };
 }
 
-// Embedding a page keeps only what its content draws, within its full
-// media box and unrotated, so what goes out must match what the person
-// saw. A form's filled-in answers are drawn into the page first. A note,
-// stamp, dynamic form, crop or rotation stops the send instead of going
-// out changed.
+// Embedding a page keeps only what its content draws, within a media box
+// taken to start at 0,0, and unrotated, so what goes out must match what
+// the person saw. A form's filled-in answers are drawn into the page first.
+// A note, stamp, dynamic form, crop, rotation or page that starts anywhere
+// else stops the send instead of going out changed.
 const HARMLESS_ANNOTATIONS = new Set(["/Link", "/Popup"]);
 const SAME_BOX_POINTS = 0.5;
 
@@ -187,6 +187,7 @@ function assertSentAsSeen(source: PDFDocument): void {
   for (const page of source.getPages()) {
     if (page.getRotation().angle % 360 !== 0) throw new Error("rotated page");
     const [crop, media] = [page.getCropBox(), page.getMediaBox()];
+    if (Math.abs(media.x) > SAME_BOX_POINTS || Math.abs(media.y) > SAME_BOX_POINTS) throw new Error("page away from the origin");
     if ((["x", "y", "width", "height"] as const).some((side) => Math.abs(crop[side] - media[side]) > SAME_BOX_POINTS)) {
       throw new Error("cropped page");
     }
@@ -199,6 +200,32 @@ function assertSentAsSeen(source: PDFDocument): void {
       }
     }
   }
+}
+
+// How far to turn a photo so it reads the way a viewer shows it, by its
+// EXIF Orientation. The other values are mirrored, which is refused.
+const TURNS: Partial<Record<number, 0 | 180 | -90 | 90>> = { 1: 0, 3: 180, 6: -90, 8: 90 };
+
+// A JPEG's EXIF Orientation, or 1 when it has none or it cannot be read,
+// which is how a viewer treats it too.
+function jpegOrientation(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  try {
+    for (let at = 2; bytes[at] === 0xff && bytes[at + 1] !== 0xda; at += 2 + view.getUint16(at + 2)) {
+      if (bytes[at + 1] !== 0xe1 || String.fromCharCode(...bytes.subarray(at + 4, at + 10)) !== "Exif\0\0") continue;
+      const tiff = at + 10;
+      const little = view.getUint16(tiff) === 0x4949;
+      const entries = tiff + view.getUint32(tiff + 4, little);
+      for (let i = 0; i < view.getUint16(entries, little); i++) {
+        const entry = entries + 2 + i * 12;
+        if (view.getUint16(entry, little) === 0x0112) return view.getUint16(entry + 8, little);
+      }
+      return 1;
+    }
+  } catch {
+    // Ran off the end of a malformed file.
+  }
+  return 1;
 }
 
 // The cover page, then each page of the document fitted to US Letter,
@@ -220,8 +247,16 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
     }
   } else {
     const image = kind === "png" ? await out.embedPng(bytes) : await out.embedJpg(bytes);
-    const { x, y, xScale, yScale } = fitted(image);
-    out.addPage([LETTER.width, LETTER.height]).drawImage(image, { x, y, width: image.width * xScale, height: image.height * yScale });
+    const turn = TURNS[kind === "jpg" ? jpegOrientation(bytes) : 1];
+    if (turn === undefined) throw new Error("mirrored photo");
+    const sideways = turn === 90 || turn === -90;
+    const shown = sideways ? { width: image.height, height: image.width } : { width: image.width, height: image.height };
+    const { x, y, xScale: scale } = fitted(shown);
+    const [right, top] = [x + shown.width * scale, y + shown.height * scale];
+    // pdf-lib turns an image about its lower left corner, so that corner
+    // starts wherever the turn leaves it.
+    const corner = { "0": { x, y }, "180": { x: right, y: top }, "-90": { x, y: top }, "90": { x: right, y } }[turn];
+    out.addPage([LETTER.width, LETTER.height]).drawImage(image, { ...corner, width: image.width * scale, height: image.height * scale, rotate: degrees(turn) });
   }
   const fixed = new Date(0);
   out.setCreationDate(fixed);

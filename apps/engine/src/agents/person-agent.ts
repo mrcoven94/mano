@@ -157,7 +157,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
     this.executor = new ConsentDeliveringExecutor(
-      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql)), (key) => this.store.getAttempt(key)?.actionType ?? null),
+      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql)), (key) => this.store.getAttempt(key)),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -1007,6 +1007,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         ...approval,
         outcome: {
           attempt: attempt?.status ?? null,
+          ...(attempt?.lookupFailingSince && !attempt.nextLookupAt ? { lookupsEnded: true } : {}),
           receipt: receipt ? { externalId: receipt.externalId, simulated: receipt.simulated } : null,
         },
       };

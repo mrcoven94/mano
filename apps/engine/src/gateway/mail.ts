@@ -40,6 +40,7 @@ function parseAddress(value: unknown): MailAddress | null {
 
 export class MailExecutor implements Executor {
   readonly simulated = true;
+  readonly provider = "lob";
 
   constructor(
     private apiKey: string,

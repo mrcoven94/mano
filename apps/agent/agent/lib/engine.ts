@@ -119,6 +119,8 @@ export interface EngineApproval {
   outcome?: {
     attempt: "in_flight" | "unknown" | "failed" | "done" | null;
     receipt: { externalId: string; simulated: boolean } | null;
+    // Mano could not confirm a send and has stopped checking on its own.
+    lookupsEnded?: boolean;
   };
 }
 

@@ -2,7 +2,7 @@ import { FaxExecutor, type FaxSendLog } from "./fax.js";
 import { MailExecutor } from "./mail.js";
 import { isOutbound, outboundPricing, type OutboundEnv, type OutboundType } from "./outbound.js";
 import type { ActionRequest, ActionType, Attempt, CheckOutcome, DocumentFiling, Executor, StoredDocumentFacts } from "./types.js";
-import { DefiniteFailureError } from "./types.js";
+import { DefiniteFailureError, UnconfirmedSendError } from "./types.js";
 
 export function faxConfigured(env: OutboundEnv): boolean {
   return Boolean(env.TELNYX_API_KEY && env.TELNYX_FAX_CONNECTION_ID && env.MANO_OWN_FAX_NUMBER && env.MANO_FAX_FROM_NUMBER);
@@ -29,8 +29,9 @@ export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog): Partia
 
 // A fax or letter whose provider is not set here. Nothing new starts, and
 // a lookup has no answer, so an attempt already out stays unknown until the
-// setting returns. It never falls through to the portal, whose "no such
-// filing" would turn a sent fax into a failed one that a YES sends again.
+// setting returns. It never reaches the portal, whose "no such filing"
+// would turn a sent fax into a failed one that a YES sends again, or the
+// stand-in, whose receipt would call a real send simulated.
 const NO_PROVIDER = "Faxes and letters are not set up here.";
 const UNAVAILABLE: Executor = {
   simulated: false,
@@ -39,37 +40,49 @@ const UNAVAILABLE: Executor = {
     throw new DefiniteFailureError(NO_PROVIDER);
   },
   check: async () => {
-    throw new Error(NO_PROVIDER);
+    throw new UnconfirmedSendError(`${NO_PROVIDER} Mano could not confirm whether this one went through.`);
   },
 };
 
 // Sends faxes and letters to their own executors and everything else to
-// inner. With no provider, an explicit stand-in simulates them, so a local
-// copy runs with no accounts; any other executor never sees them. Reconcile
-// routing reads the persisted attempt, never the key, which the caller
-// controls.
+// inner. A new one with no provider goes to an explicit stand-in, so a local
+// copy runs with no accounts; any other executor never sees it. An attempt
+// already started stays with what it began against, read from the persisted
+// attempt, never from the key, which the caller controls.
 export class OutboundRouter implements Executor {
   readonly simulated: boolean;
 
   constructor(
     private inner: Executor,
     private providers: Partial<Record<OutboundType, Executor>>,
-    private actionTypeOf: (idempotencyKey: string) => Attempt["actionType"] | null,
+    private attemptOf: (idempotencyKey: string) => Attempt | null,
   ) {
     this.simulated = inner.simulated;
   }
 
-  private route(type: ActionType | null): Executor {
+  private forNew(type: ActionType): Executor {
     if (!isOutbound(type)) return this.inner;
     return this.providers[type] ?? (this.inner.simulated ? this.inner : UNAVAILABLE);
   }
 
+  private forAttempt(attempt: Attempt): Executor {
+    if (!isOutbound(attempt.actionType)) return this.inner;
+    const provider = this.providers[attempt.actionType];
+    if (attempt.provider) return provider?.provider === attempt.provider ? provider : UNAVAILABLE;
+    return this.inner.simulated ? this.inner : UNAVAILABLE;
+  }
+
+  providerOf(req: ActionRequest): string | null {
+    return isOutbound(req.type) ? (this.providers[req.type]?.provider ?? null) : null;
+  }
+
   execute(req: ActionRequest): Promise<{ externalId: string; simulated?: boolean }> {
-    return this.route(req.type).execute(req);
+    const attempt = this.attemptOf(req.idempotencyKey);
+    return (attempt ? this.forAttempt(attempt) : this.forNew(req.type)).execute(req);
   }
 
   async refuse(req: ActionRequest): Promise<string | null> {
-    return (await this.route(req.type).refuse?.(req)) ?? null;
+    return (await this.forNew(req.type).refuse?.(req)) ?? null;
   }
 
   documentFiling(doc: StoredDocumentFacts): DocumentFiling {
@@ -77,6 +90,7 @@ export class OutboundRouter implements Executor {
   }
 
   check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
-    return this.route(this.actionTypeOf(idempotencyKey)).check(idempotencyKey, personId);
+    const attempt = this.attemptOf(idempotencyKey);
+    return (attempt ? this.forAttempt(attempt) : this.inner).check(idempotencyKey, personId);
   }
 }
