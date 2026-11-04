@@ -38,6 +38,29 @@ async function postEvent(stub: DurableObjectStub, handleHash: string, event: Rec
 }
 
 describe("ConversationDO on SQLite", () => {
+  it("agent-send passes no replay down to the stored row, and only when asked", async () => {
+    const handleHash = await hashHandle("+15550001001", "pepper-no-replay");
+    const stub = stubFor(handleHash);
+    await postEvent(stub, handleHash, inbound("evt_no_replay", "hello"));
+    const send = async (key: string, extra: Record<string, unknown>) => {
+      const res = await stub.fetch("https://conversation/internal/agent-send", {
+        method: "POST",
+        body: JSON.stringify({ handleHash, key, text: `Text for ${key}.`, generation: 0, ...extra }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { sent: boolean }).sent).toBe(true);
+    };
+    await send("reminder:help:g0:CA:snap", { noReplay: true });
+    await send("reminder:nudge:x", {});
+    const rows = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.sql.exec("SELECT tag, bubble_text AS text FROM outbounds WHERE tag LIKE 'agent%' ORDER BY text").toArray(),
+    );
+    expect(rows).toEqual([
+      { tag: "agent_once", text: "Text for reminder:help:g0:CA:snap." },
+      { tag: "agent", text: "Text for reminder:nudge:x." },
+    ]);
+  });
+
   it("dedupes replayed events in its own storage", async () => {
     const stub = stubFor(`do-dedupe-${Date.now()}`);
     const event = inbound("evt_do_dup", "Hello.");

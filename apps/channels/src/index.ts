@@ -383,7 +383,7 @@ export async function handleAgentSend(request: Request, env: Env): Promise<Respo
   } catch {
     return new Response("Bad JSON.", { status: 400 });
   }
-  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown; generation?: unknown };
+  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown; generation?: unknown; noReplay?: unknown };
   if (
     typeof body.handleHash !== "string" ||
     !body.handleHash ||
@@ -400,7 +400,7 @@ export async function handleAgentSend(request: Request, env: Env): Promise<Respo
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(body.handleHash));
   const res = await stub.fetch("https://conversation/internal/agent-send", {
     method: "POST",
-    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text, generation: body.generation }),
+    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text, generation: body.generation, ...(body.noReplay === true ? { noReplay: true } : {}) }),
   });
   const data = (await res.json().catch(() => ({}))) as { sent?: unknown; reason?: unknown };
   // A refusal must name its reason, or Engine could not tell it from an

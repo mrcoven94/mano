@@ -5,6 +5,7 @@ import {
   baseUrlFromEnv,
   extractOutputText,
   extractUsage,
+  failureKindOf,
   isContributorId,
   readingModelFor,
   recordedText,
@@ -108,6 +109,70 @@ describe("MetaModelClient", () => {
       "Model request failed: 402 (billing is not set up for this account)",
     );
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [400, "bad_request"],
+    [401, "auth"],
+    [402, "billing"],
+    [403, "auth"],
+    [404, "not_found"],
+    [413, "too_large"],
+    [418, "other_status"],
+    [422, "bad_request"],
+    [429, "rate_limited"],
+    [503, "server"],
+  ])("a %i is the fixed failure kind %s", async (status, kind) => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => okJson({ error: { message: "Maria Santos" } }, status)) as unknown as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe(kind);
+  });
+
+  it.each([
+    ["a failed run", okJson({ status: "failed", error: { message: "Maria Santos" } }), "not_completed"],
+    ["a refusal", okJson({ status: "completed", output: [{ content: [{ type: "refusal", refusal: "Maria Santos" }] }] }), "refused"],
+    ["an empty answer", okJson({ status: "completed", output: [] }), "no_answer"],
+    ["an unreadable 200", new Response("<html>Maria Santos</html>", { status: 200 }), "unreadable_response"],
+  ])("%s is a fixed failure kind", async (_what, response, kind) => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => response) as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe(kind);
+  });
+
+  it("an error Mail did not name is other, whatever it says", () => {
+    expect(failureKindOf(new Error("Maria Santos"))).toBe("other");
+  });
+
+  it("a body that stalls after its headers is a timeout, tried once", async () => {
+    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const client = new MetaModelClient({ apiKey: "k", timeoutMs: 20, maxRetries: 2, fetchFn: fetchFn as unknown as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe("timeout");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a body that arrives whole but is not JSON stays unreadable", async () => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => new Response("<html>Maria Santos</html>", { status: 200 })) as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe("unreadable_response");
+  });
+
+  it("no connection and a timeout are fixed failure kinds", async () => {
+    const offline = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => { throw new TypeError("fetch failed"); }) as typeof fetch });
+    expect(failureKindOf(await offline.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e))).toBe("no_connection");
+    const slow = new MetaModelClient({
+      apiKey: "k",
+      maxRetries: 0,
+      fetchFn: (async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }) as typeof fetch,
+    });
+    expect(failureKindOf(await slow.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e))).toBe("timeout");
   });
 
   // Review of PR 109: a 401 body's message reached warnings[].detail

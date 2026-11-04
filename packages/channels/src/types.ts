@@ -115,6 +115,9 @@ export interface ChannelSendInput {
   idempotencyKey: string;
   // The inbound message this bubble answers, shown as an inline reply.
   replyTo?: string | null;
+  // One try at the provider, with no retry inside this call: the sender holds
+  // a rule that could change while a retry waited.
+  once?: boolean;
 }
 
 export interface ChannelSendResult {

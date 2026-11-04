@@ -217,16 +217,18 @@ export class BlooioChannel implements Channel {
   // One chat-scoped send when the chat is known (sender and recipient come
   // from the chat), else a channel-scoped send to the handle. 403 and 429
   // are refusals: recorded by the caller, never retried. 5xx retries with
-  // backoff under the same idempotency key; anything still uncertain
-  // throws ChannelUncertain so the caller looks the message up first.
+  // backoff under the same idempotency key, unless the input says once;
+  // anything still uncertain throws ChannelUncertain so the caller looks the
+  // message up first.
   async send(input: ChannelSendInput): Promise<ChannelSendResult> {
     const path = input.chatId
       ? `/chats/${encodeURIComponent(input.chatId)}/messages`
       : `/channels/${encodeURIComponent(this.channelId)}/messages`;
     const body: Record<string, string> = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
     if (input.replyTo) body.reply_to = input.replyTo;
+    const maxAttempts = input.once ? 1 : SEND_MAX_ATTEMPTS;
     let lastErr: unknown = null;
-    for (let attempt = 1; attempt <= SEND_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await this.fetchFn(`${this.baseUrl}${path}`, {
           method: "POST",
@@ -258,11 +260,11 @@ export class BlooioChannel implements Channel {
         if (err instanceof ChannelRefused || err instanceof ChannelFailed) throw err;
         lastErr = err;
       }
-      if (attempt < SEND_MAX_ATTEMPTS) await this.sleepFn(Math.min(1000 * 2 ** attempt, 8000));
+      if (attempt < maxAttempts) await this.sleepFn(Math.min(1000 * 2 ** attempt, 8000));
     }
     throw new ChannelUncertain(
       lastErr instanceof Error ? lastErr.message : "Blooio send outcome unknown.",
-      SEND_MAX_ATTEMPTS,
+      maxAttempts,
     );
   }
 

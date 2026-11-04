@@ -4,7 +4,7 @@
 // reference number when that is unambiguous, otherwise with one small
 // model call over the page summaries.
 
-import { ModelFailure, readingModelFor, type ModelClient, type ModelContent, type ResponsesResult } from "./model.js";
+import { ModelFailure, failureKindOf, readingModelFor, type ModelClient, type ModelContent, type ModelFailureKind, type ResponsesResult } from "./model.js";
 import { clampBox } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -291,12 +291,14 @@ export function parsePageExtraction(text: string): PageExtraction {
 // since they still count against the file's budget. The words are this
 // package's own: an answer's text can carry provider text.
 export class PageReadFailed extends Error {
+  readonly kind: ModelFailureKind | "not_a_reading";
   readonly usage: PageExtraction["usage"];
   readonly model: string;
   readonly elapsedMs: number;
-  constructor(message: string, usage: PageExtraction["usage"], model: string, elapsedMs: number) {
+  constructor(message: string, kind: PageReadFailed["kind"], usage: PageExtraction["usage"], model: string, elapsedMs: number) {
     super(message);
     this.name = "PageReadFailed";
+    this.kind = kind;
     this.usage = usage;
     this.model = model;
     this.elapsedMs = elapsedMs;
@@ -386,8 +388,8 @@ async function readContent(
     outputTokens += usage.outputTokens;
     sawUsage = true;
   };
-  const failure = (message: string): PageReadFailed =>
-    new PageReadFailed(message, sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
+  const failure = (message: string, kind: PageReadFailed["kind"]): PageReadFailed =>
+    new PageReadFailed(message, kind, sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res: ResponsesResult;
     try {
@@ -407,7 +409,7 @@ async function readContent(
         answeredBy = err.billed.model;
         charge(err.billed.usage);
       }
-      throw failure(err instanceof Error ? err.message : String(err));
+      throw failure(err instanceof Error ? err.message : String(err), failureKindOf(err));
     }
     last = res.text;
     answeredBy = res.model;
@@ -424,7 +426,7 @@ async function readContent(
       };
     }
   }
-  throw failure("The model's answers were not a reading of the page.");
+  throw failure("The model's answers were not a reading of the page.", "not_a_reading");
 }
 
 export interface GroupablePage {
