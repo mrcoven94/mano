@@ -175,11 +175,12 @@ describe("answerReading builds the reply from closed fields only", () => {
     expect(answer.deadlines).toEqual([]);
   });
 
-  it("warns plainly about a scam letter and says nothing else from it", async () => {
+  it("warns plainly about a scam letter, and says its date only as a claim", async () => {
     const answer = await answerFor([SCAM_PAGE]);
     expect(answer.deadlines).toEqual([]);
     expect(answer.text).toMatch(/^This letter looks like a scam\./);
-    expect(answer.text).not.toMatch(/November|prepaid|renewal/i);
+    expect(answer.text).toContain("The letter claims a deadline of November 20, 2026, and I have not confirmed it.");
+    expect(answer.text).not.toMatch(/prepaid|renewal|It is due/i);
   });
 
   it("warns about an urgent letter that says not to call the county", async () => {
