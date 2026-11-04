@@ -11,7 +11,7 @@
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
 
-import { isUsState, type RecipientId } from "@mano/protocol";
+import { usStateInAddress, type RecipientId } from "@mano/protocol";
 
 import type { Frequency, Leaf, Profile } from "./engine.js";
 import { STATED_TOTAL, confirmedByPerson, householdSizeOf } from "./profile.js";
@@ -140,8 +140,9 @@ const ADDRESS_PARTS = /^(.+?), (?:(.+), )?([^,]+), ([A-Za-z]{2}),? (\d{5}(?:-\d{
 // What Engine keeps in one line of text.
 const ADDRESS_LINE_MAX = 200;
 
-// An address given in one line that could not be split into parts is kept
-// whole on its first line, and is complete if it ends in a ZIP.
+// An address given in one line that could not be split into parts, or that
+// writes its state out, is kept whole on its first line, so it files as the
+// person typed it, and is complete if it ends in a ZIP.
 function mailingAddress(profile: Profile): string | null {
   const a = profile.person.address;
   if (!a?.line1) return null;
@@ -149,18 +150,11 @@ function mailingAddress(profile: Profile): string | null {
   return [a.line1.value, a.line2?.value, a.city.value, `${a.state.value} ${a.zip.value}`].filter(Boolean).join(", ");
 }
 
-// The state an address names: its own part, or two capitals before the ZIP
-// when it has no commas ("Ct" in "12 Oak Ct 93721" is a street).
-function stateIn(address: string): string | null {
-  const code = ADDRESS_PARTS.exec(address)?.[4] ?? /\b([A-Z]{2}),? \d{5}(?:-\d{4})?$/.exec(address)?.[1];
-  return code && isUsState(code) ? code.toUpperCase() : null;
-}
-
 // Nothing without a ZIP: part of an address must not replace a whole one.
 function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
   const at = (part: string) => `person.address.${part}`;
-  const state = stateIn(value);
+  const state = usStateInAddress(value);
   const [, line1, line2, city, , zip] = ADDRESS_PARTS.exec(value) ?? [];
   if (!line1 || !state) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: state, [at("zip")]: null };
   return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state, [at("zip")]: zip! };
@@ -172,7 +166,7 @@ function withAnsweredState(profile: Profile, answers: Record<string, string>): P
   const answer = Object.hasOwn(answers, "address") ? taken(answers.address!) : "";
   if (!answer) return profile;
   const { state: _onFile, ...address } = profile.person.address;
-  const state = stateIn(answer);
+  const state = usStateInAddress(answer);
   return { ...profile, person: { ...profile.person, address: state ? { ...address, state: { value: state, source: "person", updatedAt: "" } } : address } };
 }
 

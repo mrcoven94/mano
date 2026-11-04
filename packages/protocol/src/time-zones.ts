@@ -31,10 +31,6 @@ const ZONE_BY_STATE = new Map(
   Object.entries(STATES_BY_ZONE).flatMap(([zone, states]) => states.map((state) => [state, zone] as const)),
 );
 
-export function isUsState(state: string): boolean {
-  return ZONE_BY_STATE.has(state.trim().toUpperCase());
-}
-
 export function timeZoneForState(state: string | null | undefined): string {
   return ZONE_BY_STATE.get(state?.trim().toUpperCase() ?? "") ?? DEFAULT_TIME_ZONE;
 }
