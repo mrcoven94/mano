@@ -2057,10 +2057,11 @@ describe("review round 5 item 4: a saved draft reads back exactly", () => {
   });
 });
 
-// LAP-747. In Propel's test of general AI agents on real SNAP applications
-// (April 2026), the agents ticked the legal attestation themselves. The
-// office takes a renewal only with the applicant's own declaration, and
-// the browser, where Mano's computer works, never makes it.
+// LAP-747. In Propel's internal test of general AI agents on SNAP
+// applications, with no real applicants (April 2026), the agents ticked
+// the legal attestation themselves. The office takes a renewal only with
+// the applicant's own declaration, and the browser, where Mano's computer
+// works, never makes it.
 describe("LAP-747: only the applicant makes the declaration", () => {
   const packet = (over: Record<string, unknown> = {}) => ({ key: `declare-${crypto.randomUUID()}`, household: HOUSEHOLD, files: [pdfUpload("%PDF-declare")], ...over });
 
