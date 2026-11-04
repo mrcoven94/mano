@@ -9,10 +9,10 @@ const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 type Row = { label: string; value: string; from: string; flag?: string };
 
 const BASE: Row[] = [
-  { label: "Name", value: "Maria Lopez", from: "Photo ID" },
-  { label: "Address", value: "1418 Sample St, Apt 3", from: "Lease" },
-  { label: "Monthly income", value: "$2,570", from: "Pay stubs, confirmed by Maria" },
-  { label: "Household", value: "3 people", from: "Maria's answer, confirmed by her" },
+  { label: "Name", value: "Maria Torres", from: "Photo ID" },
+  { label: "Address", value: "418 Alder St Apt 3", from: "Lease" },
+  { label: "Monthly income", value: "$1,940", from: "Pay stubs, confirmed by Maria" },
+  { label: "Household", value: "2 people", from: "Maria's answer, confirmed by her" },
   { label: "Power bill", value: "$142 a month", from: "Photo of the bill" },
 ];
 
@@ -62,7 +62,7 @@ export default function Verified({ id, office }: { id: string; office: string })
           </div>
           <div className="vf-case" key={c.key} aria-live="polite">
             <div className="vf-head">
-              <span><b>Food benefits renewal</b><small>{office} · Case 0418</small></span>
+              <span><b>Food benefits renewal</b><small>{office} · Case R-1042</small></span>
             </div>
             <dl>
               {c.rows.map((r, n) => (

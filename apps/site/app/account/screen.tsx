@@ -23,6 +23,8 @@ async function post<T>(path: string, body: Record<string, unknown>): Promise<T> 
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+  }).catch(() => {
+    throw new Error("Could not reach Mano. Check your connection and try again.");
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; jobId?: unknown };
   if (!res.ok) {
@@ -39,6 +41,8 @@ export default function AccountScreen() {
   const [error, setError] = useState("");
   const [phone, setPhone] = useState("");
   const [phoneCode, setPhoneCode] = useState("");
+  /* Set when the server asks for a fresh code before removing this phone. */
+  const [removing, setRemoving] = useState<string | null>(null);
   const [removeCode, setRemoveCode] = useState("");
   const [mergePhone, setMergePhone] = useState("");
   const [mergeCode, setMergeCode] = useState("");
@@ -80,20 +84,27 @@ export default function AccountScreen() {
 
   async function requestCode(target: string) {
     setError("");
-    await post("/api/accounts/phone/request", { phone: target });
+    try {
+      await post("/api/accounts/phone/request", { phone: target });
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
-  async function removeIdentity(identityId: string) {
+  async function removeIdentity(identity: MaskedIdentity) {
     setError("");
     try {
       const account = await post<{ identities: MaskedIdentity[] }>("/api/accounts/identity/remove", {
-        identityId,
-        phoneCode: removeCode || undefined,
+        identityId: identity.id,
+        phoneCode: removing === identity.id ? removeCode : undefined,
       });
       setIdentities(account.identities);
+      setRemoving(null);
       setRemoveCode("");
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      if (identity.kind === "phone" && removing !== identity.id && message.includes("fresh code")) setRemoving(identity.id);
+      else setError(message);
     }
   }
 
@@ -141,8 +152,13 @@ export default function AccountScreen() {
   }
 
   async function signOut() {
-    await post("/api/accounts/sign-out-everywhere", {});
-    window.location.href = "/sign-in";
+    setError("");
+    try {
+      await post("/api/accounts/sign-out-everywhere", {});
+      window.location.href = "/sign-in";
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   async function deleteAccount() {
@@ -174,17 +190,21 @@ export default function AccountScreen() {
 
   async function addEmail() {
     setError("");
-    const res = await fetch("/api/accounts/email/start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "authkit" }),
-    });
-    const data = (await res.json()) as { url?: string; error?: string };
-    if (!res.ok || !data.url) {
-      setError(data.error || "Email is not ready yet.");
-      return;
+    try {
+      const res = await fetch("/api/accounts/email/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "authkit" }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        setError(data.error || "Email is not ready yet.");
+        return;
+      }
+      window.location.href = data.url;
+    } catch {
+      setError("Could not reach Mano. Check your connection and try again.");
     }
-    window.location.href = data.url;
   }
 
   if (!identities) return <p>Loading…</p>;
@@ -202,22 +222,38 @@ export default function AccountScreen() {
                 <span className="acct-kind">{identity.kind}</span>
                 {identity.masked}
               </span>
-              <button className="btn btn-ghost btn-sm" onClick={() => removeIdentity(identity.id)}>
-                Remove
-              </button>
+              {removing !== identity.id ? (
+                <button className="btn btn-ghost btn-sm" onClick={() => removeIdentity(identity)}>
+                  Remove
+                </button>
+              ) : null}
+              {removing === identity.id ? (
+                <div className="acct-remove">
+                  <p>To get a code, type this number under Add a phone and tap Text a code.</p>
+                  <div className="acct-field">
+                    <label htmlFor="remove-code">Confirm with a code sent to this phone</label>
+                    <input
+                      id="remove-code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="123456"
+                      value={removeCode}
+                      onChange={(e) => setRemoveCode(e.target.value)}
+                    />
+                  </div>
+                  <div className="acct-row">
+                    <button className="btn btn-danger btn-sm" onClick={() => removeIdentity(identity)} disabled={removeCode.trim().length < 6}>
+                      Remove phone
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => { setRemoving(null); setRemoveCode(""); }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>
-        <div className="acct-field">
-          <label htmlFor="remove-code">Fresh phone code, only when removing a phone</label>
-          <input
-            id="remove-code"
-            inputMode="numeric"
-            placeholder="123456"
-            value={removeCode}
-            onChange={(e) => setRemoveCode(e.target.value)}
-          />
-        </div>
       </div>
       <div className="acct-card">
         <h2>Add a phone</h2>
@@ -297,7 +333,7 @@ export default function AccountScreen() {
           <button className="btn btn-ghost" onClick={signOut}>
             Sign out everywhere
           </button>
-          <button className="btn btn-ghost" onClick={deleteAccount}>
+          <button className="btn btn-danger" onClick={deleteAccount}>
             Delete account
           </button>
         </div>

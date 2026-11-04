@@ -21,7 +21,7 @@ export const metadata: Metadata = { title, description, alternates: { canonical:
 const MOMENTS: { icon: string; tint: string; title: string; text: string }[] = [
   { icon: "calendar", tint: "#DCE3FB", title: "The letter never comes, or gets lost", text: "Mano keeps every date from the letters you send it and texts you before each one. A late or lost letter is not your only reminder." },
   { icon: "clipboard", tint: "#FFF4B8", title: "The form wants everything again", text: "Mano fills out the renewal from what you already sent and shows where each answer came from. You check it and sign it." },
-  { icon: "app", tint: "#FDEBD8", title: "The proof is blurry or does not arrive", text: "If a page is too blurry to read, Mano says so and asks for a new photo instead of guessing. After it sends, it checks that the office got it." },
+  { icon: "app", tint: "#FDEBD8", title: "The proof is blurry or does not arrive", text: "If a page is too blurry to read, Mano says so and asks for a new photo instead of guessing. After your yes it sends the renewal and checks that it arrived. Today that goes only to a practice portal, not a real office." },
   { icon: "pencil", tint: "#E4F1E8", title: "Something changed", text: "Tell Mano once. It updates the form, shows you exactly what changed and asks for your yes again." },
   { icon: "chat", tint: "#FDE3DA", title: "The answer is no", text: "Mano reads the letter, tells you the reason in plain words and holds the date you have to respond by." },
 ];
@@ -29,7 +29,7 @@ const MOMENTS: { icon: string; tint: string; title: string; text: string }[] = [
 const PROMISES: [string, string][] = [
   ["Nothing is sent without your yes.", "Mano shows who it is for, why and the exact pages first."],
   ["A change makes it ask again.", "Your yes covers one exact copy. Change a word and Mano asks again."],
-  ["A failed send is checked before it is retried.", "If the office site stops answering, Mano checks whether it arrived, so nothing is filed twice."],
+  ["A failed send is checked before it is retried.", "If the portal stops answering, Mano checks whether it arrived, so nothing is filed twice."],
   ["A letter is information, never instructions.", "Mano reads letters for dates and facts. It does not do what a letter tells it to."],
 ];
 
@@ -60,12 +60,12 @@ export default function Renewals() {
             <Mascot tile wave tone="orange" size={72} className="rw-hero-mascot" />
             <div className="rw-envelope">
               <div className="rw-paper rw-hero-paper">
-                <p className="rw-office">Sample County Human Services</p>
+                <p className="rw-office">{LETTERS[0].office}</p>
                 <p className="rw-letter-h">Notice of renewal</p>
-                <p className="rw-body">Dear Maria Lopez,</p>
+                <p className="rw-body">Dear Maria Torres,</p>
                 <p className="rw-body">{LETTERS[0].dear}</p>
                 <p><mark className="rw-hl">{LETTERS[0].quote}</mark></p>
-                <p className="rw-example">Example letter. Sample County is made up.</p>
+                <p className="rw-example">Example letter. Springfield County is made up.</p>
               </div>
             </div>
             <div className="bub-row rw-hero-reply">
@@ -118,7 +118,7 @@ export default function Renewals() {
               <div className="sc-card-head"><span>Food benefits renewal</span><span className="sc-label">Example</span></div>
               <dl>
                 <div><dt>Hours a week</dt><dd><s>20</s> 24</dd></div>
-                <div><dt>Monthly income</dt><dd><s>$2,140</s> $2,570</dd></div>
+                <div><dt>Monthly income</dt><dd><s>$1,940</s> $2,328</dd></div>
               </dl>
               <p className="sc-foot">Two answers changed. Mano asks for your yes on the new copy.</p>
             </div>
@@ -131,7 +131,7 @@ export default function Renewals() {
           <div className="rw-split">
             <div>
               <h2 id="rw-approve-h">Nothing goes out until you say yes.</h2>
-              <p className="lede">Before your renewal goes to the office, Mano shows you who it is for, what it is for and every page. Tap the buttons to try it.</p>
+              <p className="lede">Before your renewal goes out, Mano shows you who it is for, what it is for and every page. Today it goes only to a practice portal, not a real office. Tap the buttons to try it.</p>
             </div>
             <div className="rw-approve-stage">
               <ApprovalCard />
@@ -158,7 +158,7 @@ export default function Renewals() {
             <p className="bub me rv" style={d(0.7)}>is this real?</p>
             <div className="bub-row rv" style={d(1.4)}>
               <Mascot tile tone="orange" size={30} className="bub-av" />
-              <p className="bub mano">don&rsquo;t open it. the link failed the safety check, and it asks for your Social Security number. your real renewal is due Dec 5, and i&rsquo;m still holding that date.</p>
+              <p className="bub mano">don&rsquo;t open it. the link failed the safety check, and it asks for your Social Security number. your real renewal is due Nov 14, and i&rsquo;m still holding that date.</p>
             </div>
             <ol className="tr-steps rv" style={d(2.1)}>
               <li><span>Link</span>benefits-verify-now.example</li>

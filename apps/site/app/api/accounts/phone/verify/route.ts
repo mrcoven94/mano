@@ -17,6 +17,9 @@ export async function POST(request: Request) {
     if (message === "Accounts are not configured.") {
       return NextResponse.json({ error: "Sign-in is not configured." }, { status: 503 });
     }
-    return NextResponse.json({ error: "That code did not match. Check the text and try again." }, { status: 401 });
+    if (message === "Invalid code.") {
+      return NextResponse.json({ error: "That code did not match. Check the text and try again." }, { status: 401 });
+    }
+    return NextResponse.json({ error: "Something went wrong on our side." }, { status: 500 });
   }
 }
