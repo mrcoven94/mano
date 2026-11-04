@@ -320,7 +320,8 @@ const readStub = (text: string, marks: string[] = []): Promise<MailReading> => r
 
 describe("a document whose dates are not duties", () => {
   it("a question with no duty sentence does not make a pay stub a letter", async () => {
-    const reading = await readStub("Harbor Co-op Grocery\nMaria Torres\nPay period: October 19, 2026 to November 1, 2026\nPay date: November 6, 2026\nNet pay $850.00", ["Pay period: October 19, 2026 to November 1, 2026"]);
+    const reading = await readStub("Riverbend Grocery Co-op\nEarnings statement\nEmployee: Maria Torres\nPay period: October 11 to October 24, 2026\nPay date: October 30, 2026\nNet pay: $857.80");
+    expect(reading.questions.some((q) => q.kind === "confirm_deadline")).toBe(true);
     expect(answerReading(reading).text).toMatch(/^This looks like a pay stub/);
   });
 

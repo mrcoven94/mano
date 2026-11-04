@@ -161,14 +161,12 @@ export interface Question {
 export type NamedDates =
   // One or two dates the person must meet, and any interview beside them.
   | { kind: "duty"; dates: NamedDate[]; interview: string | null }
-  // Nothing due: a request for a hearing, appeal or review with its own date.
-  | { kind: "request"; iso: string }
   // Before the letter's own notice date.
   | { kind: "passed"; iso: string }
   // The letter says it is someone else's or no longer stands.
   | { kind: "not-theirs" }
   // The reader found nothing, or what it found did not hold up against the letter.
-  | { kind: "unsure" };
+  | { kind: "unsure"; readerNamedNone?: boolean };
 
 export interface NamedDate {
   iso: string;

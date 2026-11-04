@@ -67,19 +67,27 @@ function notTheirs(letterText: string, sentences: string[], verbatim: string[]):
   return verbatim.some(otherPerson) || sentences.some((s) => NOT_THEIRS.test(s) || THIS_IS_FOR.test(s) || (!CONDITION_OPENING.test(s) && (NO_LONGER_STANDS.test(s) || ABOUT_SOMEONE_ELSE.test(s))));
 }
 
-// A sentence that changes the date. The date it moves to is the only one Mano
-// may name, and only when that is the date the reader chose.
+// Wording that moves or replaces a date. Any of it on a letter names no date:
+// which one stands is the person's to read, not Mano's to pick.
 const MOVES_THE_DATE = new RegExp(
   String.raw`\b(?:${phrases([
-    "(?:have|has|given) until", "(?:extended|moved|changed|postponed|pushed) (?:to|until)", "(?:has|have) been (?:extended|postponed|rescheduled|moved|changed)",
-    "(?:has|have) extended", "was postponed", "now due", "grace period", "new (?:date|deadline|due date)",
+    "so (?:you )?(?:have|get) until", "given until", "(?:extended|moved|changed|postponed|pushed|rescheduled) (?:from|to|until)",
+    "(?:has|have|had) been (?:extended|postponed|rescheduled|moved|changed|replaced)", "(?:has|have) extended", "was postponed", "now due", "grace period",
+    "new (?:date|deadline|due date|cutoff)", "replac\\w+ (?:\\w+ ){0,3}(?:date|deadline|notice|letter|cutoff)", "(?:date|deadline|notice|letter|cutoff) (?:\\w+ ){0,2}(?:was|is) replaced", "supersed\\w+",
   ])})\b`,
   "i",
 );
 // A heading that reverses what follows it, or a sentence that does.
 const REVERSES = /^(?:do\s+not|don['’]t|never)\b[^.]*:$|^instead\b/i;
-// "If we do not hear from you by" is the date to meet. "Do not return it by" is not.
-const NEGATED = /^(?:please\s+)?(?:do\s+not|don['’]t|never)\b/i;
+// "If we do not hear from you by" is the date to meet. "You must not return it by" is not.
+const NEGATION = /\b(?:not|never|cannot)\b|n['’]t\b/i;
+const CONDITION = /\b(?:if|unless|without|until|or)\b/i;
+const NOT_NEEDED_AFTER = /\bnot\s+(?:required|needed|necessary)\b/i;
+const CUT_FROM_LONGER = /[\d/-]$/;
+const RUNS_ON = /^(?:\d|[/-]\d)/;
+const YEAR_AFTER = /^,?\s*['’]?\d{2,4}\b(?!:)/;
+const HAS_YEAR = /\d{4}|\d[/-]\d{1,2}[/-]\d{2}$/;
+const ABOUT_AN_INTERVIEW = /\b(?:interview|appointment)\b/i;
 const COUNTED = /\b(?:within|in)\s+\S+\s+(?:\w+\s+)?(?:days?|weeks?|months?)\b/i;
 const PROOF_OF_PAYMENT = /\b(?:proof|copy|copies|receipt|evidence)\s+of\b/i;
 const LIST_MARKER = /^[-*•]\s*/;
@@ -108,25 +116,42 @@ function isoOf(written: string, noticeIso: string | null): string | null {
   return parseWrittenDate(written) ?? usNumeric(written) ?? parseAllDates(written, noticeIso)[0] ?? null;
 }
 
-// The date the reader chose, when its own quote holds up: the sentence is in
-// the letter, the date is printed in that sentence, nothing before the date
-// negates it, and it is not a count from something else.
+// Where a date is printed whole in a sentence, or -1: not cut from a longer
+// number, and not a date whose year the reader left off.
+function printedAt(source: string, written: string): number {
+  const at = source.indexOf(written);
+  if (at < 0 || CUT_FROM_LONGER.test(source.slice(0, at))) return -1;
+  const after = source.slice(at + written.length);
+  return RUNS_ON.test(after) || (!HAS_YEAR.test(written) && YEAR_AFTER.test(after)) ? -1 : at;
+}
+
+// The date the reader chose, when its own quote holds up. A quote can be clipped,
+// so the checks read every complete sentence of the letter that holds it: the
+// date is printed whole there, nothing before it negates it, and it is not a
+// count from something else.
 function checked(date: string, sentence: string, letterText: string, noticeIso: string | null): string | null {
   const quote = normal(sentence);
   const written = normal(date);
-  if (!quote || !written || !normal(letterText).includes(quote)) return null;
-  const at = quote.indexOf(written);
-  if (at < 0 || NEGATED.test(quote) || COUNTED.test(quote)) return null;
-  const verdict = gateSentence(sentence, noticeIso);
-  return verdict.kind === "ask" && verdict.count ? null : isoOf(date, noticeIso);
+  if (!quote || !written || !normal(letterText).includes(quote) || !quote.includes(written)) return null;
+  const whole = splitSentences(letterText).filter((s) => normal(s).includes(quote));
+  for (const source of whole.length > 0 ? whole : [sentence]) {
+    const text = normal(source);
+    const at = printedAt(text, written);
+    if (at < 0 || COUNTED.test(text) || NOT_NEEDED_AFTER.test(text.slice(at))) return null;
+    const before = text.slice(0, at);
+    if (NEGATION.test(before) && !CONDITION.test(before)) return null;
+    const verdict = gateSentence(source, noticeIso);
+    if (verdict.kind === "ask" && verdict.count) return null;
+  }
+  return isoOf(date, noticeIso);
 }
 
-// Whether a sentence that moves a date leaves this one standing.
-function outlivesMoves(sentences: string[], isos: Set<string>, noticeIso: string | null): boolean {
-  return sentences.filter((s) => MOVES_THE_DATE.test(s)).every((s) => {
-    const last = parseAllDates(s, noticeIso).at(-1);
-    return last !== undefined && isos.has(last);
-  });
+// An interview date is shown only when a whole sentence about an interview prints it.
+function interviewDate(date: string, sentences: string[], noticeIso: string | null): string | null {
+  const written = normal(date);
+  const printed = written !== "" && sentences.some((s) => ABOUT_AN_INTERVIEW.test(s) && !NEGATION.test(s) && printedAt(normal(s), written) >= 0);
+  const iso = printed ? isoOf(date, noticeIso) : null;
+  return iso && chronologyOf(iso, noticeIso) === "ok" ? iso : null;
 }
 
 // What the first reply may name. Null when the reader gave no answer at all, as
@@ -140,6 +165,8 @@ export function nameDates(letterText: string, noticeIso: string | null, reader: 
   if (!reader) return null;
   if (verbatim.some((s) => REVERSES.test(s.trim()))) return { kind: "unsure" };
 
+  if (sentences.some((s) => MOVES_THE_DATE.test(s))) return { kind: "unsure" };
+
   const dates: NamedDate[] = [];
   const late: string[] = [];
   for (const { date, sentence, purpose } of reader.meet) {
@@ -151,19 +178,11 @@ export function nameDates(letterText: string, noticeIso: string | null, reader: 
     else if (!dates.some((d) => d.iso === iso)) dates.push({ iso, purpose: purpose === "payment" && PROOF_OF_PAYMENT.test(sentence) ? "deadline" : purpose });
   }
 
-  const labeled = (label: string): string[] => {
-    const isos = reader.other.filter((o) => o.for === label && normal(letterText).includes(normal(o.date))).map((o) => isoOf(o.date, noticeIso));
-    return [...new Set(isos.filter((iso): iso is string => iso !== null && chronologyOf(iso, noticeIso) === "ok"))];
-  };
-
   if (dates.length > 2) return { kind: "unsure" };
   if (dates.length > 0) {
-    if (!outlivesMoves(sentences, new Set(dates.map((d) => d.iso)), noticeIso)) return { kind: "unsure" };
-    const interviews = labeled("interview");
+    const interviews = [...new Set(reader.other.filter((o) => o.for === "interview").map((o) => interviewDate(o.date, sentences, noticeIso)).filter((iso) => iso !== null))];
     return { kind: "duty", dates, interview: interviews.length === 1 ? interviews[0]! : null };
   }
   if (late.length > 0) return { kind: "passed", iso: [...late].sort().at(-1)! };
-  const appeals = labeled("appeal");
-  if (appeals.length === 1 && outlivesMoves(sentences, new Set(appeals), noticeIso)) return { kind: "request", iso: appeals[0]! };
-  return { kind: "unsure" };
+  return { kind: "unsure", readerNamedNone: reader.meet.length === 0 };
 }

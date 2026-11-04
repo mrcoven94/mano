@@ -701,7 +701,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const named: NamedDates | null = sharedCrop
       ? { kind: "unsure" }
       : nameDates(letterText, noticeIso, readerDates.length > 0 ? { meet: readerDates.flatMap((r) => r.meet), other: readerDates.flatMap((r) => r.other) } : null);
-    const namesADate = named?.kind === "duty" || named?.kind === "request" || named?.kind === "passed";
+    const namesADate = named?.kind === "duty" || named?.kind === "passed";
     const best = pickProposal(picks, noticeIso, named?.kind === "duty" ? named.dates.map((d) => d.iso) : []);
     const focus = best?.pick.sentence ?? (found.length === 1 ? found[0]!.sentence : null);
     if (focus) {

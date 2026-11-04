@@ -201,8 +201,6 @@ function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: Answer
       return w.passed(w.date(named.iso));
     case "duty":
       return dutyQuestion(named, w, isPast);
-    case "request":
-      return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askRequest(w.date(named.iso));
   }
 }
 
@@ -245,6 +243,17 @@ function noDateFound(reading: MailReading, letter: Letter): boolean {
 // A duty the reader marked that its own transcription does not hold.
 const UNVERIFIED_DUTY = /^Letter \S+: the (?:deadline|requested item) /;
 
+// A pay date or pay period is a date on a question, not a duty. When the reader
+// says nothing is the person's to meet, a held-back sentence counts as a duty only
+// if its own words say so.
+const WORDS_OF_A_DUTY = /\b(?:due|must|deadline|return|send|submit|respond|renew\w*|by|before|expires?)\b/i;
+
+function questionHoldsADuty(q: Question): boolean {
+  const held = [...(q.proposal ? [q.proposal.sentence] : []), ...(q.candidates ?? []).map((c) => c.sentence)];
+  if (q.named?.kind === "unsure" && q.named.readerNamedNone) return held.some((s) => WORDS_OF_A_DUTY.test(s));
+  return held.length > 0;
+}
+
 // The reader's kind, unless the reading gives a reason to doubt it. Any duty on
 // the letter (something asked, a deadline, a question holding a date) means it
 // reads as a normal letter, whatever it was called, so a label never drops a
@@ -257,7 +266,7 @@ function trustedKind(reading: MailReading, letter: Letter): DocumentKind | undef
   const duty =
     letter.fields.asked.length > 0 ||
     letter.fields.deadlineText !== null ||
-    reading.questions.some((q) => q.letterId === letter.id && (q.proposal !== undefined || (q.candidates ?? []).length > 0 || (q.named !== undefined && q.named.kind !== "unsure") || (q.kind === "unverified_field" && UNVERIFIED_DUTY.test(q.prompt))));
+    reading.questions.some((q) => q.letterId === letter.id && (questionHoldsADuty(q) || (q.named !== undefined && q.named.kind !== "unsure") || (q.kind === "unverified_field" && UNVERIFIED_DUTY.test(q.prompt))));
   if (duty) return undefined;
   if (kind === "unknown") return kind;
   const doubted = reading.warnings.some((w) => w.letterId === letter.id && (w.kind === "instruction_in_content" || w.kind === "scam_suspect"));
