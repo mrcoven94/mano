@@ -10,6 +10,9 @@ const links = [
   { href: "/how-it-works", label: "How Mano works", sub: "From a photo to a filing" },
   { href: "/renewals", label: "Renewals", sub: "Your letter came" },
   { href: "/try", label: "Live demo", sub: "For judges, no login" },
+  { href: "/government", label: "For government", sub: "What works today" },
+  { href: "/organizations", label: "For nonprofits", sub: "What works today" },
+  { href: "/partners", label: "For partners", sub: "What is planned" },
 ];
 
 export default function Header() {

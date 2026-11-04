@@ -27,9 +27,9 @@ export default function Footer() {
             <nav aria-label="Teams">
               <p className="foot-h">Teams</p>
               <ul>
-                <li><Link href="/government">Government offices</Link></li>
-                <li><Link href="/organizations">Nonprofits</Link></li>
-                <li><Link href="/partners">Outside services</Link></li>
+                <li><Link href="/government">For government</Link></li>
+                <li><Link href="/organizations">For nonprofits</Link></li>
+                <li><Link href="/partners">For partners</Link></li>
               </ul>
             </nav>
             <nav aria-label="Open source">
