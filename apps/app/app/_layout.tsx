@@ -22,6 +22,7 @@ import { resolveClient, type ResolvedClient } from "../lib/client";
 import { easProjectId } from "../lib/config";
 import { LanguageProvider, useStrings } from "../lib/i18n";
 import { ensureNotificationSetup } from "../lib/notify";
+import { notificationRoute } from "../lib/reminders";
 import { sessionRouteGuard } from "../lib/route-guard";
 
 void SplashScreen.preventAutoHideAsync();
@@ -67,9 +68,7 @@ function NotificationsGate() {
   useEffect(() => {
     ensureNotificationSetup(easProjectId()).catch(() => {});
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const kind = response.notification.request.content.data?.kind;
-      if (kind === "deadline") router.push("/(tabs)/deadlines");
-      else router.push("/(tabs)/approvals");
+      router.push(notificationRoute(response.notification.request.content.data));
     });
     return () => sub.remove();
   }, [router]);

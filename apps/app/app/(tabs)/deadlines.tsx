@@ -1,15 +1,18 @@
 // Deadlines the agent built from mail and office letters, soonest
-// first. Each one links to its approval when one is waiting.
+// first. Each one links to its approval when one is waiting, or offers
+// the photo that would settle it. lib/deadline-view decides what a card says.
 
 import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Badge, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
-import type { Deadline } from "../../lib/api/types";
+import type { ApprovalStatus, Deadline } from "../../lib/api/types";
 import { AuthError, EngineGapError } from "../../lib/api/types";
 import { Body } from "../../components/ui";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
+import { holdMailAsk } from "../../lib/chat-draft";
 import { daysUntil, formatDate } from "../../lib/dates";
+import { deadlineCard } from "../../lib/deadline-view";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
 import { colors, type } from "../../lib/theme";
@@ -28,6 +31,7 @@ export default function Deadlines() {
   const router = useRouter();
   const { client, session, mode, generation, isCurrentGeneration, signOut } = useAuth();
   const [deadlines, setDeadlines] = useState<Deadline[] | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<ReadonlyMap<string, ApprovalStatus>>(new Map());
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -36,8 +40,11 @@ export default function Deadlines() {
     setFailed(false);
     setGap(false);
     try {
-      const all = await client.listDeadlines(session);
+      // An approval's status is context: if it cannot be read, a card claims
+      // less rather than the screen failing.
+      const [all, approvals] = await Promise.all([client.listDeadlines(session), client.listApprovals(session).catch(() => [])]);
       setDeadlines([...all].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
+      setApprovalStatus(new Map(approvals.map((a) => [a.id, a.status])));
       const gen = generation;
       await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
     } catch (err) {
@@ -52,6 +59,7 @@ export default function Deadlines() {
 
   useClearOnSignOut(() => {
     setDeadlines(null);
+    setApprovalStatus(new Map());
     setGap(false);
     setFailed(false);
   });
@@ -81,15 +89,22 @@ export default function Deadlines() {
         <View>
           {deadlines.map((d) => {
             const c = countdown(s, d.dueAt);
+            const card = deadlineCard(d, d.relatedApprovalId ? approvalStatus.get(d.relatedApprovalId) : undefined);
             return (
               <Card key={d.id}>
-                <Badge tone={d.done ? "green" : c.tone}>{d.done ? s.approved : c.text}</Badge>
+                {card.state === "approved" ? (
+                  <Badge tone="green">{s.deadlineApproved}</Badge>
+                ) : card.state === "done" ? (
+                  <Badge tone="green">{s.deadlineDone}</Badge>
+                ) : (
+                  <Badge tone={c.tone}>{c.text}</Badge>
+                )}
                 <Text style={[type.cardTitle, styles.title]}>{d.title}</Text>
                 {d.detail ? <Muted>{d.detail}</Muted> : null}
                 <Muted>
                   {s.dueOn}: {formatDate(d.dueAt, language)}
                 </Muted>
-                {d.relatedApprovalId && !d.done ? (
+                {card.state === "open" && card.approvalWaits ? (
                   <Pressable
                     onPress={() => router.push({ pathname: "/approvals/[id]", params: { id: d.relatedApprovalId ?? "" } })}
                     accessibilityRole="button"
@@ -98,6 +113,19 @@ export default function Deadlines() {
                     <Text style={styles.linkText}>
                       {s.relatedApproval} · {s.viewApproval}
                     </Text>
+                  </Pressable>
+                ) : null}
+                {card.state === "open" && card.photoOf === "pay-stub" ? (
+                  <Pressable
+                    onPress={() => {
+                      if (!session) return;
+                      holdMailAsk(session.token, "pay-stub");
+                      router.navigate("/(tabs)");
+                    }}
+                    accessibilityRole="button"
+                    style={styles.link}
+                  >
+                    <Text style={styles.linkText}>{s.photographPayStub}</Text>
                   </Pressable>
                 ) : null}
               </Card>
