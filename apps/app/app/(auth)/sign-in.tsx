@@ -9,6 +9,7 @@ import { useAuth } from "../../lib/auth";
 import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
 import { setPendingSignIn } from "../../lib/sign-in-flow";
+import type { StringKey } from "../../lib/strings";
 import { colors } from "../../lib/theme";
 
 const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -20,12 +21,13 @@ export default function SignIn() {
   const [crisisLine] = useState(() => crisisLineForSignIn(Date.now()));
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A key, not its words, so the line follows the language switch.
+  const [error, setError] = useState<StringKey | null>(null);
 
   const submit = async (): Promise<void> => {
     const trimmed = email.trim();
     if (!EMAIL_SHAPE.test(trimmed)) {
-      setError(s.invalidEmail);
+      setError("invalidEmail");
       return;
     }
     setBusy(true);
@@ -36,7 +38,7 @@ export default function SignIn() {
       router.push("/(auth)/verify");
     } catch {
       // A failure's own text is English and written for developers.
-      setError(s.codeNotSent);
+      setError("codeNotSent");
     } finally {
       setBusy(false);
     }
@@ -62,7 +64,7 @@ export default function SignIn() {
           placeholder={s.emailPlaceholder}
           keyboardType="email-address"
         />
-        {error ? <Muted style={styles.error}>{error}</Muted> : null}
+        {error ? <Muted style={styles.error}>{s[error]}</Muted> : null}
         <Btn title={busy ? s.sending : s.sendCode} onPress={() => void submit()} busy={busy} />
       </View>
     </Screen>
