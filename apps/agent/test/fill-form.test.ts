@@ -345,6 +345,15 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
+  it("a key that could leave the browser stops the fill before any action: nothing is typed or prepared", async () => {
+    engine.profile = profile();
+    model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
+    const out = await run("turn_fill0041", { form: "food-renewal" });
+    expect(out.status).toBe("fill_failed");
+    expect(computer.acted).toEqual([]);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
   it("a safety check stops the fill before any action: nothing is typed or prepared, and only the check codes are logged", async () => {
     engine.profile = profile();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

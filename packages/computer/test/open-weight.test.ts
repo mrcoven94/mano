@@ -90,7 +90,7 @@ describe("computer use on the open-weight model", () => {
   test("a reply cut off at the output cap never runs", async () => {
     const computer = new FakeComputer();
     const { client } = scripted([{ status: "incomplete", output: [fn("a", { actions: [{ type: "type", text: "half" }] })] }]);
-    await expect(run(client, computer)).rejects.toThrow("before finishing");
+    await expect(run(client, computer)).rejects.toThrow("did not complete");
     expect(computer.actions).toEqual([]);
   });
 
@@ -110,5 +110,72 @@ describe("computer use on the open-weight model", () => {
     await run(client);
     const result = bodies[1]!.input.find((item) => item.type === "function_call_output")!;
     expect(typeof result.output).toBe("string");
+  });
+
+  test("the reviewed escape stops whole: a launcher key in a batch means none of it runs", async () => {
+    const computer = new FakeComputer();
+    const { client } = scripted([{ output: [fn("a", { actions: [{ type: "keypress", keys: ["alt", "F2"] }, { type: "wait" }, { type: "type", text: "touch /tmp/mano-escape" }, { type: "keypress", keys: ["Enter"] }] })] }]);
+    expect(await run(client, computer)).toEqual({ status: "refused", steps: 1 });
+    expect(computer.actions).toEqual([]);
+  });
+
+  test.each([["failed"], ["cancelled"], ["in_progress"], ["queued"], ["incomplete"], ["unknown"], [undefined]])("a reply with status %s never acts, even with a valid call in it", async (status) => {
+    const computer = new FakeComputer();
+    const valid = fn("a", { actions: [{ type: "type", text: "x" }] });
+    const fetchImpl = (async () => Response.json({ id: "r", ...(status ? { status } : {}), output: [valid] })) as unknown as typeof fetch;
+    await expect(run(new OpenWeightModelClient({ apiKey: "k", fetchImpl, retryDelaysMs: [] }), computer)).rejects.toThrow("did not complete");
+    expect(computer.actions).toEqual([]);
+  });
+
+  test.each(["in_progress", "incomplete", "failed"])("a call item marked %s never acts", async (status) => {
+    const computer = new FakeComputer();
+    const { client } = scripted([{ output: [{ ...fn("a", { actions: [{ type: "type", text: "x" }] }), status }] }]);
+    await expect(run(client, computer)).rejects.toThrow();
+    expect(computer.actions).toEqual([]);
+  });
+
+  test("a call item marked completed runs, and one with no status runs: OpenRouter's schema leaves that field optional", async () => {
+    const computer = new FakeComputer();
+    const { client } = scripted([{ output: [{ ...fn("a", { actions: [{ type: "type", text: "x" }] }), status: "completed" }, fn("b", { actions: [{ type: "type", text: "y" }] })] }, { output: [say("ACCEPTED")] }]);
+    await run(client, computer);
+    expect(computer.actions).toEqual([[{ type: "type", text: "x" }, { type: "type", text: "y" }]]);
+  });
+
+  test.each([
+    ["no call id", { type: "function_call", name: "computer", arguments: "{}" }],
+    ["a numeric call id", { type: "function_call", call_id: 7, name: "computer", arguments: '{"actions":[]}' }],
+    ["an empty call id", { type: "function_call", call_id: "", name: "computer", arguments: '{"actions":[]}' }],
+  ])("a bad call with %s beside a valid one rejects the whole batch", async (_label, bad) => {
+    for (const output of [[fn("a", { actions: [{ type: "type", text: "x" }] }), bad], [bad, fn("a", { actions: [{ type: "type", text: "x" }] })]]) {
+      const computer = new FakeComputer();
+      const { client } = scripted([{ output }]);
+      await expect(run(client, computer)).rejects.toThrow();
+      expect(computer.actions).toEqual([]);
+    }
+  });
+
+  test.each(["computer_call", "shell_call", "local_shell_call", "mcp_call", "custom_tool_call", "web_search_call", "image_generation_call", "something_new"])("an unexpected %s item rejects the reply", async (type) => {
+    const computer = new FakeComputer();
+    const unexpected = { type, id: "x", call_id: "x", actions: [{ type: "click", button: "right", x: 1, y: 1 }], pending_safety_checks: [], status: "completed" };
+    for (const output of [[unexpected], [fn("a", { actions: [{ type: "type", text: "x" }] }), unexpected], [say("ACCEPTED"), unexpected]]) {
+      const { client } = scripted([{ output }]);
+      await expect(run(client, computer)).rejects.toThrow("does not offer");
+      expect(computer.actions).toEqual([]);
+    }
+  });
+
+  test.each([
+    ["a right click", { type: "click", button: "right", x: 1, y: 1 }],
+    ["a click off the screen", { type: "click", x: 1280, y: 1 }],
+    ["a negative coordinate", { type: "double_click", x: 1, y: -1 }],
+    ["a click with no y", { type: "click", x: 1 }],
+    ["a runaway scroll", { type: "scroll", x: 1, y: 1, scroll_y: 1_000_000 }],
+    ["a move", { type: "move", x: 1, y: 1 }],
+    ["a drag", { type: "drag", path: [{ x: 1, y: 1 }] }],
+  ])("%s is refused and is never run as something else", async (_label, action) => {
+    const computer = new FakeComputer();
+    const { client } = scripted([{ output: [fn("a", { actions: [action] })] }]);
+    await expect(run(client, computer)).rejects.toThrow();
+    expect(computer.actions).toEqual([]);
   });
 });

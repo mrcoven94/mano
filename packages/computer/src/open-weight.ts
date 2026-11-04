@@ -1,18 +1,21 @@
 /**
  * Computer use on Meta's open-weight model through OpenRouter, for while the
  * Meta Model API cannot answer (AGENTS.md rule 7, docs/decisions.md). Same
- * ModelClient as the Meta path, so runLoop does not change.
+ * ModelClient as the Meta path, so runLoop runs both the same way.
  *
  * The open model has no hosted computer tool: OpenRouter lists no native tools
  * for it, so the Meta path's computer_call never comes back. It takes images
  * and calls functions, so this client offers the action vocabulary as one
- * function and turns each call into the computer_call the loop expects.
+ * function and turns each call into the computer_call the loop expects. A
+ * reply is accepted whole or not at all: it must say it completed, hold only
+ * items this path offers, and every call and action in it must parse.
  *
  * Nothing but the API key is an option here. The model, the zero-retention
  * pin and the endpoint are constants, so this client cannot send a screenshot
  * anywhere else. This path never raises a safety check: there is no hosted
- * tool to raise one, so the desktop's own limits are the only ones that hold
- * (it reaches only the portal, whose browser pages save drafts and file nothing).
+ * tool to raise one. What holds instead is this parser, the loop's closed list
+ * of keys and buttons, and the desktop, which binds no window manager keys and
+ * reaches only the portal, whose browser pages save drafts and file nothing.
  */
 import { isComputerCall, type ComputerAction, type ComputerCall } from "./actions";
 import { FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
@@ -30,14 +33,19 @@ const OPEN_WEIGHT_BODY = Object.freeze({
 });
 
 const TOOL_NAME = "computer";
+// Both backends' default, and fills never change it.
+const SCREEN = Object.freeze({ width: 1280, height: 800 });
+// Far past any form, and short of the thousands of wheel clicks a huge value
+// would queue on the desktop.
+const MAX_SCROLL = 5000;
 
 // Forms need no dragging, hovering or other mouse buttons, so the model is not
-// offered them. The size is both backends' default, and fills never change it.
+// offered them.
 const COMPUTER_TOOL = Object.freeze({
   type: "function",
   name: TOOL_NAME,
   description:
-    "Act on the browser: runs these actions in order, then you are shown the new screen. The screen is 1280 by 800 pixels. x and y are pixels on it, with (0, 0) at the top-left, never fractions or a scaled grid.",
+    `Act on the browser: runs these actions in order, then you are shown the new screen. The screen is ${SCREEN.width} by ${SCREEN.height} pixels. x and y are pixels on it, with (0, 0) at the top-left, never fractions or a scaled grid.`,
   parameters: {
     type: "object",
     properties: {
@@ -65,20 +73,24 @@ const COMPUTER_TOOL = Object.freeze({
 });
 
 // Every failure below is a fixed string: what the model sent can echo the
-// person's values, and errors get logged.
+// person's values, and errors get logged. Keys are checked by the loop, which
+// holds the list for both model paths.
 function parseAction(raw: unknown): ComputerAction {
   const a = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
-  const pixel = (value: unknown): number => {
-    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("the model sent an action with a bad coordinate");
+  const within = (value: unknown, min: number, max: number): number => {
+    if (typeof value !== "number" || !(value >= min && value <= max)) throw new Error("the model sent an action with a bad coordinate");
     return Math.round(value);
   };
+  const point = () => ({ x: within(a["x"], 0, SCREEN.width - 1), y: within(a["y"], 0, SCREEN.height - 1) });
   switch (a["type"]) {
     case "click":
-      return { type: "click", button: "left", x: pixel(a["x"]), y: pixel(a["y"]) };
+      // Never run a right click as a left one.
+      if (a["button"] !== undefined && a["button"] !== "left") throw new Error("the model sent a click with a button the computer tool does not have");
+      return { type: "click", button: "left", ...point() };
     case "double_click":
-      return { type: "double_click", x: pixel(a["x"]), y: pixel(a["y"]) };
+      return { type: "double_click", ...point() };
     case "scroll":
-      return { type: "scroll", x: pixel(a["x"]), y: pixel(a["y"]), scroll_x: pixel(a["scroll_x"] ?? 0), scroll_y: pixel(a["scroll_y"] ?? 0) };
+      return { type: "scroll", ...point(), scroll_x: within(a["scroll_x"] ?? 0, -MAX_SCROLL, MAX_SCROLL), scroll_y: within(a["scroll_y"] ?? 0, -MAX_SCROLL, MAX_SCROLL) };
     case "type":
       if (typeof a["text"] !== "string") throw new Error("the model sent a type action with no text");
       return { type: "type", text: a["text"] };
@@ -98,40 +110,45 @@ function parseAction(raw: unknown): ComputerAction {
 
 interface FunctionCall {
   call_id: string;
-  name?: unknown;
-  arguments?: unknown;
+  actions: ComputerAction[];
 }
 
-function isFunctionCall(item: unknown): item is FunctionCall {
-  if (typeof item !== "object" || item === null) return false;
-  const candidate = item as Record<string, unknown>;
-  return candidate["type"] === "function_call" && typeof candidate["call_id"] === "string";
-}
-
-function actionsOf(call: FunctionCall): ComputerAction[] {
-  if (call.name !== TOOL_NAME) throw new Error("the model called a function that does not exist");
+// Every call in the reply is checked before any of them runs. OpenRouter's
+// schema leaves a call's status optional, so only a status that is present
+// and says otherwise is refused.
+function parseCall(item: Record<string, unknown>): FunctionCall {
+  const { call_id: callId, name, status } = item;
+  if (typeof callId !== "string" || callId === "") throw new Error("the model sent a call with no id");
+  if (status !== undefined && status !== "completed") throw new Error("the model sent a call that did not complete");
+  if (name !== TOOL_NAME) throw new Error("the model called a function that does not exist");
   let args: unknown;
   try {
-    args = JSON.parse(String(call.arguments));
+    args = JSON.parse(String(item["arguments"]));
   } catch {
     throw new Error("the model sent arguments that are not JSON");
   }
   const actions = (args as { actions?: unknown } | null)?.actions;
   if (!Array.isArray(actions)) throw new Error("the model sent no actions");
-  return actions.map(parseAction);
+  return { call_id: callId, actions: actions.map(parseAction) };
 }
+
+// A closed list: anything else in a reply is a tool this path never offered,
+// a native computer_call included, and its actions were never checked.
+const REPLY_ITEMS = new Set(["function_call", "message", "reasoning"]);
 
 // The loop runs one computer_call a turn, and a function call left unanswered
 // would be refused on replay, so calls made together become one batch.
 function fromOpenWeight(output: unknown[]): unknown[] {
-  const calls = output.filter(isFunctionCall);
+  const items = output.map((item) => (typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {}));
+  if (items.some((item) => typeof item["type"] !== "string" || !REPLY_ITEMS.has(item["type"]))) throw new Error("the model's reply holds something this path does not offer");
+  const calls = items.filter((item) => item["type"] === "function_call").map(parseCall);
   const first = calls[0];
   if (!first) return output;
   const call: ComputerCall = {
     type: "computer_call",
     id: first.call_id,
     call_id: first.call_id,
-    actions: calls.flatMap(actionsOf),
+    actions: calls.flatMap((c) => c.actions),
     pending_safety_checks: [],
     status: "completed",
   };
@@ -182,8 +199,8 @@ export class OpenWeightModelClient implements ModelClient {
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
     if (request.model !== OPEN_WEIGHT_MODEL_ID) throw new Error("this path runs only Meta's open-weight model");
     const response = await this.inner.createResponse({ ...request, tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
-    // Cut off by the output cap: a half-written batch must not run.
-    if (response.status === "incomplete") throw new Error("the model stopped before finishing its reply");
+    // Failed, cut off by the output cap, or no status at all: nothing in it runs.
+    if (response.status !== "completed") throw new Error("the model's reply did not complete");
     return { ...response, output: fromOpenWeight(response.output) };
   }
 }
