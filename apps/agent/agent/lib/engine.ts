@@ -626,12 +626,12 @@ export class PersonEngine {
   // the generation this turn started under (fixed when the turn was
   // parsed, before any await), so Engine refuses it with 409 once the
   // conversation was deleted or moved on.
-  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<"saved" | "unavailable"> {
+  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<EngineDeadlineResult | "unavailable"> {
     const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation }, timeoutMs);
+    if (res.ok) return (await res.json()) as EngineDeadlineResult;
     await res.body?.cancel().catch(() => undefined);
     if (res.status === 404) return "unavailable";
-    if (!res.ok) throw new EngineError(res.status);
-    return "saved";
+    throw new EngineError(res.status);
   }
 }
 

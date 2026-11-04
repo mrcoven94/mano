@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { personIdFor } from "../agent/lib/engine.js";
-import { parseDueDate, renderDeadlines } from "../agent/lib/deadlines.js";
+import { renderDeadlines, resolveDueDate } from "../agent/lib/deadlines.js";
 import { PROFILE_CLOSE, PROFILE_OPEN } from "../agent/lib/profile.js";
 import cancelDeadline from "../agent/tools/cancel_deadline.js";
 import listDeadlines from "../agent/tools/list_deadlines.js";
@@ -44,14 +44,19 @@ afterEach(() => {
 });
 
 describe("due dates in words", () => {
+  const dueDate = (words: string, said = words) => {
+    const due = resolveDueDate(words, TURN_AT, "America/Los_Angeles", said);
+    return due?.status === "live" ? due.date : null;
+  };
+
   it("reads the forms people and letters use, and the next such date when no year is given", () => {
-    expect(parseDueDate("November 12", TURN_AT)).toBe("2026-11-12");
-    expect(parseDueDate("Nov 12th, 2027", TURN_AT)).toBe("2027-11-12");
-    expect(parseDueDate("11/12", TURN_AT)).toBe("2026-11-12");
-    expect(parseDueDate("1/5", TURN_AT)).toBe("2027-01-05");
-    expect(parseDueDate("2026-12-01", TURN_AT)).toBe("2026-12-01");
-    expect(parseDueDate("February 30", TURN_AT)).toBeNull();
-    expect(parseDueDate("soon", TURN_AT)).toBeNull();
+    expect(dueDate("November 12")).toBe("2026-11-12");
+    expect(dueDate("Nov 12th, 2027")).toBe("2027-11-12");
+    expect(dueDate("11/12")).toBe("2026-11-12");
+    expect(dueDate("1/5")).toBe("2027-01-05");
+    expect(dueDate("2026-12-01")).toBe("2026-12-01");
+    expect(dueDate("February 30")).toBeNull();
+    expect(dueDate("soon")).toBeNull();
   });
 });
 
@@ -166,7 +171,7 @@ describe("a due date's year", () => {
     const turnAtMs = await at(TRACED);
     for (const due of ["2026-10-27", "2024-10-27", "October 27"]) {
       const out = await track(due, "it was due last week", turnAtMs);
-      expect(out).toMatchObject({ status: "passed", dueDate: "2026-10-27", today: "2026-11-03", firstNudgeAt: null });
+      expect(out).toMatchObject({ status: "passed", dueDate: "2026-10-27", today: "2026-11-03" });
       expect(out.tell).toMatch(/has already passed/);
     }
     expect(engine.deadlinesOf(PERSON)).toEqual([]);

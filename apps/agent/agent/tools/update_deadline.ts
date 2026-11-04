@@ -1,15 +1,16 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { nextNudge, parseDueDate } from "../lib/deadlines.js";
+import { nextNudge, passedAnswer, personWords, resolveDueDate } from "../lib/deadlines.js";
 import { personEngine, requireTurn } from "../lib/person.js";
+import { profileTimeZone } from "../lib/profile.js";
 
 export default defineTool({
   description:
-    "Change a tracked deadline, or mark it done. Use done when the person says they already sent it, finished it or to stop reminding them because it is handled: its nudges stop. A new date replaces the nudges still to come. List deadlines first when the person names one in words.",
+    "Change a tracked deadline, or mark it done. Use done when the person says they already sent it, finished it or to stop reminding them because it is handled: its nudges stop. A new date replaces the nudges still to come; a date that has already passed changes nothing, and the answer's tell says what to do. List deadlines first when the person names one in words.",
   inputSchema: z.object({
     deadlineId: z.string().min(1),
-    due: z.string().min(1).max(60).optional().describe("A new due date in the person's words, or YYYY-MM-DD."),
+    due: z.string().min(1).max(60).optional().describe("A new due date in the person's words, with a year only if they gave one."),
     title: z.string().min(1).max(120).optional(),
     done: z.boolean().optional().describe("True when it is handled."),
   }),
@@ -21,9 +22,11 @@ export default defineTool({
     if (input.done) patch.status = "done";
     else {
       if (input.due) {
-        const dueDate = parseDueDate(input.due, turnAtMs);
-        if (!dueDate) throw new Error(`Could not read "${input.due}" as a date. Ask for the date like "November 12".`);
-        patch.dueDate = dueDate;
+        const timeZone = await profileTimeZone(engine);
+        const due = resolveDueDate(input.due, turnAtMs, timeZone, personWords(ctx.messages));
+        if (!due) throw new Error(`Could not read "${input.due}" as a date. Ask for the date like "November 12".`);
+        if (due.status === "passed") return passedAnswer(due.date, turnAtMs, timeZone);
+        patch.dueDate = due.date;
       }
       if (input.title) patch.title = input.title.trim();
     }
