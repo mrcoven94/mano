@@ -2,10 +2,12 @@
 // letters suite, does the deadline the mail reader publishes match the one
 // the letter sets (none for a scam or a letter with two dates)? The real
 // reader is packages/mail qualityDeadlineReader, used whenever
-// META_MODEL_API_KEY is set; without a key a stand-in reads the letter's
+// META_MODEL_API_KEY is set, or the same reader from its transcript stage under
+// MANO_MODEL_PROVIDER=openrouter; without a key a stand-in reads the letter's
 // transcript and every report says so.
 
 import { extractDates } from "./checks.ts";
+import { openRouterKey } from "./models.ts";
 import { buildLettersCases, letterDeadline } from "./suites/letters.ts";
 import type { BenchCase, LetterImage } from "./suites/types.ts";
 
@@ -59,6 +61,11 @@ export class TranscriptDeadlineReader implements DeadlineReader {
 }
 
 export async function loadDeadlineReader(env: NodeJS.ProcessEnv = process.env): Promise<{ reader: DeadlineReader; detail: string }> {
+  const openRouter = openRouterKey(env);
+  if (openRouter) {
+    const { TranscriptDeadlineModelReader, TRANSCRIPT_STAGE_DETAIL } = await import("./mail-transcript.ts");
+    return { reader: new TranscriptDeadlineModelReader(openRouter), detail: TRANSCRIPT_STAGE_DETAIL };
+  }
   if (!env.META_MODEL_API_KEY) return { reader: new TranscriptDeadlineReader(), detail: "stand-in: no META_MODEL_API_KEY" };
   try {
     const mod = (await import("@mano/mail" as string)) as { qualityDeadlineReader?: DeadlineReader };
