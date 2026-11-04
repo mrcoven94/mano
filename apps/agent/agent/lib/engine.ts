@@ -120,6 +120,8 @@ export interface EngineApproval {
   outcome?: {
     attempt: "in_flight" | "unknown" | "failed" | "done" | null;
     receipt: { externalId: string; simulated: boolean } | null;
+    // Mano could not confirm a send and has stopped checking on its own.
+    lookupsEnded?: boolean;
   };
 }
 
@@ -201,6 +203,9 @@ export interface EngineResult {
   // A refused approve: the safety check could not answer. The approval
   // still waits and nothing ran, so the same yes can be tried again.
   retryable?: true;
+  // A refused approve: a fax could not be confirmed and will not be sent
+  // again. Only a fresh approval can send it.
+  unconfirmed?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in
