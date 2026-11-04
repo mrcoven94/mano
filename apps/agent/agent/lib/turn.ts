@@ -80,6 +80,9 @@ export interface TurnDeps {
   // The whole turn's budget from its arrival; under Channels' 100-second
   // wait. Default TURN_BUDGET_MS.
   turnBudgetMs?: number;
+  // The model this deployment sends turns, letter reads and fills to. It goes
+  // back to the signed caller for the record and never reaches the person.
+  modelId?: string;
 }
 
 export interface TurnResponse {
@@ -593,7 +596,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
       engine: clock.engine,
     }),
   );
-  return Response.json(response.body, { status: response.httpStatus });
+  return Response.json({ ...response.body, ...(deps.modelId ? { model: deps.modelId } : {}) }, { status: response.httpStatus });
 }
 
 // Channels' report that a reply carrying an approval question went out:
