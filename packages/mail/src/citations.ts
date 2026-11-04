@@ -20,12 +20,15 @@ export function isRealBox(box: Box | null): boolean {
   return xmax - xmin >= 4 && ymax - ymin >= 4;
 }
 
+const WHITESPACE_RUN = /\s+/g;
+const NON_ALPHANUMERIC = /[^a-z0-9]/g;
+
 function normalize(s: string): string {
-  return s.toLowerCase().replace(/\s+/g, " ").trim();
+  return s.toLowerCase().replace(WHITESPACE_RUN, " ").trim();
 }
 
 function stripPunctuation(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return s.toLowerCase().replace(NON_ALPHANUMERIC, "");
 }
 
 // The field text must appear in the page transcription. Matching

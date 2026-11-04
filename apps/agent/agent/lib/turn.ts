@@ -47,6 +47,7 @@ const READ_MARGIN_MS = 3_000;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 // Engine's identity rule for turn IDs.
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
+const HANDLE_HASH = /^[0-9a-f]{64}$/;
 // A person quiet this long is starting a new conversation.
 const CONVERSATION_GAP_MS = 15 * 60_000;
 // The replay link is optional; asking Engine for it never holds the reply long.
@@ -129,7 +130,7 @@ function parseBody(value: unknown): TurnBody | null {
   const body = value as Record<string, unknown>;
   if (typeof body.turnId !== "string" || !TURN_ID.test(body.turnId)) return null;
   if (typeof body.receivedAt !== "number" || !Number.isFinite(body.receivedAt) || body.receivedAt <= 0) return null;
-  if (typeof body.handleHash !== "string" || !/^[0-9a-f]{64}$/.test(body.handleHash)) return null;
+  if (typeof body.handleHash !== "string" || !HANDLE_HASH.test(body.handleHash)) return null;
   if (typeof body.generation !== "number" || !Number.isInteger(body.generation) || body.generation < 0) return null;
   if (typeof body.grant !== "string" || !body.grant || body.grant.length > 2000) return null;
   if (!Array.isArray(body.texts)) return null;
@@ -607,7 +608,7 @@ export async function handlePresented(request: Request, deps: { secret: string |
   const { handleHash, approvalId, textHash, generation, grant } = body;
   if (
     typeof handleHash !== "string" ||
-    !/^[0-9a-f]{64}$/.test(handleHash) ||
+    !HANDLE_HASH.test(handleHash) ||
     typeof approvalId !== "string" ||
     typeof textHash !== "string" ||
     typeof generation !== "number" ||

@@ -18,6 +18,7 @@
  * reaches only the portal, whose browser pages save drafts and file nothing.
  */
 import { isComputerCall, type ComputerAction, type ComputerCall } from "./actions";
+import { PIXEL_COORDINATES } from "./loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 
 export const OPEN_WEIGHT_BASE_URL = "https://openrouter.ai/api/v1";
@@ -35,6 +36,14 @@ const OPEN_WEIGHT_BODY = Object.freeze({
 const TOOL_NAME = "computer";
 // Both backends' default, and fills never change it.
 const SCREEN = Object.freeze({ width: 1280, height: 800 });
+// The model aims on a 0 to 1000 grid, whatever it is told: asked for pixels on
+// a 1280 by 800 screen, it clicked a field centred at (291, 79) at (227, 98),
+// which landed each value one field too low. So the tool states the grid and
+// this file converts, in both directions, since a call replays as it was made.
+const GRID = 1000;
+const toPixel = (value: number, size: number): number => Math.min(size - 1, Math.round((value * size) / GRID));
+const toGrid = (value: number, size: number): number => Math.round((value * GRID) / size);
+const GRID_COORDINATES = "Coordinates are on a grid from 0 to 1000 across and down the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.";
 // Far past any form, and short of the thousands of wheel clicks a huge value
 // would queue on the desktop.
 const MAX_SCROLL = 5000;
@@ -45,7 +54,7 @@ const COMPUTER_TOOL = Object.freeze({
   type: "function",
   name: TOOL_NAME,
   description:
-    `Act on the browser: runs these actions in order, then you are shown the new screen. The screen is ${SCREEN.width} by ${SCREEN.height} pixels. x and y are pixels on it, with (0, 0) at the top-left, never fractions or a scaled grid.`,
+    "Act on the browser: runs these actions in order, then you are shown the new screen. x and y are on a grid from 0 to 1000 across and down the screen, with (0, 0) at the top-left, whatever the screen's size.",
   parameters: {
     type: "object",
     properties: {
@@ -81,7 +90,7 @@ function parseAction(raw: unknown): ComputerAction {
     if (typeof value !== "number" || !(value >= min && value <= max)) throw new Error("the model sent an action with a bad coordinate");
     return Math.round(value);
   };
-  const point = () => ({ x: within(a["x"], 0, SCREEN.width - 1), y: within(a["y"], 0, SCREEN.height - 1) });
+  const point = () => ({ x: toPixel(within(a["x"], 0, GRID), SCREEN.width), y: toPixel(within(a["y"], 0, GRID), SCREEN.height) });
   switch (a["type"]) {
     case "click":
       // Never run a right click as a left one.
@@ -156,7 +165,7 @@ function fromOpenWeight(output: unknown[]): unknown[] {
 }
 
 // OpenRouter's request schema requires detail on every image. High, because
-// the model picks pixels on this screen.
+// the model picks points on this screen.
 function screen(imageUrl: unknown) {
   return { type: "input_image", detail: "high", image_url: imageUrl };
 }
@@ -167,7 +176,8 @@ function screen(imageUrl: unknown) {
 function toOpenWeight(input: unknown[]): unknown[] {
   return input.flatMap((item) => {
     if (isComputerCall(item)) {
-      return [{ type: "function_call", call_id: item.call_id, name: TOOL_NAME, arguments: JSON.stringify({ actions: item.actions }) }];
+      const actions = item.actions.map((a) => ("x" in a && "y" in a ? { ...a, x: toGrid(a.x, SCREEN.width), y: toGrid(a.y, SCREEN.height) } : a));
+      return [{ type: "function_call", call_id: item.call_id, name: TOOL_NAME, arguments: JSON.stringify({ actions }) }];
     }
     const entry = item as { role?: unknown; content?: unknown; type?: unknown; call_id?: unknown; output?: { image_url?: unknown } };
     if (entry.type === "computer_call_output") {
@@ -198,7 +208,7 @@ export class OpenWeightModelClient implements ModelClient {
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
     if (request.model !== OPEN_WEIGHT_MODEL_ID) throw new Error("this path runs only Meta's open-weight model");
-    const response = await this.inner.createResponse({ ...request, tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
+    const response = await this.inner.createResponse({ ...request, instructions: request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES), tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
     return { ...response, output: fromOpenWeight(response.output) };

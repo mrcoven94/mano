@@ -234,13 +234,15 @@ export function extraLetterExtraction(page: PageExtraction): PageExtraction | nu
   };
 }
 
+const JSON_OBJECT_SPAN = /\{[\s\S]*\}/;
+
 // The JSON in an answer: the whole text, or the object inside prose or a
 // code fence. Undefined when there is none.
 function parseAnswer(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    const span = text.match(/\{[\s\S]*\}/);
+    const span = text.match(JSON_OBJECT_SPAN);
     if (!span) return undefined;
     try {
       return JSON.parse(span[0]);
@@ -374,9 +376,15 @@ export interface GroupablePage {
   extraction: PageExtraction;
 }
 
+const NON_ALPHANUMERIC_OR_SPACE = /[^a-z0-9 ]/g;
+const WHITESPACE_RUN = /\s+/g;
+const NON_ALPHANUMERIC = /[^a-z0-9]/g;
+const PAGE_MARKER = /page\s*(\d+)\s*of\s*(\d+)/i;
+const CONTINUED = /continued/i;
+
 function normText(s: string | null): string | null {
   if (!s) return null;
-  const n = s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+  const n = s.toLowerCase().replace(NON_ALPHANUMERIC_OR_SPACE, "").replace(WHITESPACE_RUN, " ").trim();
   return n.length > 2 ? n : null;
 }
 
@@ -386,15 +394,15 @@ const normSubject = normText;
 
 function normRef(s: string | null): string | null {
   if (!s) return null;
-  const n = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const n = s.toLowerCase().replace(NON_ALPHANUMERIC, "");
   return n.length > 2 ? n : null;
 }
 
 function markerInfo(marker: string | null): { num: number; of: number } | { continued: true } | null {
   if (!marker) return null;
-  const m = marker.match(/page\s*(\d+)\s*of\s*(\d+)/i);
+  const m = marker.match(PAGE_MARKER);
   if (m) return { num: Number(m[1]), of: Number(m[2]) };
-  if (/continued/i.test(marker)) return { continued: true };
+  if (CONTINUED.test(marker)) return { continued: true };
   return null;
 }
 

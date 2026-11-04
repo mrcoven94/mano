@@ -55,6 +55,7 @@ const CAPS_DOMAIN_RE =
 // NANP-ish numbers: (555) 123-4567, 555-123-4567, 555.123.4567,
 // 5551234567 with separators, optional leading 1.
 const PHONE_RE = /(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
+const NON_DIGIT = /\D/g;
 
 const URGENCY_WORDS = [
   "urgent",
@@ -102,7 +103,7 @@ export function findPhones(text: string): ContentFlag[] {
   const flags: ContentFlag[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(PHONE_RE)) {
-    const digits = m[0].replace(/\D/g, "");
+    const digits = m[0].replace(NON_DIGIT, "");
     // Skip dates and short runs that are not dialable numbers.
     if (digits.length < 10 || digits.length > 11) continue;
     if (!seen.has(m[0])) {
@@ -170,9 +171,10 @@ const NEVER_ASKS = new RegExp(
     String.raw`(?:(?!\b(?:so|but|instead|then)\b)[^.!?,;:]){0,60}?\b${METHOD}(?:\s*,?\s*(?:(?:and|or)\s+)?${METHOD})*`,
   "gi",
 );
+const SENTENCE_BREAK = /(?<=[.!?])\s+|\n\s*\n/;
 
 function paymentDemand(text: string): string | null {
-  const sentences = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const sentences = text.split(SENTENCE_BREAK).map((s) => s.trim()).filter(Boolean);
   const counted = sentences.map((s) => s.replace(NEVER_ASKS, " "));
   const find = (test: (s: string) => boolean): string | null => {
     const k = counted.findIndex(test);

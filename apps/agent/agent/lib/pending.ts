@@ -29,6 +29,9 @@ const LABELS: Record<string, string> = Object.fromEntries(
 // form's own fields, so it never receives it.
 export const ATTACHMENT = "attachment";
 
+const LINK_START = /https?:\/\/|www\./i;
+const WHITESPACE_RUN = /\s+/g;
+
 // The payload key a draft freezes its form's declaration under, word for
 // word. The question shows it, so the person's YES is what makes it, and
 // Engine files it as theirs only after that YES.
@@ -230,7 +233,7 @@ export function replayLine(url: string, language: ReplyLanguage = "en"): string 
 // holds no link for the link check to strip. Anything else cannot be put
 // to a YES. Channels runs the same check before sending.
 export function presentsExactly(question: string): boolean {
-  return guardReply(question).text === question && !/https?:\/\/|www\./i.test(question);
+  return guardReply(question).text === question && !LINK_START.test(question);
 }
 
 // What Channels reports after it sent a question: SHA-256 (hex) of the
@@ -238,7 +241,7 @@ export function presentsExactly(question: string): boolean {
 // text line may split it into bubbles at spaces. Channels computes the
 // same hash over what it sent.
 export function presentationHash(text: string): string {
-  return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+  return createHash("sha256").update(text.replace(WHITESPACE_RUN, " ").trim()).digest("hex");
 }
 
 // What the model is told, as a system instruction, about where requests

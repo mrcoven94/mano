@@ -18,6 +18,8 @@ import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Reaction } 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
 export const BLOOIO_WEBHOOK_API_VERSION = "2026-10-01";
 
+const TRAILING_SLASH_RE = /\/$/;
+
 const SEND_TIMEOUT_MS = 15000;
 
 // The caller's cancel signal, bounded by a timeout either way.
@@ -197,7 +199,7 @@ export class BlooioChannel implements Channel {
     if (!opts.channelId) throw new Error("A Blooio channel ID is required.");
     this.apiKey = opts.apiKey;
     this.channelId = opts.channelId;
-    this.baseUrl = (opts.baseUrl ?? BLOOIO_BASE_URL).replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? BLOOIO_BASE_URL).replace(TRAILING_SLASH_RE, "");
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.sleepFn = opts.sleepFn ?? sleepDefault;
   }
