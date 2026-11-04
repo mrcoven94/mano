@@ -1,7 +1,8 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { nextNudge, passedAnswer, personWords, resolveDueDate } from "../lib/deadlines.js";
+import { nextNudge } from "../lib/deadlines.js";
+import { notWritten, resolveDueDate, whatWasSaid } from "../lib/due-date.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { profileTimeZone } from "../lib/profile.js";
 
@@ -23,9 +24,9 @@ export default defineTool({
     else {
       if (input.due) {
         const timeZone = await profileTimeZone(engine);
-        const due = resolveDueDate(input.due, turnAtMs, timeZone, personWords(ctx.messages));
+        const due = resolveDueDate(input.due, turnAtMs, timeZone, whatWasSaid(ctx.messages));
         if (!due) throw new Error(`Could not read "${input.due}" as a date. Ask for the date like "November 12".`);
-        if (due.status === "passed") return passedAnswer(due.date, turnAtMs, timeZone);
+        if (due.status !== "live") return notWritten(due, turnAtMs, timeZone);
         patch.dueDate = due.date;
       }
       if (input.title) patch.title = input.title.trim();

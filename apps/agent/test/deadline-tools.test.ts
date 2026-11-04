@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { personIdFor } from "../agent/lib/engine.js";
-import { renderDeadlines, resolveDueDate } from "../agent/lib/deadlines.js";
+import { renderDeadlines } from "../agent/lib/deadlines.js";
+import { resolveDueDate } from "../agent/lib/due-date.js";
 import { PROFILE_CLOSE, PROFILE_OPEN } from "../agent/lib/profile.js";
 import cancelDeadline from "../agent/tools/cancel_deadline.js";
 import listDeadlines from "../agent/tools/list_deadlines.js";
@@ -45,7 +46,7 @@ afterEach(() => {
 
 describe("due dates in words", () => {
   const dueDate = (words: string, said = words) => {
-    const due = resolveDueDate(words, TURN_AT, "America/Los_Angeles", said);
+    const due = resolveDueDate(words, TURN_AT, "America/Los_Angeles", { person: [said], asked: null });
     return due?.status === "live" ? due.date : null;
   };
 
@@ -249,6 +250,8 @@ describe("a due date's year", () => {
       "Next year I move. It is due November 24.",
       "It is due November 24. In 2024 I missed one.",
       "Tengo 2024 dólares de renta. Vence el 24 de noviembre.",
+      "It is due November 24 last I heard",
+      "My interview is November 24 next week, I think",
     ]) {
       expect(await track("2024-11-24", words, turnAtMs), words).toMatchObject({ dueDate: "2026-11-24", firstNudgeAt: "2026-11-10T18:00:00.000Z" });
     }
@@ -277,6 +280,7 @@ describe("a due date's year", () => {
       "due 11.24.27",
       "vence el 24 de noviembre de 2027",
       "vence el 24 de noviembre del 2027",
+      "vence el 24 de noviembre del 27",
       "vence el 24/11/2027",
       "vence el 24 de noviembre de dos mil veintisiete",
     ]) {
@@ -346,11 +350,11 @@ describe("a due date's year", () => {
 
   it("two years for one date in one message makes Mano ask, and saves nothing", async () => {
     const turnAtMs = await at(TRACED);
-    const out = await track("November 24", "It was November 24, 2027 or November 24, 2028, I am not sure", turnAtMs);
+    const out = await track("March 5", "It was March 5, 2027 or March 5, 2028, I am not sure", turnAtMs);
     expect(out).toMatchObject({ status: "ask" });
     expect(out.tell).toMatch(/which/i);
     expect(engine.deadlinesOf(PERSON)).toEqual([]);
-    expect(await track("2028-11-24", "It was November 24, 2027 or November 24, 2028, I am not sure", turnAtMs)).toMatchObject({ dueDate: "2028-11-24" });
+    expect(await track("2028-03-05", "It was March 5, 2027 or March 5, 2028, I am not sure", turnAtMs)).toMatchObject({ dueDate: "2028-03-05" });
   });
 
   it("a newer message speaks for the date over an older one", async () => {
@@ -362,7 +366,8 @@ describe("a due date's year", () => {
     const input = { title: "Food benefits renewal", due: "November 24" };
     expect(await trackDeadline.execute(input, history("it was due November 24, 2025", "now it is due November 24"))).toMatchObject({ dueDate: "2026-11-24" });
     expect(await trackDeadline.execute(input, history("it is due November 24, 2027", "please track November 24"))).toMatchObject({ dueDate: "2027-11-24" });
-    expect(await trackDeadline.execute(input, history("it is due November 24, 2027", "sorry, November 24, 2028"))).toMatchObject({ dueDate: "2028-11-24" });
+    const moved = { title: "Food benefits renewal", due: "March 5" };
+    expect(await trackDeadline.execute(moved, history("it is due March 5, 2027", "sorry, March 5, 2028"))).toMatchObject({ dueDate: "2028-03-05" });
   });
 
   it("moving a deadline reads its date the same way, and a past date moves nothing", async () => {
