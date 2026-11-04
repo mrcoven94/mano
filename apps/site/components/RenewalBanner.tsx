@@ -4,12 +4,13 @@ import { usePathname } from "next/navigation";
 import Mascot from "./Mascot";
 import { BANNER_ATTR, BANNER_KEY, SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
-/* A slim bar above the header that points people with a renewal letter to /renewals. Dismissing it sets an attribute on
+/* A slim bar above the header that points people with a renewal letter to /renewals, on the pages that do not already lead with it. Dismissing it sets an attribute on
    <html> and remembers it; the script in the root layout sets the same attribute before first paint, so a dismissed bar
    never flashes in and never moves the page. */
 
 export default function RenewalBanner() {
-  if (usePathname() === "/renewals") return null;
+  const path = usePathname();
+  if (path === "/" || path === "/renewals") return null;
 
   const dismiss = () => {
     document.documentElement.setAttribute(BANNER_ATTR, "");

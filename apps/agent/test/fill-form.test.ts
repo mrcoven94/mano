@@ -235,7 +235,7 @@ describe("fill_form", () => {
     const page = (await engine.replayPageAt(url!))!;
     const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
     expect(captions).toEqual([
-      "1. Mano opened the form.",
+      "1. Mano opened the form. An AI model chose each step below from what it saw on the screen.",
       ...FORMS["food-renewal"]!.fields.map((f, i) => `${i + 2}. Mano filled in &quot;${f.label}&quot;.`),
     ]);
     // Each typed step shows its field up close, centered where Mano
@@ -259,7 +259,7 @@ describe("fill_form", () => {
     ];
     const steps = replayOf(frames, form, VALUES);
     expect(steps.map((s) => [s.caption, s.png[33], s.focus])).toEqual([
-      ["Mano opened the form.", 0, null],
+      ["Mano opened the form. An AI model chose each step below from what it saw on the screen.", 0, null],
       ["Mano typed into the form.", 1, { x: 600, y: 430 }],
       ["Mano corrected the field.", 2, { x: 600, y: 430 }],
     ]);
@@ -345,6 +345,15 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
+  it("a key that could leave the browser stops the fill before any action: nothing is typed or prepared", async () => {
+    engine.profile = profile();
+    model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
+    const out = await run("turn_fill0041", { form: "food-renewal" });
+    expect(out.status).toBe("fill_failed");
+    expect(computer.acted).toEqual([]);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
   it("a safety check stops the fill before any action: nothing is typed or prepared, and only the check codes are logged", async () => {
     engine.profile = profile();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -404,16 +413,19 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
-  it("with no proof in the profile but a document on file, hands the renewal to start_form_draft without touching the computer", async () => {
+  it("with no proof in the profile but a document on file, fills on the computer and attaches that document, cited and named", async () => {
     const p = profile();
     p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
     engine.profile = p;
     engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
     const out = await run("turn_fill0031", { form: "food-renewal" });
-    expect(out.status).toBe("unavailable");
-    expect(out.note).toMatch(/start_form_draft/);
-    expect(model.requests).toHaveLength(0);
-    expect(engine.approvals()).toHaveLength(0);
+    expect(out.status).toBe("waiting_for_yes");
+    expect(model.requests.length).toBeGreaterThan(0);
+    const [held] = engine.approvals();
+    const frozen = JSON.parse(held.requestJson);
+    expect(frozen.documentId).toBe("doc-letter");
+    expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
+    expect(frozen.payload.attachment).toEqual(expect.any(String));
   });
 
   it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
@@ -603,6 +615,31 @@ describe("the computer and portal a deployment fills with", () => {
     if ("unavailable" in deps) return;
     await deps.computer.screenshot().catch(() => undefined);
     expect(bodies).toEqual([expect.objectContaining({ person_id: "person-abc" })]);
+  });
+
+  it("follows the agent's model switch, and takes the open-weight key alone when the switch is on", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return Response.json({ id: "r", status: "completed", output: [] });
+    });
+    const request = { instructions: "i", tools: [], input: [], store: false };
+    const on = fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in on) throw new Error(on.unavailable);
+    await on.model.createResponse({ ...request, model: on.modelId });
+    expect(on.modelId).toBe("meta/muse-spark-open");
+
+    const off = fillDepsFromEnv("person-abc", { ...env, OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in off) throw new Error(off.unavailable);
+    await off.model.createResponse({ ...request, model: off.modelId });
+    expect(off.modelId).toBe("muse-spark-1.3");
+    expect(urls).toEqual(["https://openrouter.ai/api/v1/responses", "https://api.meta.ai/v1/responses"]);
+
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
+    const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
+    expect(fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test" })).toEqual({ unavailable: "no computer on this model route" });
+    expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });
 
   it("is not available without the portal's draft token, since nothing could be read back", () => {

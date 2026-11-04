@@ -219,6 +219,39 @@ describe("OpenRouter switch", () => {
     expect(bodies[0].reasoning).toEqual({ effort: "low" });
   });
 
+  it("sends Meta's open-weight model to the Modal endpoint with its proxy token, at low effort, with no OpenRouter fields", async () => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "modal");
+    vi.stubEnv("MODAL_ENDPOINT_URL", "https://example--ep-test-server.us-west.modal.direct/");
+    vi.stubEnv("MODAL_PROXY_TOKEN", "wk-test.ws-test");
+    const urls: string[] = [];
+    let authorization: string | null = null;
+    vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+      urls.push(String(url));
+      authorization = new Headers(init?.headers).get("authorization");
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return completion();
+    });
+    const { model, modelId } = createMuseModel({ apiKey: "test-key" });
+    await generateText({ model, prompt: "hello" });
+    expect(modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(urls[0]).toBe("https://example--ep-test-server.us-west.modal.direct/v1/chat/completions");
+    expect(authorization).toBe("Bearer wk-test.ws-test");
+    expect(bodies[0].model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(bodies[0].reasoning).toEqual({ effort: "low" });
+    expect(bodies[0].provider).toBeUndefined();
+  });
+
+  it("refuses to build a model when Modal is chosen with its settings incomplete, and calls nothing", () => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "modal");
+    vi.stubEnv("MODAL_ENDPOINT_URL", "https://example--ep-test-server.us-west.modal.direct");
+    vi.stubEnv("MODAL_PROXY_TOKEN", "");
+    vi.stubEnv("META_MODEL_API_KEY", "test-meta-key");
+    const urls: string[] = [];
+    stubWithUrls(urls);
+    expect(() => createMuseModel({ apiKey: "test-key" })).toThrow("Modal is chosen");
+    expect(urls).toEqual([]);
+  });
+
   it("stays on the Meta Model API without an OpenRouter key", async () => {
     vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
     vi.stubEnv("OPENROUTER_API_KEY", "");
