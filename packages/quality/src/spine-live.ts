@@ -73,7 +73,9 @@ export const REQUIRED_ENV = [
 
 // What spine-letter.jpg says.
 const LETTER_DUE = "2026-11-14";
-const LETTER_DUE_WORDS: Record<Lang, RegExp> = { en: /November 14/i, es: /14 de noviembre|November 14/i };
+const LETTER_DUE_WORDS: Record<Lang, RegExp> = { en: /\bNovember 14, 2026\b/i, es: /\b14 de noviembre de 2026\b|\bNovember 14, 2026\b/i };
+// The replay page's own words for a draft still waiting for the yes.
+const REPLAY_WAITING = "This is exactly what Mano will send when you reply YES.";
 
 const MARIA = {
   caseNumber: "R-1042",
@@ -346,12 +348,19 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         throw new StepFailure(`no approval question after ${rounds} turns`, turn.http, reply);
       }
       approvalId = turn.approvalId;
-      // A question with no replay page was drafted without the computer.
-      const replay = await person.engineGet(`/approvals/${encodeURIComponent(approvalId)}/replay`);
-      if (replay.http !== 200) throw new StepFailure(`no replay of a computer fill: HTTP ${replay.http}, so this draft was not filled on the desktop`, replay.http, reply);
+      // A question with no replay page was drafted without the computer. The
+      // link is opened as the person opens it, with no credentials.
+      const link = turn.text.match(/https?:\/\/\S+\/fill\/[0-9a-f]{32}/)?.[0];
+      if (!link?.startsWith(`${cfg.engineUrl}/`)) throw new StepFailure("no replay link in the question, so this draft was not filled on the desktop", turn.http, reply);
+      const replay = await fetchImpl(link, { signal: AbortSignal.timeout(CALL_TIMEOUT_MS) });
+      const page = await replay.text();
+      const screens = page.match(/<img src="data:image\/png;base64,/g)?.length ?? 0;
+      if (replay.status !== 200 || !page.includes(REPLAY_WAITING) || screens === 0 || !page.includes(MARIA.caseNumber)) {
+        throw new StepFailure(`the replay page did not show the fill: HTTP ${replay.status}, ${screens} screens`, replay.status, reply);
+      }
       const shown = await person.presented(approvalId, turn.approval);
       if (shown !== 200) throw new StepFailure(`the presented report answered HTTP ${shown}`, shown, reply);
-      return { model: reported(turn), http: turn.http, detail: `filled, replay page ready, after ${rounds} turn${rounds === 1 ? "" : "s"}`, attempts: rounds, reply };
+      return { model: reported(turn), http: turn.http, detail: `filled, replay page shows ${screens} screens, after ${rounds} turn${rounds === 1 ? "" : "s"}`, attempts: rounds, reply };
     },
     async yes() {
       let turn: Turn | null = null;

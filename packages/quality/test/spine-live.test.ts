@@ -9,12 +9,16 @@ import { looksSpanish, runLive, type LiveConfig, type StepName } from "../src/sp
 
 const QUESTION = "File your renewal?";
 const CONFIRMATION = "SBX-123";
+const REPLAY_TOKEN = "0123456789abcdef0123456789abcdef";
+const REPLAY_LINK = `https://engine.test/fill/${REPLAY_TOKEN}`;
+const REPLAY_PAGE = `<p>This is exactly what Mano will send when you reply YES. Nothing is sent before that.</p><img src="data:image/png;base64,AAAA"><dd>R-1042</dd>`;
 
 interface Scene {
   text?: Response;
   photoText?: string;
   fillTurns?: { status: string; text: string }[];
   replayStatus?: number;
+  replayPage?: string;
   yesTexts?: string[];
   receipt?: { externalId: string; simulated: boolean };
   portalStatus?: number;
@@ -24,7 +28,7 @@ interface Scene {
 }
 
 function deployment(scene: Scene = {}): typeof fetch {
-  const fills = [...(scene.fillTurns ?? [{ status: "waiting_approval", text: `Filled. https://engine.test/fill/secret-token ${QUESTION}` }])];
+  const fills = [...(scene.fillTurns ?? [{ status: "waiting_approval", text: `Filled. ${QUESTION} See each step: ${REPLAY_LINK}` }])];
   const yeses = [...(scene.yesTexts ?? [`Done. Sent: Food benefits renewal. Confirmation ${CONFIRMATION}.`])];
   const model = scene.turnModel ?? "meta/muse-spark-open";
   return (async (input: string | URL | Request, init?: RequestInit) => {
@@ -43,7 +47,7 @@ function deployment(scene: Scene = {}): typeof fetch {
     if (url.pathname === "/channels/mano/presented") return Response.json({ ok: true });
     if (url.pathname.endsWith("/documents")) return Response.json({ id: "doc" }, { status: 201 });
     if (url.pathname.endsWith("/deadlines")) return Response.json({ deadlines: [{ dueDate: "2026-11-14", status: "scheduled" }] });
-    if (url.pathname.endsWith("/replay")) return Response.json({ path: "/fill/secret-token" }, { status: scene.replayStatus ?? 200 });
+    if (url.pathname.startsWith("/fill/")) return new Response(scene.replayPage ?? REPLAY_PAGE, { status: scene.replayStatus ?? 200 });
     if (url.pathname.endsWith("/approvals")) {
       return Response.json({ approvals: [{ id: "ap-1", outcome: { receipt: scene.receipt ?? { externalId: CONFIRMATION, simulated: false } } }] });
     }
@@ -88,7 +92,7 @@ test("two runs use different handles", async () => {
 
 test("the report carries no secret and no replay link", async () => {
   const text = JSON.stringify(await runLive(config()));
-  for (const secret of ["agent-secret-value", "grant-secret-value", "channels-token-value", "agent-token-value", "portal-token-value", "secret-token"]) {
+  for (const secret of ["agent-secret-value", "grant-secret-value", "channels-token-value", "agent-token-value", "portal-token-value", REPLAY_TOKEN]) {
     assert.ok(!text.includes(secret), secret);
   }
 });
@@ -104,8 +108,26 @@ test("a photo that was not read fails, even with a 200", async () => {
   assert.equal(await failedAt({ photoText: "I could not finish reading your photo." }), "photo");
 });
 
-test("a draft with no computer fill behind it fails", async () => {
+test("the deadline counts only with its year", async () => {
+  assert.equal(await failedAt({ photoText: "Your renewal is due November 14, 2024." }), "photo");
+  assert.equal(await failedAt({ photoText: "Your renewal is due November 14." }), "photo");
+});
+
+test("a question with no replay link fails: the draft never used the computer", async () => {
+  assert.equal(await failedAt({ fillTurns: [{ status: "waiting_approval", text: QUESTION }] }), "fill");
+});
+
+test("a replay link on another host fails and is not opened", async () => {
+  assert.equal(await failedAt({ fillTurns: [{ status: "waiting_approval", text: `${QUESTION} https://elsewhere.test/fill/${REPLAY_TOKEN}` }] }), "fill");
+});
+
+test("a replay page that does not open fails, as when a screenshot is missing", async () => {
   assert.equal(await failedAt({ replayStatus: 404 }), "fill");
+});
+
+test("a replay page that opens with a notice or no screens fails", async () => {
+  assert.equal(await failedAt({ replayPage: "<h1>This form changed</h1>" }), "fill");
+  assert.equal(await failedAt({ replayPage: "This is exactly what Mano will send when you reply YES. R-1042" }), "fill");
 });
 
 test("Mano's questions are answered until the form is ready", async () => {
@@ -113,7 +135,7 @@ test("Mano's questions are answered until the form is ready", async () => {
     config({
       fillTurns: [
         { status: "replied", text: "What is the case number on your renewal letter?" },
-        { status: "waiting_approval", text: QUESTION },
+        { status: "waiting_approval", text: `${QUESTION} ${REPLAY_LINK}` },
       ],
     }),
   );
