@@ -161,7 +161,7 @@ import {
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { checkerSetting, createExecutor, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
+import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
@@ -353,8 +353,9 @@ export function healthOk(env: Env): boolean {
 }
 
 // A provider's report on a fax or letter. Closed until its secret is set,
-// and nothing past the signature check runs on an unverified body. An
-// event for nothing of ours is acknowledged and dropped.
+// and nothing past the signature check runs on an unverified body. An event
+// it cannot place is not acknowledged, so the provider sends it again: the
+// route to a letter's person may not be written yet.
 async function deliveryWebhook(request: Request, env: Env, channel: "fax" | "mail"): Promise<Response> {
   if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
   const secret = channel === "mail" ? env.LOB_WEBHOOK_SECRET : env.TELNYX_PUBLIC_KEY;
@@ -366,8 +367,11 @@ async function deliveryWebhook(request: Request, env: Env, channel: "fax" | "mai
   const verified = channel === "mail" ? await verifyMailSignature(body, request.headers, secret) : await verifyFaxSignature(body, request.headers, secret);
   if (!verified) return new Response("Bad signature.", { status: 401 });
   const event = channel === "mail" ? parseMailEvent(body) : parseFaxEvent(body);
-  if (event) await (personStub(env, event.personId) as unknown as PersonAgent).recordDelivery(event);
-  return new Response(null, { status: 204 });
+  if (!event) return new Response("Not an event Mano can read.", { status: 422 });
+  const personId = event.personId ?? (await deliveryRoute(env.FILES, event.externalId));
+  if (!personId) return new Response("Not placed.", { status: 404 });
+  const placed = await (personStub(env, personId) as unknown as PersonAgent).recordDelivery({ ...event, personId });
+  return placed ? new Response(null, { status: 204 }) : new Response("Not placed.", { status: 404 });
 }
 
 // Reminders, the turn ledger, the pending approval pointer and the

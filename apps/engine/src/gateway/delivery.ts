@@ -6,7 +6,10 @@ import { readClientState } from "./fax.js";
 // webhooks over the raw body, and an unsigned, wrongly signed or old
 // request changes nothing.
 export interface DeliveryEvent {
-  personId: string;
+  // Absent on a letter: Lob redacts everything Mano could put a person in
+  // ("Using webhooks" in Lob's docs lists metadata, description and merge
+  // variables), so a letter is placed by its own ID (see deliveryRoute).
+  personId?: string;
   channel: "fax" | "mail";
   externalId: string;
   status: string;
@@ -54,7 +57,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Null for anything that is not one of our own letters.
+const LETTER_ID = /^ltr_[A-Za-z0-9]+$/;
+
+// Null for anything that is not a letter.
 export function parseMailEvent(rawBody: string): DeliveryEvent | null {
   let event: unknown;
   try {
@@ -62,14 +67,13 @@ export function parseMailEvent(rawBody: string): DeliveryEvent | null {
   } catch {
     return null;
   }
-  if (!isRecord(event) || !isRecord(event.body) || !isRecord(event.event_type) || !isRecord(event.body.metadata)) return null;
-  const { id: externalId, metadata } = event.body;
+  if (!isRecord(event) || !isRecord(event.body) || !isRecord(event.event_type)) return null;
+  const { id: externalId } = event.body;
   const { id: eventId } = event;
   const { id: status } = event.event_type;
-  const personId = metadata.mano_person;
-  if (typeof personId !== "string" || !personId) return null;
-  if (typeof externalId !== "string" || typeof eventId !== "string" || typeof status !== "string") return null;
-  return { personId, channel: "mail", externalId, status, eventId };
+  if (typeof externalId !== "string" || !LETTER_ID.test(externalId)) return null;
+  if (typeof eventId !== "string" || typeof status !== "string") return null;
+  return { channel: "mail", externalId, status, eventId };
 }
 
 // Null for anything that is not one of our own faxes.
@@ -86,6 +90,27 @@ export function parseFaxEvent(rawBody: string): DeliveryEvent | null {
   const state = readClientState(clientState);
   if (!state || typeof externalId !== "string" || typeof eventId !== "string" || typeof status !== "string") return null;
   return { personId: state.personId, channel: "fax", externalId, status, eventId };
+}
+
+// Where each letter's person is written down when the provider answers.
+export interface DeliveryRoutes {
+  remember(externalId: string, personId: string): Promise<void>;
+}
+
+interface RouteBucket {
+  put(key: string, value: string): Promise<unknown>;
+  get(key: string): Promise<{ text(): Promise<string> } | null>;
+}
+
+const routeKey = (externalId: string) => `delivery-routes/${externalId}`;
+
+export async function rememberDeliveryRoute(files: RouteBucket, externalId: string, personId: string): Promise<void> {
+  await files.put(routeKey(externalId), personId);
+}
+
+export async function deliveryRoute(files: RouteBucket, externalId: string): Promise<string | null> {
+  const stored = await files.get(routeKey(externalId));
+  return stored ? stored.text() : null;
 }
 
 interface SqlLike {

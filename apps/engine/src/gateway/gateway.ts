@@ -148,8 +148,12 @@ export const SUPERSEDED_REASON = "A newer request replaced this one, so it can n
 // Statuses that hold an action key, in the order a lookup prefers them:
 // a NO first, then a revocation, then the consumed approval, then the
 // live one.
+// A request is bounded by far less than this, so a send still in flight this
+// long has no live request behind it, the same age recovery works from.
+const SEND_DEAD_AFTER_MS = 5 * 60_000;
+
 // How the recovery sweep backs off a lookup with no answer: each wait is as
-// long as it has been failing, starting here, until the window ends.
+// long as it has been failing, starting here, up to the end of the window.
 const FIRST_LOOKUP_DELAY_MS = 5 * 60_000;
 const LOOKUP_WINDOW_MS = 24 * 3600_000;
 
@@ -1008,9 +1012,15 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
       return { status: "stale", approval, reason: "Document changed after approval." };
     }
-    const attempt = this.store.getAttempt(approval.idempotencyKey);
+    let attempt = this.store.getAttempt(approval.idempotencyKey);
     if (!attempt) {
       return { status: "blocked", reason: "This approval has no recorded attempt. Refusing to execute." };
+    }
+    // A provider send that crashed before its receipt: a YES looks it up
+    // rather than waiting on a request that is gone.
+    if (attempt.status === "in_flight" && attempt.provider && now.getTime() - Date.parse(attempt.updatedAt) > SEND_DEAD_AFTER_MS) {
+      this.store.updateAttempt(attempt.key, "unknown");
+      attempt = this.store.getAttempt(attempt.key) ?? attempt;
     }
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
@@ -1320,10 +1330,14 @@ export class ActionGateway {
     const attempt = this.store.getAttempt(key);
     const backsOff = err instanceof UnconfirmedSendError || !!attempt?.provider;
     if (attempt && backsOff) {
+      // Nothing live owns a send whose lookup ran: its request timed out or
+      // died. Unknown is what a YES reconciles, however long this takes.
+      if (attempt.status === "in_flight") this.store.updateAttempt(key, "unknown");
       if (attempt.lookupFailingSince && !attempt.nextLookupAt) return;
       const since = attempt.lookupFailingSince ?? now.toISOString();
-      const elapsed = now.getTime() - Date.parse(since);
-      const next = elapsed >= LOOKUP_WINDOW_MS ? null : new Date(now.getTime() + Math.max(FIRST_LOOKUP_DELAY_MS, elapsed)).toISOString();
+      const cutoff = Date.parse(since) + LOOKUP_WINDOW_MS;
+      const wait = Math.max(FIRST_LOOKUP_DELAY_MS, now.getTime() - Date.parse(since));
+      const next = now.getTime() >= cutoff ? null : new Date(Math.min(now.getTime() + wait, cutoff)).toISOString();
       this.store.setLookupSchedule(key, since, next);
       if (attempt.lookupFailingSince) return;
     }

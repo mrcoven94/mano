@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { inflateSync } from "node:zlib";
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFStream, degrees, type PDFObject } from "pdf-lib";
@@ -58,6 +58,7 @@ type Timeout = "none" | "after-recording" | "before-recording";
 class FakeLob {
   letters = new Map<string, { id: string; file: Uint8Array; to: string }>();
   posts = 0;
+  forms: FormData[] = [];
   next: Timeout | "lands-late" = "none";
   held: { key: string; letter: { id: string; file: Uint8Array; to: string } } | null = null;
   land() {
@@ -75,6 +76,7 @@ class FakeLob {
       this.next = "none";
       if (mode === "before-recording") throw abortError();
       const form = init.body as FormData;
+      this.forms.push(form);
       const key = new Headers(init.headers).get("idempotency-key")!;
       expect(form.get("metadata[mano_key]")).toBe(key);
       if (mode === "lands-late") {
@@ -102,7 +104,7 @@ class FakeTelnyx {
   faxes: { id: string; client_state: string; to: string; from: string; media_name: string }[] = [];
   media = new Map<string, Uint8Array>();
   faxPosts = 0;
-  next: Timeout | "lands-late" = "none";
+  next: Timeout | "lands-late" | "crash" = "none";
   rejectWith: number | null = null;
   held: (typeof this.faxes)[number] | null = null;
   lookupDown = false;
@@ -139,6 +141,7 @@ class FakeTelnyx {
       }
       this.faxes.push(fax);
       if (mode === "after-recording") throw abortError();
+      if (mode === "crash") return new Promise<Response>(() => {});
       if (this.hangBodyNext) {
         this.hangBodyNext = false;
         const body = new ReadableStream({
@@ -346,6 +349,32 @@ describe("mailed letters", () => {
     expect(retry.status).toBe("completed");
     lob.land();
     expect(lob.posts).toBe(2);
+    expect(lob.letters.size).toBe(1);
+  });
+
+  it("writes down each letter's person, on the send and on a reconcile, and sends no person to the provider", async () => {
+    const lob = new FakeLob();
+    const remembered: [string, string][] = [];
+    const routes = { remember: async (id: string, person: string) => void remembered.push([id, person]) };
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch, 1000, routes) });
+    const asked = await draft(gateway, documents, letter());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(remembered).toEqual([["ltr_1", PERSON]]);
+    expect(lob.forms[0].get("metadata[mano_person]")).toBeNull();
+    const after = new FakeLob();
+    after.next = "after-recording";
+    const second = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, after.fetch, 1000, routes) });
+    const again = await draft(second.gateway, second.documents, letter());
+    await second.gateway.approveAndExecute(again.approval!.id, PERSON);
+    expect(remembered[1]).toEqual(["ltr_1", PERSON]);
+  });
+
+  it("a route it cannot write never costs the send", async () => {
+    const lob = new FakeLob();
+    const routes = { remember: async () => { throw new Error("storage is down"); } };
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch, 1000, routes) });
+    const asked = await draft(gateway, documents, letter());
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("completed");
     expect(lob.letters.size).toBe(1);
   });
 
@@ -726,6 +755,55 @@ describe("a fax timeout across a restart", () => {
     expect(telnyx.faxes).toHaveLength(1);
   });
 
+  it("a crash after the provider accepted, with lookups down past their window, still gets its receipt on a YES", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "crash";
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = restartable(telnyx, documents);
+    const before = boot();
+    const asked = await draft(before.gateway, documents, fax());
+    void before.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await vi.waitFor(() => expect(telnyx.faxPosts).toBe(1));
+
+    const after = boot();
+    const key = asked.approval!.idempotencyKey;
+    expect(after.store.getAttempt(key)?.status).toBe("in_flight");
+    telnyx.lookupDown = true;
+    const start = Date.now();
+    for (let minutes = 10; minutes <= 2 * 24 * 60; minutes += 10) {
+      const now = new Date(start + minutes * 60_000);
+      const cutoff = new Date(now.getTime() - 5 * 60_000).toISOString();
+      for (const attempt of after.store.listRecoverableAttempts(cutoff, now.toISOString())) await after.gateway.recoverAttempt(attempt.key, now, cutoff);
+    }
+    expect(after.store.getAttempt(key)?.status).toBe("unknown");
+    expect(after.store.hasUnresolvedAttempts()).toBe(false);
+    telnyx.lookupDown = false;
+    const yes = await after.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(yes.status).toBe("reconciled");
+    expect(after.store.getReceiptByKey(key)?.externalId).toBe("fax_1");
+    expect(telnyx.faxPosts).toBe(1);
+  }, 60_000);
+
+  it("a YES on a crashed send looks it up once no live request can own it, and not before", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "crash";
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = restartable(telnyx, documents);
+    const before = boot();
+    const asked = await draft(before.gateway, documents, fax());
+    void before.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await vi.waitFor(() => expect(telnyx.faxPosts).toBe(1));
+    const after = boot();
+    expect((await after.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("in_progress");
+    expect(telnyx.listCalls).toBe(0);
+    const later = new Date(Date.now() + 6 * 60_000);
+    const yes = await after.gateway.approveAndExecute(asked.approval!.id, PERSON, later);
+    expect(yes.status).toBe("reconciled");
+    expect(telnyx.faxPosts).toBe(1);
+  });
+
   it("recovery after a restart leaves the attempt unknown and sends nothing", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "before-recording";
@@ -942,7 +1020,7 @@ describe("what a filled-in PDF sends", () => {
     const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
     const asked = await draft(gateway, documents, letter());
     expect(asked.status).toBe("blocked");
-    expect(asked.reason).toContain("exactly as written");
+    expect(asked.reason).toContain("Send a photo");
     expect(lob.posts).toBe(0);
   });
 
@@ -959,7 +1037,7 @@ describe("what a filled-in PDF sends", () => {
     const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
     const asked = await draft(gateway, documents, letter());
     expect(asked.status).toBe("blocked");
-    expect(asked.reason).toContain("exactly as written");
+    expect(asked.reason).toContain("Send a photo");
     expect(lob.posts).toBe(0);
   });
 
@@ -977,6 +1055,74 @@ describe("what a filled-in PDF sends", () => {
     expect(drawnText(out, 1)).toContain("Near the top of a legal page");
   });
 
+  it("sends a form with plain visible text and checkbox fields", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const name = doc.getForm().createTextField("household_name");
+    name.setText("Maria Testperson");
+    name.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
+    const box = doc.getForm().createCheckBox("renewing");
+    box.check();
+    box.addToPage(page, { x: 72, y: 600, width: 20, height: 20 });
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
+    const asked = await draft(gateway, documents, letter({}, { [PAYLOAD.approvedBy]: "Ana Example" }));
+    expect(asked.status).toBe("needs_approval");
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(drawnText(await PDFDocument.load([...lob.letters.values()][0].file), 1)).toContain("Maria Testperson");
+  });
+
+  const withField = async (change: (doc: PDFDocument, page: ReturnType<PDFDocument["addPage"]>) => void) => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    page.drawText("Renewal form", { x: 72, y: 720 });
+    change(doc, page);
+    return doc.save();
+  };
+  const hiddenField = (flag: number) => (doc: PDFDocument, page: ReturnType<PDFDocument["addPage"]>) => {
+    const field = doc.getForm().createTextField("secret");
+    field.setText("Not shown to the person");
+    field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
+    field.acroField.getWidgets()[0].dict.set(PDFName.of("F"), doc.context.obj(flag));
+  };
+  const optionalContent = (d: Record<string, unknown>) => (doc: PDFDocument) => {
+    const layer = doc.context.register(doc.context.obj({ Type: "OCG", Name: "Layer" }));
+    doc.catalog.set(PDFName.of("OCProperties"), doc.context.obj({ OCGs: [layer], D: d } as never));
+  };
+
+  it.each<[string, (doc: PDFDocument, page: ReturnType<PDFDocument["addPage"]>) => void]>([
+    ["a hidden field", hiddenField(2)],
+    ["a field set not to view", hiddenField(32)],
+    ["an invisible field", hiddenField(1)],
+    ["a link with a visible border", (doc, page) => {
+      page.node.addAnnot(doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "Link", Rect: [72, 600, 300, 640], Border: [0, 0, 2] })));
+    }],
+    ["a popup note", (doc, page) => {
+      page.node.addAnnot(doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "Popup", Rect: [72, 600, 300, 640] })));
+    }],
+    ["a layer that starts off", optionalContent({ OFF: [] })],
+    ["layers off by default", optionalContent({ BaseState: "OFF" })],
+    ["a radio group", (doc, page) => {
+      const group = doc.getForm().createRadioGroup("choice");
+      group.addOptionToPage("a", page, { x: 72, y: 640, width: 20, height: 20 });
+    }],
+    ["a dropdown", (doc, page) => {
+      const list = doc.getForm().createDropdown("county");
+      list.addOptions(["One"]);
+      list.addToPage(page, { x: 72, y: 640, width: 200, height: 20 });
+    }],
+    ["a widget no field owns", (doc, page) => {
+      page.node.addAnnot(doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "Widget", Rect: [72, 600, 300, 640] })));
+    }],
+  ])("refuses %s before the question and asks for a photo", async (_name, change) => {
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await withField(change));
+    const asked = await draft(gateway, documents, letter());
+    expect(asked.status).toBe("blocked");
+    expect(asked.reason).toContain("Send a photo");
+    expect(lob.posts).toBe(0);
+  });
+
   it("refuses a PDF with a note or stamp it could not carry over", async () => {
     const doc = await PDFDocument.create();
     const page = doc.addPage([612, 792]);
@@ -987,7 +1133,7 @@ describe("what a filled-in PDF sends", () => {
     const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
     const asked = await draft(gateway, documents, letter());
     expect(asked.status).toBe("blocked");
-    expect(asked.reason).toContain("exactly as written");
+    expect(asked.reason).toContain("Send a photo");
     expect(lob.posts).toBe(0);
   });
 });
@@ -1061,7 +1207,7 @@ describe("the provider an attempt began against", () => {
     const first = boot(false);
     const asked = await draft(first.gateway, documents, fax());
     await first.gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(first.store.getAttempt(asked.approval!.idempotencyKey)?.provider ?? null).toBeNull();
+    expect(first.store.getAttempt(asked.approval!.idempotencyKey)?.provider).toBe("stand-in");
     down = false;
     const done = await boot(true).gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(done.receipt?.simulated).toBe(true);
@@ -1069,7 +1215,75 @@ describe("the provider an attempt began against", () => {
   });
 });
 
+describe("a fax or letter attempt with no provider on record", () => {
+  it.each<["fax" | "mail"]>([["fax"], ["mail"]])("%s stays unknown in simulated mode, and the stand-in never sees it", async (type) => {
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const storage = openTestStorage() as never as { exec(query: string, ...bindings: unknown[]): unknown };
+    ensureGatewayTables(storage as never);
+    const store = new SqlApprovalStore(storage as never);
+    const standIn = new InMemoryExecutor();
+    standIn.failNextWithTimeout = true;
+    const realCheck = standIn.check.bind(standIn);
+    let down = true;
+    standIn.check = async (key, person) => {
+      if (down) throw new Error("not reachable");
+      return realCheck(key, person);
+    };
+    const gateway = new ActionGateway(store, new OutboundRouter(standIn, {}, (key) => store.getAttempt(key)), { documents, linkCheck: async () => ({ allowed: true }) });
+    const asked = await draft(gateway, documents, type === "fax" ? fax() : letter());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const key = asked.approval!.idempotencyKey;
+    storage.exec("UPDATE attempts SET provider = NULL WHERE idempotency_key = ?", key);
+    down = false;
+    const calls = standIn.calls.length;
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.status).toBe("blocked");
+    expect(store.getAttempt(key)?.status).toBe("unknown");
+    expect(store.getReceiptByKey(key)).toBeNull();
+    expect(standIn.calls).toHaveLength(calls);
+  });
+
+  it("a filing attempt on the portal is unchanged", async () => {
+    const documents = new MapDocumentStore();
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    const store = new SqlApprovalStore(storage);
+    const inner = new InMemoryExecutor();
+    inner.failNextWithTimeout = true;
+    const gateway = new ActionGateway(store, new OutboundRouter(inner, {}, (key) => store.getAttempt(key)), { documents, linkCheck: async () => ({ allowed: true }) });
+    const asked = await gateway.requestAction({ type: "submit", recipient: "sandbox-agency", purpose: "renewal", payload: {}, idempotencyKey: "submit-1", actor: "foreground", personId: PERSON });
+    const done = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(done.status).toBe("reconciled");
+    expect(store.getAttempt("submit-1")?.provider ?? null).toBeNull();
+  });
+});
+
 describe("an unconfirmed fax that never appears", () => {
+  it("never schedules a lookup past the day's cutoff", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "before-recording";
+    const { gateway, documents, store } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const key = asked.approval!.idempotencyKey;
+    const since = Date.parse(store.getAttempt(key)!.lookupFailingSince!);
+    const start = Date.now();
+    const scansAt: number[] = [];
+    for (let minutes = 5; minutes <= 2 * 24 * 60; minutes += 5) {
+      const now = new Date(start + minutes * 60_000);
+      const cutoff = new Date(now.getTime() - 5 * 60_000).toISOString();
+      const before = telnyx.listCalls;
+      for (const attempt of store.listRecoverableAttempts(cutoff, now.toISOString())) await gateway.recoverAttempt(attempt.key, now, cutoff);
+      if (telnyx.listCalls > before) scansAt.push(now.getTime());
+      const next = store.getAttempt(key)?.nextLookupAt;
+      if (next) expect(Date.parse(next)).toBeLessThanOrEqual(since + 24 * 3600_000);
+    }
+    expect(Math.max(...scansAt)).toBeLessThanOrEqual(since + 24 * 3600_000 + 5 * 60_000);
+    expect(store.getAttempt(key)?.nextLookupAt).toBeNull();
+  }, 60_000);
+
+
   // Three days of five-minute sweeps, which takes a moment on a busy machine.
   it("backs off, stops looking after a day, is never resent, and the sweep ends", { timeout: 60_000 }, async () => {
     const telnyx = new FakeTelnyx();
@@ -1089,7 +1303,7 @@ describe("an unconfirmed fax that never appears", () => {
     }
     expect(scansAt.length).toBeGreaterThan(3);
     expect(scansAt.length).toBeLessThan(15);
-    expect(scansAt[scansAt.length - 1]).toBeLessThanOrEqual(36 * 60);
+    expect(scansAt[scansAt.length - 1]).toBeLessThanOrEqual(24 * 60 + 15);
     expect(telnyx.faxPosts).toBe(1);
     expect(store.getAttempt(key)?.status).toBe("unknown");
     expect(store.hasUnresolvedAttempts()).toBe(false);

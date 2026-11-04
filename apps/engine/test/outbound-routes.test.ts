@@ -2,7 +2,7 @@ import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
-import { DEFAULT_PRICING, MailExecutor, PAYLOAD, SqlFaxSendLog, verifyFaxSignature, withOutboundPrice, type ActionRequest } from "../src/gateway/index.js";
+import { DEFAULT_PRICING, MailExecutor, PAYLOAD, SqlFaxSendLog, rememberDeliveryRoute, verifyFaxSignature, withOutboundPrice, type ActionRequest } from "../src/gateway/index.js";
 import { bytesToBase64, sha256Hex } from "../src/hash.js";
 
 // Faxes and letters in the real runtime: the worker route, the person's
@@ -205,26 +205,49 @@ describe("delivery webhooks", () => {
   const post = (path: string, body: string, headers: Record<string, string> = {}) =>
     SELF.fetch(`https://engine.test${path}`, { method: "POST", body, headers });
 
-  it("records a signed event once, and a bad signature changes nothing", async () => {
+  // What the provider sends by default: metadata redacted, the letter's own ID not.
+  const redacted = (eventId: string, letterId: string) =>
+    JSON.stringify({ id: eventId, event_type: { id: "letter.mailed" }, body: { id: letterId, description: "REDACTED", metadata: { mano_person: "REDACTED" } } });
+
+  const eventsOf = (person: string) =>
+    runInDurableObject(testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person)), async (_agent, state) =>
+      state.storage.sql.exec("SELECT external_id, status FROM delivery_events").toArray(),
+    );
+
+  it("places a signed event by its letter ID once, with its metadata redacted, and a bad signature changes nothing", async () => {
     const { person, call } = rig("outbound-webhook");
     expect((await call("POST", "/documents", { id: "g0t1i0-webhook", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN)).status).toBe(200);
-    const body = JSON.stringify({ id: "evt_1", event_type: { id: "letter.mailed" }, body: { id: "ltr_1", metadata: { mano_person: person } } });
+    await rememberDeliveryRoute(testEnv.FILES as R2Bucket, "ltr_webhook1", person);
+    const body = redacted("evt_1", "ltr_webhook1");
     expect((await post("/webhooks/mail", body, await signed(body, "wrong-secret"))).status).toBe(401);
     expect((await post("/webhooks/mail", body)).status).toBe(401);
     expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(204);
     expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(204);
-    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
-    const rows = await runInDurableObject(stub, async (_agent, state) => state.storage.sql.exec("SELECT external_id, status FROM delivery_events").toArray());
-    expect(rows).toEqual([{ external_id: "ltr_1", status: "letter.mailed" }]);
+    expect(await eventsOf(person)).toEqual([{ external_id: "ltr_webhook1", status: "letter.mailed" }]);
+    expect(await eventsOf("REDACTED")).toEqual([]);
   });
 
-  it("a report for a person with no record creates none", async () => {
-    const { person } = rig("outbound-webhook-gone");
-    const body = JSON.stringify({ id: "evt_2", event_type: { id: "letter.mailed" }, body: { id: "ltr_2", metadata: { mano_person: person } } });
+  it("does not acknowledge an event it could not place, so the provider sends it again", async () => {
+    const { person, call } = rig("outbound-webhook-late");
+    await call("POST", "/documents", { id: "g0t1i0-late", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN);
+    const body = redacted("evt_3", "ltr_notyet1");
+    expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(404);
+    await rememberDeliveryRoute(testEnv.FILES as R2Bucket, "ltr_notyet1", person);
     expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(204);
-    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
-    const rows = await runInDurableObject(stub, async (_agent, state) => state.storage.sql.exec("SELECT event_id FROM delivery_events").toArray());
-    expect(rows).toEqual([]);
+    expect(await eventsOf(person)).toEqual([{ external_id: "ltr_notyet1", status: "letter.mailed" }]);
+  });
+
+  it("a report for a person with no record creates none, and is not acknowledged", async () => {
+    const { person } = rig("outbound-webhook-gone");
+    await rememberDeliveryRoute(testEnv.FILES as R2Bucket, "ltr_gone1", person);
+    const body = redacted("evt_2", "ltr_gone1");
+    expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(404);
+    expect(await eventsOf(person)).toEqual([]);
+  });
+
+  it("an event with no letter in it is refused", async () => {
+    const body = JSON.stringify({ id: "evt_4", event_type: { id: "postcard.mailed" }, body: { id: "psc_1" } });
+    expect((await post("/webhooks/mail", body, await signed(body))).status).toBe(422);
   });
 
   it("stays closed with no key to verify against", async () => {

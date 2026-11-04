@@ -1,4 +1,4 @@
-import { PDFDict, PDFDocument, PDFName, StandardFonts, degrees, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFCheckBox, PDFDict, PDFDocument, PDFName, PDFTextField, StandardFonts, degrees, type PDFFont, type PDFPage } from "pdf-lib";
 import { base64ToBytes, sha256Hex } from "../hash.js";
 import type { ActionRequest } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
@@ -172,34 +172,52 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
   };
 }
 
-// Embedding a page keeps only what its content draws, within a media box
-// taken to start at 0,0, and unrotated, so what goes out must match what
-// the person saw. A form's filled-in answers are drawn into the page first.
-// A note, stamp, dynamic form, crop, rotation or page that starts anywhere
-// else stops the send instead of going out changed.
-const HARMLESS_ANNOTATIONS = new Set(["/Link", "/Popup"]);
+// The one rule for a PDF: it goes out only if it is plain. Anything a viewer
+// can show differently from what is sent (a layer, a hidden or unusual field,
+// a note, a link, a crop, a rotation, a page away from the origin) means the
+// person may approve one thing and something else goes out, so it is refused
+// before the question and they are asked for a photo instead. What is left
+// embeds as is, with plain text and checkbox fields drawn into the page.
+const NOT_PLAIN =
+  "Mano only sends plain PDFs, and this one has parts that could go out looking different from what you saw, so it was not prepared. Send a photo of it instead.";
 const SAME_BOX_POINTS = 0.5;
+const INVISIBLE = 1;
+const HIDDEN = 2;
+const NO_VIEW = 32;
+const TOGGLE_NO_VIEW = 256;
 
-function assertSentAsSeen(source: PDFDocument): void {
-  const form = source.catalog.getAcroForm();
-  if (form?.dict.has(PDFName.of("XFA"))) throw new Error("dynamic form");
-  if (form) source.getForm().flatten();
-  for (const page of source.getPages()) {
-    if (page.getRotation().angle % 360 !== 0) throw new Error("rotated page");
-    const [crop, media] = [page.getCropBox(), page.getMediaBox()];
-    if (Math.abs(media.x) > SAME_BOX_POINTS || Math.abs(media.y) > SAME_BOX_POINTS) throw new Error("page away from the origin");
-    if ((["x", "y", "width", "height"] as const).some((side) => Math.abs(crop[side] - media[side]) > SAME_BOX_POINTS)) {
-      throw new Error("cropped page");
-    }
-    const annotations = page.node.Annots();
-    for (let i = 0; i < (annotations?.size() ?? 0); i++) {
-      // Flattening leaves a dangling entry for each widget it drew.
-      const annotation = annotations!.lookup(i);
-      if (annotation instanceof PDFDict && !HARMLESS_ANNOTATIONS.has(String(annotation.get(PDFName.of("Subtype"))))) {
-        throw new Error("annotation that cannot be carried over");
+async function isPlainPdf(bytes: Uint8Array): Promise<boolean> {
+  let doc: PDFDocument;
+  try {
+    doc = await PDFDocument.load(bytes, { throwOnInvalidObject: true });
+  } catch {
+    return false;
+  }
+  if (doc.catalog.has(PDFName.of("OCProperties"))) return false;
+  const form = doc.catalog.getAcroForm();
+  if (form?.dict.has(PDFName.of("XFA"))) return false;
+  const fieldWidgets = new Set<PDFDict>();
+  if (form) {
+    for (const field of doc.getForm().getFields()) {
+      if (!(field instanceof PDFTextField) && !(field instanceof PDFCheckBox)) return false;
+      for (const widget of field.acroField.getWidgets()) {
+        if (widget.getFlags() & (INVISIBLE | HIDDEN | NO_VIEW | TOGGLE_NO_VIEW)) return false;
+        fieldWidgets.add(widget.dict);
       }
     }
   }
+  for (const page of doc.getPages()) {
+    if (page.getRotation().angle % 360 !== 0) return false;
+    const [crop, media] = [page.getCropBox(), page.getMediaBox()];
+    if (Math.abs(media.x) > SAME_BOX_POINTS || Math.abs(media.y) > SAME_BOX_POINTS) return false;
+    if ((["x", "y", "width", "height"] as const).some((side) => Math.abs(crop[side] - media[side]) > SAME_BOX_POINTS)) return false;
+    const annotations = page.node.Annots();
+    for (let i = 0; i < (annotations?.size() ?? 0); i++) {
+      const annotation = annotations!.lookup(i);
+      if (!(annotation instanceof PDFDict) || !fieldWidgets.has(annotation)) return false;
+    }
+  }
+  return true;
 }
 
 // How far to turn a photo so it reads the way a viewer shows it, by its
@@ -239,7 +257,7 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   drawCover(out.addPage([LETTER.width, LETTER.height]), font, bold, req, name, documentHash);
   if (kind === "pdf") {
     const source = await PDFDocument.load(bytes);
-    assertSentAsSeen(source);
+    if (source.catalog.getAcroForm()) source.getForm().flatten();
     const pages = await out.embedPdf(source, source.getPageIndices());
     for (const page of pages) {
       const { x, y, xScale, yScale } = fitted(page);
@@ -274,11 +292,12 @@ export type Outgoing = { ok: true; name: string; pdf: Uint8Array<ArrayBuffer> } 
 export async function prepareOutgoing(req: ActionRequest, type: OutboundType, pricing: OutboundPricing): Promise<Outgoing> {
   const what = type === "fax" ? "fax" : "letter";
   if (!req.document) return { ok: false, problem: `A ${what} needs a document to send.` };
+  const bytes = base64ToBytes(req.document.bytesB64);
+  if (kindOf(bytes) === "pdf" && !(await isPlainPdf(bytes))) return { ok: false, problem: NOT_PLAIN };
   const name = req.payload[PAYLOAD.approvedBy];
   if (typeof name !== "string" || !name.trim()) {
     return { ok: false, problem: `A ${what} needs the name of the person approving it, to print on it.` };
   }
-  const bytes = base64ToBytes(req.document.bytesB64);
   const pages = await outgoingPages(type, bytes);
   if (pages === null) return { ok: false, problem: `Mano can only send a PDF, PNG or JPG it can open, and it could not open this document.` };
   if (pages > MAX_PAGES[type]) return { ok: false, problem: `This ${what} would be ${pages} pages, and Mano can send at most ${MAX_PAGES[type]}.` };
@@ -288,8 +307,8 @@ export async function prepareOutgoing(req: ActionRequest, type: OutboundType, pr
   try {
     return { ok: true, name: name.trim(), pdf: await renderOutgoing(req, name.trim(), bytes, req.document.hash) };
   } catch {
-    // The built-in fonts cover Western alphabets only, and some PDFs cannot
-    // be sent as the person saw them. Either is refused rather than sent changed.
+    // The built-in fonts cover Western alphabets only, and a mirrored photo
+    // cannot be shown as it is stored. Either is refused rather than sent changed.
     return { ok: false, problem: `Mano could not print this ${what} exactly as written, so it was not prepared.` };
   }
 }

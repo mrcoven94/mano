@@ -1,3 +1,4 @@
+import type { DeliveryRoutes } from "./delivery.js";
 import { FaxExecutor, type FaxSendLog } from "./fax.js";
 import { MailExecutor } from "./mail.js";
 import { isOutbound, outboundPricing, type OutboundEnv, type OutboundType } from "./outbound.js";
@@ -10,10 +11,10 @@ export function faxConfigured(env: OutboundEnv): boolean {
 
 // Each provider exists only with all of its settings. Mail reads the test
 // mode key and no other.
-export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog): Partial<Record<OutboundType, Executor>> {
+export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog, routes?: DeliveryRoutes): Partial<Record<OutboundType, Executor>> {
   const pricing = outboundPricing(env);
   const providers: Partial<Record<OutboundType, Executor>> = {};
-  if (env.LOB_TEST_API_KEY) providers.mail = new MailExecutor(env.LOB_TEST_API_KEY, pricing);
+  if (env.LOB_TEST_API_KEY) providers.mail = new MailExecutor(env.LOB_TEST_API_KEY, pricing, undefined, undefined, routes);
   if (faxConfigured(env)) {
     providers.fax = new FaxExecutor({
       apiKey: env.TELNYX_API_KEY!,
@@ -44,11 +45,15 @@ const UNAVAILABLE: Executor = {
   },
 };
 
+// What an attempt records when it began on the explicit stand-in.
+const STAND_IN = "stand-in";
+
 // Sends faxes and letters to their own executors and everything else to
 // inner. A new one with no provider goes to an explicit stand-in, so a local
 // copy runs with no accounts; any other executor never sees it. An attempt
 // already started stays with what it began against, read from the persisted
-// attempt, never from the key, which the caller controls.
+// attempt, never from the key, which the caller controls. One that records
+// nothing, or something no longer here, stays unknown in every mode.
 export class OutboundRouter implements Executor {
   readonly simulated: boolean;
 
@@ -67,13 +72,14 @@ export class OutboundRouter implements Executor {
 
   private forAttempt(attempt: Attempt): Executor {
     if (!isOutbound(attempt.actionType)) return this.inner;
+    if (attempt.provider === STAND_IN && this.inner.simulated) return this.inner;
     const provider = this.providers[attempt.actionType];
-    if (attempt.provider) return provider?.provider === attempt.provider ? provider : UNAVAILABLE;
-    return this.inner.simulated ? this.inner : UNAVAILABLE;
+    return provider && attempt.provider === provider.provider ? provider : UNAVAILABLE;
   }
 
   providerOf(req: ActionRequest): string | null {
-    return isOutbound(req.type) ? (this.providers[req.type]?.provider ?? null) : null;
+    if (!isOutbound(req.type)) return null;
+    return this.providers[req.type]?.provider ?? (this.inner.simulated ? STAND_IN : null);
   }
 
   execute(req: ActionRequest): Promise<{ externalId: string; simulated?: boolean }> {

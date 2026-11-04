@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -157,7 +157,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
     this.executor = new ConsentDeliveringExecutor(
-      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql)), (key) => this.store.getAttempt(key)),
+      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql), { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) }), (key) => this.store.getAttempt(key)),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -885,12 +885,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return result;
   }
 
-  // What a provider's signed webhook said became of a fax or letter. A
-  // late report for a person since deleted never brings their record back.
-  async recordDelivery(event: DeliveryEvent): Promise<void> {
-    if (this.personId !== event.personId) return;
+  // What a provider's signed webhook said became of a fax or letter. False
+  // when this is not that person's record: a late report for someone since
+  // deleted never brings their record back.
+  async recordDelivery(event: DeliveryEvent): Promise<boolean> {
+    if (this.personId !== event.personId) return false;
     recordDeliveryEvent(this.ctx.storage.sql, event, new Date());
     this.store.audit({ event: "gateway.delivery", channel: event.channel, detailHash: await auditDigest(`${event.channel}:${event.externalId}:${event.status}`) });
+    return true;
   }
 
   // Recovers attempts left unresolved by a restart. The gateway

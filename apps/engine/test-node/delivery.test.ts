@@ -58,9 +58,9 @@ describe("fax webhook signature", () => {
 });
 
 describe("reading events", () => {
-  it("reads our letter's status and person from its metadata", () => {
-    const event = parseMailEvent(JSON.stringify({ id: "evt_1", event_type: { id: "letter.mailed" }, body: { id: "ltr_1", metadata: { mano_person: "maria" } } }));
-    expect(event).toEqual({ personId: "maria", channel: "mail", externalId: "ltr_1", status: "letter.mailed", eventId: "evt_1" });
+  it("reads a letter's ID and status, and never takes a person from its metadata", () => {
+    const event = parseMailEvent(JSON.stringify({ id: "evt_1", event_type: { id: "letter.mailed" }, body: { id: "ltr_1", metadata: { mano_person: "REDACTED" } } }));
+    expect(event).toEqual({ channel: "mail", externalId: "ltr_1", status: "letter.mailed", eventId: "evt_1" });
   });
 
   it("reads our fax's status and person from its client state", () => {
@@ -70,7 +70,7 @@ describe("reading events", () => {
   });
 
   it("drops events that are not ours", () => {
-    expect(parseMailEvent(JSON.stringify({ id: "evt", event_type: { id: "x" }, body: { id: "ltr", metadata: {} } }))).toBeNull();
+    expect(parseMailEvent(JSON.stringify({ id: "evt", event_type: { id: "x" }, body: { id: "psc_1", metadata: {} } }))).toBeNull();
     expect(parseMailEvent("not json")).toBeNull();
     expect(parseFaxEvent(JSON.stringify({ data: { id: "evt", event_type: "x", payload: { fax_id: "f" } } }))).toBeNull();
     expect(parseFaxEvent("not json")).toBeNull();

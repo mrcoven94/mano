@@ -1,4 +1,5 @@
 import { boundFetch } from "../fetch.js";
+import type { DeliveryRoutes } from "./delivery.js";
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
 import { DefiniteFailureError } from "./types.js";
 import {
@@ -47,6 +48,7 @@ export class MailExecutor implements Executor {
     private pricing: OutboundPricing,
     private fetchFn: typeof fetch = boundFetch,
     private timeoutMs = 20000,
+    private routes?: DeliveryRoutes,
   ) {}
 
   private get authorization(): string {
@@ -60,6 +62,17 @@ export class MailExecutor implements Executor {
     const from = parseAddress(req.payload[PAYLOAD.returnAddress]);
     if (!to || !from) return { problem: "A letter needs both addresses written as: Name, Street, City, ST 12345." };
     return { to, from };
+  }
+
+  // Lob redacts metadata in its webhooks but not the letter's own ID, so the
+  // route from that ID to the person is kept here. A failed write never costs
+  // the send: the webhook goes unacknowledged, and Lob sends it again.
+  private async rememberRoute(letterId: string, personId: string): Promise<void> {
+    try {
+      await this.routes?.remember(letterId, personId);
+    } catch {
+      console.warn(JSON.stringify({ type: "mano_delivery_route_failed" }));
+    }
   }
 
   async refuse(req: ActionRequest): Promise<string | null> {
@@ -85,7 +98,6 @@ export class MailExecutor implements Executor {
     form.set("use_type", "operational");
     form.set("address_placement", "insert_blank_page");
     form.set("metadata[mano_key]", key);
-    form.set("metadata[mano_person]", req.personId);
     form.set("file", new Blob([outgoing.pdf], { type: "application/pdf" }), "letter.pdf");
     const res = await providerFetch(
       this.fetchFn,
@@ -97,6 +109,7 @@ export class MailExecutor implements Executor {
     assertAccepted(res, LABEL);
     const data = JSON.parse(res.text) as { id?: unknown };
     if (typeof data.id !== "string" || !data.id) throw new Error(`${LABEL} returned no letter ID.`);
+    await this.rememberRoute(data.id, req.personId);
     return { externalId: data.id, simulated: true };
   }
 
@@ -116,6 +129,7 @@ export class MailExecutor implements Executor {
     const id = data.data[0]?.id;
     if (data.data.length === 0) return { found: false };
     if (typeof id !== "string" || !id) throw new Error(`${LABEL} check returned malformed data.`);
+    await this.rememberRoute(id, personId);
     return { found: true, externalId: id, simulated: true };
   }
 }
