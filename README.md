@@ -69,7 +69,7 @@ A document is now labeled by what it was read as, and a renewal says so when it 
 
 ### Mano's computer on production
 
-Three unbroken production runs at 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian allowing the filing at the yes:
+Three unbroken production runs from 3:19 to 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian allowing the filing at the yes:
 
 | Confirmation | Total time |
 | --- | --- |
@@ -77,7 +77,9 @@ Three unbroken production runs at 3:23 PM ET on November 4, 2026, by `pnpm spine
 | SR-KQSBQYV4 | 95.4 s |
 | SR-VRAQZQYY | 83.4 s |
 
-The sandbox portal holds all three filings. The fill, Guardian's answer and the times come from the lead's run output, which is not published. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+The [raw run output](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641513214) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The output does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+
+The site owner also measured two production runs on separate seeded layouts, SR-DVDBTGFF through the API and SR-X6RM9KYY through the browser: 2 of 2 completed, after one earlier attempt was lost to a deploy, which is a small sample. The sandbox portal holds both filings, and its record does not show a layout. The [recording of SR-DVDBTGFF](apps/site/public/try/recording/run.json) shows its layout, the fill and Guardian's `pass` at the question and at the yes. For SR-X6RM9KYY, the layout and the fill, and for both runs the lost attempt, rest on the site owner's measurement, with no public record.
 
 ### Local measurement, not production: layouts it has not seen
 
@@ -141,7 +143,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 - On unseen wording, Mano does not tell a person the deadline. The held-out result above is the measure of it. The synthetic letter in `pnpm judge` does hold its date, so that run does not show this.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 of 11 planted instructions in the held-out test, which ran no Guardian. Guardian has no held-out number of its own.
-- Computer fill on production rests on the three runs above, which skip the text line and the reminder, on one portal layout. The hosted desktop is not measured on unseen layouts, and a fill has no model backup.
+- Computer fill on production rests on the runs above. The three runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
