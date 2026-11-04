@@ -3,7 +3,8 @@
 // is a native module, so the harness links it in, grants read access to the
 // installed packages and no other part of the repo, and runs the child in the OS
 // sandbox because Node's own permission model does not bind native code.
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,12 +19,26 @@ export async function installedPackages() {
   return { sharpDir, installed: sharpDir.slice(0, sharpDir.indexOf("/node_modules/.pnpm/") + "/node_modules/.pnpm".length) };
 }
 
+// The hash of everything Mano's child would run. The freeze pins it.
+export async function manoBundleHash() {
+  const built = await buildMano();
+  try {
+    return createHash("sha256").update(await readFile(built.entry)).digest("hex");
+  } finally {
+    await built.cleanup();
+  }
+}
+
 export async function buildMano() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-build-")));
   const unregister = registerTemp(dir);
   const entry = join(dir, "systems", "mano.mjs");
   await build({
     entryPoints: [join(here, "systems", "mano.mjs")],
+    // A fixed working dir keeps the bundle's bytes the same on every run, and no
+    // tsconfig is discovered, so no file outside the freeze can remap an import.
+    absWorkingDir: join(here, ".."),
+    tsconfigRaw: "{}",
     outfile: entry,
     bundle: true,
     platform: "node",

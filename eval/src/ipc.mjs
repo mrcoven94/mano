@@ -9,6 +9,7 @@
 //   { channel: "mano-eval-broker-hello", keyAvailable: bool, route: "openrouter" | "meta" | null }
 // - Child to parent per fetch:
 //   { channel: "mano-eval-broker", id, url, method, headers, body?, timeoutMs? }
+// - Child to parent to stop a fetch: { channel: "mano-eval-broker", cancel: id }
 // - Parent to child per fetch:
 //   { channel: "mano-eval-broker", id, ok: true, statusOk, status, json }
 //   or { channel: "mano-eval-broker", id, ok: false, error }
@@ -58,6 +59,22 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
         reject(new Error("broker timeout"));
       }, opts.timeoutMs === undefined ? timeoutMs : opts.timeoutMs + REPLY_GRACE_MS);
       pending.set(id, { resolve, reject, timer });
+      if (opts.signal) {
+        const cancel = () => {
+          if (!pending.has(id)) return;
+          pending.delete(id);
+          clearTimeout(timer);
+          try {
+            process.send({ channel: CHANNEL, cancel: id });
+          } catch { /* parent went away */ }
+          reject(new DOMException("The request was aborted.", "AbortError"));
+        };
+        if (opts.signal.aborted) {
+          cancel();
+          return;
+        }
+        opts.signal.addEventListener("abort", cancel, { once: true });
+      }
       try {
         process.send({
           channel: CHANNEL,

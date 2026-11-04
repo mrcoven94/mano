@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { generalAgentBaseline } from "../src/baselines.mjs";
-import { buildMano } from "../src/build-mano.mjs";
+import { buildMano, manoBundleHash } from "../src/build-mano.mjs";
 import { gradeAll } from "../src/grader.mjs";
 import { osSandboxAvailable, osSandboxProfile, runSystem } from "../src/harness.mjs";
 import { readRecord, verifyMano } from "../src/verify.mjs";
@@ -181,19 +181,69 @@ test("a date from a candidate counts when the answer shows it", async () => {
   assert.deepEqual(r.reminder, { letterId: "hh-900-L1", dueDate: "2026-11-25" });
 });
 
-test("the Meta route honors the reader's deadline", async () => {
+test("Mail's client keeps the reader's deadline and goes through the broker", async () => {
   const seen = [];
-  const client = brokeredModelClient({ route: "meta", meter: { add() {} }, fetchImpl: async (_u, o) => { seen.push(o); return jsonResponse({ output_text: "x", usage: null }); } });
-  await assert.rejects(client.responses({ model: "m", input: "x" }, { deadline: Date.now() - 1 }));
+  const meter = { used: [], add(u) { this.used.push(u); } };
+  const client = brokeredModelClient({ route: "meta", meter, fetchImpl: async (u, o) => { seen.push({ u: String(u), o }); return jsonResponse({ output_text: "x", usage: { input_tokens: 1, output_tokens: 1 } }); } });
+  await assert.rejects(client.responses({ model: "muse-spark-1.3-contributor", input: "x" }, { deadline: Date.now() - 1 }));
   assert.equal(seen.length, 0, "an expired deadline makes no call");
-  await client.responses({ model: "m", input: "x" }, { deadline: Date.now() + 60000 });
-  assert.ok(seen[0].timeoutMs > 0 && seen[0].timeoutMs <= 60000);
+  await client.responses({ model: "muse-spark-1.3-contributor", input: "x" }, { deadline: Date.now() + 60000 });
+  assert.match(seen[0].u, /api\.meta\.ai/);
+  assert.ok(seen[0].o.signal, "the client's timeout can stop the call");
+  assert.equal(meter.used.length, 1, "usage is counted");
+});
+
+test("a cancel from the child stops the parent's request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-cancel-"));
+  const probe = join(dir, "probe.mjs");
+  await writeFile(probe, `import { writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const out = args[args.indexOf("--out") + 1];
+const answer = new Promise((resolve) => process.on("message", (m) => { if (m && m.id === 1) resolve(m); }));
+process.send({ channel: "mano-eval-broker", id: 1, url: "https://openrouter.ai/api/v1/chat/completions", method: "POST", headers: {}, body: "{}" });
+setTimeout(() => process.send({ channel: "mano-eval-broker", cancel: 1 }), 100);
+const m = await answer;
+await writeFile(out, JSON.stringify([{ householdId: "hh-900", ok: m.ok }]));
+process.disconnect();
+`);
+  let aborted = false;
+  const fetchImpl = (_u, o) => new Promise((_resolve, reject) => o.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }));
+  try {
+    const { outputs } = await withOpenRouterEnv(() => runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl }));
+    assert.equal(aborted, true);
+    assert.equal(outputs[0].ok, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a tsconfig cannot change what Mano's bundle runs", async () => {
+  const path = new URL("../tsconfig.json", import.meta.url).pathname;
+  const before = await manoBundleHash();
+  await writeFile(path, JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@mano/mail": ["./src/pool.mjs"] } } }));
+  try {
+    assert.equal(await manoBundleHash(), before);
+  } finally {
+    await rm(path, { force: true });
+  }
+});
+
+test("duplicates earn nothing, and an invalid result keeps its cut-off deadline", () => {
+  const key = (hardCase) => ({ "hh-900": { letters: { "hh-900-L1": { hardCase } }, groundTruth: { deadlines: [{ letterId: "hh-900-L1", dueDate: "2026-11-25" }], correctPacket: [], packetGroups: [], mustRefuse: [], mustRequest: [], decoyLetterIds: [] } } });
+  const ok = { householdId: "hh-900", status: "ok", reminders: [{ letterId: "hh-900-L1", dueDate: "2026-11-25" }], packet: [], refused: [], enforced: [], requested: [], failures: [], toolCalls: [] };
+  const twice = gradeAll([ok, ok], key(null));
+  assert.equal(twice.correctPackets, 0);
+  assert.equal(twice.missedDeadlines, 1);
+  const invalid = gradeAll([{ ...ok, status: "invalid", reminders: [], failures: [{ letterId: "hh-900-L1", reason: "please send a readable copy" }] }], key("cutoff"));
+  assert.equal(invalid.deadlinesTotal, 1);
+  assert.equal(invalid.missedDeadlines, 1);
 });
 
 test("the freeze pins Mano's reader and catches a change", async () => {
   const record = await readRecord();
   assert.ok(record.mano["packages/mail/src/gate.ts"], "the reader's source is pinned");
   assert.ok(record.mano["pnpm-lock.yaml"], "the locked dependencies are pinned");
+  assert.ok(record.mano.bundle, "the built bundle is pinned");
   const changed = { ...record, mano: { ...record.mano, "packages/mail/src/gate.ts": "0".repeat(64) } };
   assert.ok((await verifyMano(changed)).mismatches.includes("packages/mail/src/gate.ts"));
 });
@@ -290,7 +340,7 @@ test("Mano's reader runs offline in the sandboxed child and scores", async () =>
     const body = JSON.parse(o.body);
     const name = body.response_format?.json_schema?.name;
     const content = name === "packet_names" ? JSON.stringify({ names: ["pay stub"] }) : JSON.stringify(page);
-    return jsonResponse({ model: OPEN_WEIGHT_MODEL, usage: { prompt_tokens: 100, completion_tokens: 50, cost: 0.01 }, choices: [{ message: { content } }] });
+    return jsonResponse({ model: OPEN_WEIGHT_MODEL, usage: { prompt_tokens: 100, completion_tokens: 50, cost: 0.01 }, choices: [{ finish_reason: "stop", message: { content } }] });
   };
   const built = await buildMano();
   try {

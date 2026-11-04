@@ -69,7 +69,6 @@ async function modelTurn(conversation, { fetchImpl, route }) {
       tools: [toChatTool(CHECK_LINK_TOOL)],
       max_tokens: 8000,
       reasoning: { exclude: true },
-      provider: { sort: "latency" },
     }, { fetchImpl });
     return data ? { text: chatText(data), calls: chatCalls(data), usage: data.usage } : null;
   }

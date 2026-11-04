@@ -5,6 +5,7 @@
 // membership, and the held-out household hashes. Any mismatch fails loudly.
 import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { manoBundleHash } from "./build-mano.mjs";
 import { generateDevHouseholds, generateHeldoutHouseholds } from "./generator.mjs";
 import { toBaselineInputs, toAnswers } from "./inputs.mjs";
 
@@ -50,11 +51,12 @@ export async function currentFileHashes() {
   return out;
 }
 
-// What Mano is at the freeze: its reader's source and the locked dependencies.
+// What Mano is at the freeze: its reader's source, the locked dependencies and
+// the bundle built from them, which covers the whole resolved input graph.
 // Checked only before a held-out run, since Mano keeps changing on main and a
 // run on a newer Mano needs a new freeze, not a failing test for everyone else.
 export async function currentManoHashes() {
-  const out = { "pnpm-lock.yaml": sha256(await readFile(rootUrl("pnpm-lock.yaml"), "utf8")), "packages/mail/package.json": sha256(await readFile(rootUrl("packages/mail/package.json"), "utf8")) };
+  const out = { bundle: await manoBundleHash(), "pnpm-lock.yaml": sha256(await readFile(rootUrl("pnpm-lock.yaml"), "utf8")), "packages/mail/package.json": sha256(await readFile(rootUrl("packages/mail/package.json"), "utf8")) };
   for (const f of (await readdir(rootUrl("packages/mail/src/"))).sort()) {
     out[`packages/mail/src/${f}`] = sha256(await readFile(rootUrl(`packages/mail/src/${f}`), "utf8"));
   }

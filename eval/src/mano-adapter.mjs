@@ -17,15 +17,14 @@
 //   or signs goes in the packet, and the rest is requested, as for the parser.
 // - Links Mano returns for checking go through the same link tool the baselines
 //   get. A blocked link Mano flagged itself is refused; otherwise it is enforced.
-// - SAM 3.1 has no open-weight route, so on OpenRouter the reader falls back to
-//   its own on-device page detection, and the report says so.
+// - SAM 3.1 has no open-weight route, so on OpenRouter Mail's client skips it and
+//   the reader uses its own on-device page detection, and the report says so.
 import { readFile } from "node:fs/promises";
-import { BudgetExceeded, answerReading, readMail, extractOutputText, extractUsage } from "@mano/mail";
+import { answerReading, createModelClient, readMail } from "@mano/mail";
 import { checkLink } from "./tools.mjs";
-import { chatText, postChat, toChatMessages } from "./openrouter.mjs";
 
-const META_RESPONSES_URL = "https://api.meta.ai/v1/responses";
-// The Meta route reads the ID; the OpenRouter route pins its own model.
+const BROKERED_KEY = "set-by-the-broker";
+// Mail's clients take only its own reading IDs; the OpenRouter one pins its model.
 const NAMES_MODEL = "muse-spark-1.3-contributor";
 const FORMS = new Set(["signed renewal form", "signed recertification form"]);
 export const PACKET_NAMES = [
@@ -56,44 +55,26 @@ class Meter {
   }
 }
 
-// A @mano/mail ModelClient over the broker, on the route the parent chose.
+// Mail's own model client for the route the parent chose, over the broker. The
+// parent replaces the placeholder key, and every answer's usage is counted here,
+// retries included.
 export function brokeredModelClient({ route, fetchImpl, meter }) {
-  const viaChat = async (req, opts) => {
-    // The Meta Model API is the only host of SAM 3.1. Throwing here is the same
-    // path as SAM being unreachable: the reader detects pages on the device.
-    if (/^sam-/.test(req.model)) throw new Error("SAM 3.1 needs the Meta Model API.");
-    const format = req.text?.format;
-    const data = await postChat({
-      messages: toChatMessages(req.input),
-      max_tokens: req.max_output_tokens ?? 8000,
-      reasoning: { exclude: true },
-      provider: { sort: "latency", require_parameters: Boolean(format) },
-      ...(format ? { response_format: { type: "json_schema", json_schema: { name: format.name, strict: format.strict ?? true, schema: format.schema } } } : {}),
-    }, { fetchImpl, deadline: opts?.deadline });
-    if (!data) throw new Error("Model request failed.");
-    meter.add(data.usage);
+  const env = route === "openrouter"
+    ? { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: BROKERED_KEY }
+    : { META_MODEL_API_KEY: BROKERED_KEY };
+  const fetchFn = async (url, init) => {
+    const res = await fetchImpl(url, init);
     return {
-      text: chatText(data),
-      model: data.model ?? "",
-      usage: { inputTokens: data.usage?.prompt_tokens ?? 0, outputTokens: data.usage?.completion_tokens ?? 0 },
-      raw: null,
+      ok: res.ok,
+      status: res.status,
+      json: async () => {
+        const data = await res.json();
+        meter.add(data?.usage);
+        return data;
+      },
     };
   };
-  const viaResponses = async (req, opts) => {
-    const left = opts?.deadline === undefined ? undefined : opts.deadline - Date.now();
-    if (left !== undefined && left <= 0) throw new BudgetExceeded();
-    const res = await fetchImpl(META_RESPONSES_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...req, store: false }),
-      ...(left !== undefined ? { timeoutMs: left } : {}),
-    });
-    if (!res.ok) throw new Error(`Model request failed: ${res.status}`);
-    const data = await res.json();
-    meter.add(data?.usage);
-    return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: null };
-  };
-  return { live: true, responses: route === "openrouter" ? viaChat : viaResponses };
+  return createModelClient(env, { synthetic: true, fetchFn });
 }
 
 function escapeXml(s) {

@@ -203,8 +203,13 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
     // Nothing in flight outlives the child it was for.
     const inFlight = new AbortController();
     child.on("exit", () => inFlight.abort());
+    const cancels = new Map();
     child.on("message", (msg) => {
       if (!msg || typeof msg !== "object" || msg.channel !== CHANNEL) return;
+      if (msg.cancel !== undefined) {
+        cancels.get(msg.cancel)?.abort();
+        return;
+      }
       const reply = (rest) => {
         try {
           child.send({ channel: CHANNEL, id: msg.id, ...rest });
@@ -254,7 +259,9 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           // Never follow redirects: a 302 off the allowlist must fail
           // closed, not fetch a second, unchecked URL.
           const limit = Math.min(Number(msg.timeoutMs) > 0 ? Number(msg.timeoutMs) : BROKER_TIMEOUT_MS, BROKER_TIMEOUT_MS);
-          const signal = AbortSignal.any([inFlight.signal, AbortSignal.timeout(limit)]);
+          const cancel = new AbortController();
+          cancels.set(msg.id, cancel);
+          const signal = AbortSignal.any([inFlight.signal, cancel.signal, AbortSignal.timeout(limit)]);
           const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body, redirect: "error", signal });
           let json = null;
           try {

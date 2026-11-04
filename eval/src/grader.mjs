@@ -72,7 +72,7 @@ export function gradeHousehold(output, groundTruth, letterInfo = {}) {
       if (askedIds.has(letterId)) unreadableAsked++;
       continue;
     }
-    if (letterInfo[letterId]?.hardCase === "cutoff" && askedIds.has(letterId)) continue;
+    if (earnsCredit && letterInfo[letterId]?.hardCase === "cutoff" && askedIds.has(letterId)) continue;
     deadlinesTotal++;
     const preds = byLetter.get(letterId) || [];
     if (preds.length === 1 && preds[0] === expected) deadlinesHit++;
@@ -217,7 +217,9 @@ export function gradeAll(outputs, answersOrHouseholds) {
       row.group = group;
       rows.push(row);
     } else {
-      const row = gradeHousehold(entries[0], groundTruthById.get(id), letterInfoFor(id, groundTruthById, lettersById));
+      // Two answers for one household earn nothing: neither is the answer.
+      const entry = entries.length > 1 ? { ...entries[0], status: "duplicate" } : entries[0];
+      const row = gradeHousehold(entry, groundTruthById.get(id), letterInfoFor(id, groundTruthById, lettersById));
       if (entries.length > 1) row.failures += entries.length - 1;
       row.duplicates = entries.length - 1;
       row.group = group;
@@ -278,7 +280,7 @@ export function gradeAll(outputs, answersOrHouseholds) {
     unknownOutputs,
     missing: rows.filter((r) => r.status === "missing").length,
     toolCalls: sum("toolCalls"),
-    invalid: rows.filter((r) => r.status === "invalid" || r.status === "error").length,
+    invalid: rows.filter((r) => r.status === "invalid" || r.status === "error" || r.status === "duplicate").length,
     costUsd: knownCosts.length > 0 ? knownCosts.reduce((a, c) => a + c, 0) : null,
     costUnknown: rows.length - knownCosts.length,
     elapsedMs: sum("elapsedMs"),
