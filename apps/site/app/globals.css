@@ -87,8 +87,9 @@ section{padding:128px 0}
 .menu-panel a small{color:var(--faint);font-size:.78rem}
 .menu-panel .text-mano{display:flex;margin-top:6px}
 .menu-panel .text-mano .btn{justify-content:center;padding:0 22px;font-size:.98rem;color:var(--ink)}
-/* The panel clips what hangs outside it, so the QR panel sits in its flow instead. */
-.menu-panel .tm-pop{position:static;translate:none;width:auto;max-width:none;flex-direction:column;gap:12px;margin-top:8px;padding:16px;text-align:center}
+/* The panel clips what hangs outside it, so the QR panel sits in its flow instead. No entrance scale: TextMano scrolls it
+   into view by its box as it opens. */
+.menu-panel .tm-pop{position:static;translate:none;width:auto;max-width:none;flex-direction:column;gap:12px;margin-top:8px;padding:16px;text-align:center;animation:none}
 .menu-panel .tm-copy{max-width:none;align-items:center}
 
 /* mascot */
