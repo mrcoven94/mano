@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { sha256Hex } from "@mano/channels";
 import worker from "../src/index.js";
-import { ARRIVED_TEXT, MAX_EMAIL_BYTES, REJECT_TOO_LARGE, REJECT_UNKNOWN, addressFor, loadInbox, mintToken } from "../src/email.js";
+import { ARRIVED_TEXT, MAX_EMAIL_BYTES, REJECT_TOO_LARGE, REJECT_UNKNOWN, addressFor, loadInbox, mintToken, owe } from "../src/email.js";
 import type { Env } from "../src/env.js";
 
 // In workerd, with the real Durable Objects and SQLite: the Worker's own
@@ -121,6 +121,29 @@ describe("the email handler in workerd", () => {
     await worker.email(again.message, workerEnv);
     expect(again.rejected()).toBeNull();
     expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
+  });
+
+  it("arms the alarm for an arrival text still owed, and the alarm sends it", async () => {
+    const { stub, token } = await openConversation("owed");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes("/documents") ? Response.json({ id: "stored" }) : Response.json({ Status: 0, Answer: [{ data: "192.0.2.1" }] }),
+    );
+    await runInDurableObject(stub, (_, state) => {
+      owe(state.storage.sql, { key: "email:worker-owed", text: "A letter came to your Mano email as a PDF.", generation: 0 });
+    });
+    const res = await stub.fetch("https://conversation/internal/email", {
+      method: "POST",
+      body: JSON.stringify({ handleHash: "x".repeat(64), token: `${token}x`, key: "k", files: [], skipped: 0, truncated: false, linkFailed: false }),
+    });
+    expect(res.status).toBe(200);
+    expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
+    await runDurableObjectAlarm(stub);
+    const left = await runInDurableObject(stub, (_, state) => state.storage.sql.exec("SELECT key FROM email_owed").toArray());
+    expect(left).toEqual([]);
+    const texts = await runInDurableObject(stub, (_, state) =>
+      (state.storage.sql.exec("SELECT bubble_text FROM outbounds").toArray() as { bubble_text: string }[]).map((r) => r.bubble_text),
+    );
+    expect(texts).toContain("A letter came to your Mano email as a PDF.");
   });
 
   it("ends the address on a delete", async () => {

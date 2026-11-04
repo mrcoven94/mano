@@ -8,7 +8,8 @@
 // every token. A delete clears the token, which ends the address.
 //
 // Path: handleEmail (the Worker's email handler) checks the address, size
-// and sender, parses the MIME and checks the links; the conversation stores
+// and sender, parses the MIME and the HTML (postal-mime, htmlparser2) and
+// checks the links; the conversation stores
 // the files in the person's Engine documents, texts the person, and queues a
 // turn holding those documents and no words, so the agent reads them with
 // Mail. Nothing from the email is ever a message from the person: the
@@ -18,6 +19,7 @@
 //
 // Test: pnpm --filter channels check (test/email.test.ts on the real parser,
 // test-worker/email.test.ts in workerd). Needs no key and no routing.
+import { Parser } from "htmlparser2";
 import PostalMime, { type Email } from "postal-mime";
 import {
   HANDLE_BYTES_DAILY,
@@ -50,6 +52,13 @@ const MAX_SUBJECT_CHARS = 300;
 // can be read is larger.
 const MIN_EMBEDDED_SCAN_BYTES = 30_000;
 const MAX_LINKS = 25;
+// How much of a message's HTML and plain text is read at all, out of the
+// 15 MB a message can be. Past either limit the letter counts as cut and
+// its links as failed, since nothing vouches for what was not read.
+const MAX_SCAN_CHARS = 2_000_000;
+// Each close tag costs the parser a walk of its open tags, so tags in the
+// millions would take minutes. Far more than a real letter holds.
+const MAX_HTML_TAGS = 50_000;
 // Mail reads this type as text it must not hold a date from.
 const TRUNCATED_TEXT_TYPE = "text/plain; truncated=yes";
 // Each email can cost a text and a model reading, so a leaked address
@@ -103,6 +112,11 @@ interface InboxRow {
 
 function inboxTable(sql: SqlStorage): void {
   sql.exec("CREATE TABLE IF NOT EXISTS email_inbox (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL, day_key TEXT NOT NULL, day_count INTEGER NOT NULL)");
+  // Files already counted against the day's bytes, so a retry counts only
+  // what is new.
+  sql.exec("CREATE TABLE IF NOT EXISTS email_bytes (byte_key TEXT PRIMARY KEY, day_key TEXT NOT NULL)");
+  // Arrival texts that have not gone yet; the alarm keeps trying.
+  sql.exec("CREATE TABLE IF NOT EXISTS email_owed (key TEXT PRIMARY KEY, text TEXT NOT NULL, generation INTEGER NOT NULL)");
 }
 
 export function loadInbox(sql: SqlStorage): InboxRow | null {
@@ -116,6 +130,8 @@ export function loadInbox(sql: SqlStorage): InboxRow | null {
 export function clearInbox(sql: SqlStorage): void {
   inboxTable(sql);
   sql.exec("DELETE FROM email_inbox");
+  sql.exec("DELETE FROM email_bytes");
+  sql.exec("DELETE FROM email_owed");
 }
 
 // The route is written first: a token saved here always has one. Null when
@@ -189,6 +205,9 @@ export interface ReceiveDeps {
   spend: Pick<SpendLedger, "byteReserve" | "byteSettle" | "byteRelease">;
   logger: Logger;
   nowMs: () => number;
+  // Messages being handled right now. In memory on purpose: a crash leaves
+  // no claim behind to swallow the redelivery.
+  inFlight: Set<string>;
 }
 
 export function documentIdFor(generation: number, key: string, index: number): string {
@@ -210,11 +229,13 @@ export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boo
 // Inside the person's conversation: the token must be this conversation's
 // current one, so an address ends the moment a delete clears it.
 export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): Promise<EmailAnswer> {
-  const { sql, store, documents, nowMs } = deps;
+  const { sql, store, documents, nowMs, inFlight } = deps;
   const inbox = loadInbox(sql);
   if (!inbox || inbox.token !== delivery.token) return { result: "unknown" };
   const eventId = `email:${delivery.key}`;
-  if (store.hasEvent(eventId)) return { result: "duplicate" };
+  // A copy while the first is still going spends nothing. If the first
+  // fails, its bounce tells the sender.
+  if (store.hasEvent(eventId) || inFlight.has(eventId)) return { result: "duplicate" };
   const meta = store.meta();
   if (meta.optedOut || meta.closed || (!meta.chatId && !meta.to)) return { result: "closed" };
   if (!documents) return { result: "unavailable" };
@@ -225,6 +246,7 @@ export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): 
   // once cannot all read the same count. One that ends up refused gives it
   // back, since it may be sent again.
   sql.exec("UPDATE email_inbox SET day_key = ?, day_count = ? WHERE id = 1", day, today + 1);
+  inFlight.add(eventId);
   const release = () => sql.exec("UPDATE email_inbox SET day_count = MAX(day_count - 1, 0) WHERE id = 1 AND day_key = ?", day);
   try {
     const answer = await storeAndQueue(delivery, documents, meta.generation, day, eventId, deps);
@@ -233,7 +255,62 @@ export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): 
   } catch (err) {
     release();
     throw err;
+  } finally {
+    inFlight.delete(eventId);
   }
+}
+
+// Takes the file's bytes from the day's allowance with no await, so large
+// files arriving at once cannot all see room. False when there is none.
+function claimBytes(sql: SqlStorage, store: ConversationStore, byteKey: string, day: string, bytes: number): boolean {
+  const meta = store.meta();
+  const usedToday = meta.byteDayKey === day ? meta.byteDayCount : 0;
+  if (usedToday + bytes > HANDLE_BYTES_DAILY) return false;
+  store.patchMeta({ byteDayCount: usedToday + bytes, byteDayKey: day });
+  sql.exec("DELETE FROM email_bytes WHERE day_key != ?", day);
+  sql.exec("INSERT INTO email_bytes (byte_key, day_key) VALUES (?, ?)", byteKey, day);
+  return true;
+}
+
+function refundBytes(sql: SqlStorage, store: ConversationStore, byteKey: string, day: string, bytes: number): void {
+  const meta = store.meta();
+  if (meta.byteDayKey === day) store.patchMeta({ byteDayCount: Math.max(0, meta.byteDayCount - bytes) });
+  sql.exec("DELETE FROM email_bytes WHERE byte_key = ?", byteKey);
+}
+
+export function owe(sql: SqlStorage, notice: { key: string; text: string; generation: number }): void {
+  inboxTable(sql);
+  sql.exec("INSERT OR REPLACE INTO email_owed (key, text, generation) VALUES (?, ?, ?)", notice.key, notice.text, notice.generation);
+}
+
+export function owedCount(sql: SqlStorage): number {
+  inboxTable(sql);
+  return sql.exec("SELECT key FROM email_owed").toArray().length;
+}
+
+type NoticeSender = Pick<ConversationRunner, "sendAgentText">;
+
+// True when the text went or never can: a delete, STOP, a close or a definite
+// refusal ends it. A throw or today's budget leaves it for another try.
+async function sendNotice(runner: NoticeSender, notice: { key: string; text: string; generation: number }, logger: Logger): Promise<boolean> {
+  try {
+    return (await runner.sendAgentText(notice)).reason !== "budget";
+  } catch (err) {
+    logger.warn("email_notice_failed", { err: errName(err) });
+    return false;
+  }
+}
+
+// How many are still owed afterward.
+export async function retryOwedNotices(sql: SqlStorage, runner: NoticeSender, logger: Logger): Promise<number> {
+  inboxTable(sql);
+  const owed = sql.exec("SELECT key, text, generation FROM email_owed").toArray() as { key: string; text: string; generation: number }[];
+  for (const row of owed) {
+    if (await sendNotice(runner, { key: row.key, text: row.text, generation: Number(row.generation) }, logger)) {
+      sql.exec("DELETE FROM email_owed WHERE key = ?", row.key);
+    }
+  }
+  return owedCount(sql);
 }
 
 async function storeAndQueue(
@@ -244,32 +321,42 @@ async function storeAndQueue(
   eventId: string,
   deps: ReceiveDeps,
 ): Promise<EmailAnswer> {
-  const { store, runner, photoConverter, spend, logger, nowMs } = deps;
+  const { sql, store, runner, photoConverter, spend, logger, nowMs } = deps;
   const stored: { id: string; mimeType: string }[] = [];
   let skipped = delivery.skipped;
   for (const [index, file] of delivery.files.entries()) {
     const raw = base64ToBytes(file.contentB64);
     const form = file.mimeType.startsWith("text/plain") ? { bytes: raw, mimeType: file.mimeType } : await storedForm(raw, file.mimeType, photoConverter);
-    const used = store.meta();
-    const usedToday = used.byteDayKey === day ? used.byteDayCount : 0;
+    const size = form.bytes.byteLength;
     const byteKey = `${delivery.handleHash}:${eventId}:${index}`;
-    if (usedToday + form.bytes.byteLength > HANDLE_BYTES_DAILY || !(await spend.byteReserve(byteKey, form.bytes.byteLength)).allowed) {
-      skipped += 1;
-      continue;
+    const counted = sql.exec("SELECT 1 FROM email_bytes WHERE byte_key = ?", byteKey).toArray().length > 0;
+    if (!counted) {
+      if (!claimBytes(sql, store, byteKey, day, size)) {
+        skipped += 1;
+        continue;
+      }
+      if (!(await spend.byteReserve(byteKey, size)).allowed) {
+        refundBytes(sql, store, byteKey, day, size);
+        skipped += 1;
+        continue;
+      }
     }
     const id = documentIdFor(generation, delivery.key, index);
     const saved = await documents.put({ id, name: id, bytes: form.bytes, generation }).catch((err: unknown) => {
       logger.warn("email_store_failed", { err: errName(err) });
       return false;
     });
+    // A store that failed may work next time, so the sender is asked to
+    // send it again rather than losing the file. What did store stays
+    // counted, and the retry passes over it.
     if (!saved) {
-      await spend.byteRelease(byteKey);
-      skipped += 1;
-      continue;
+      if (!counted) {
+        refundBytes(sql, store, byteKey, day, size);
+        await spend.byteRelease(byteKey);
+      }
+      return { result: "unavailable" };
     }
-    const counted = store.meta();
-    store.patchMeta({ byteDayCount: (counted.byteDayKey === day ? counted.byteDayCount : 0) + form.bytes.byteLength, byteDayKey: day });
-    await spend.byteSettle(byteKey, form.bytes.byteLength).catch((err: unknown) => logger.warn("email_settle_failed", { err: errName(err) }));
+    await spend.byteSettle(byteKey, size).catch((err: unknown) => logger.warn("email_settle_failed", { err: errName(err) }));
     stored.push({ id, mimeType: form.mimeType });
   }
   if (stored.length === 0) return { result: "unavailable" };
@@ -287,12 +374,9 @@ async function storeAndQueue(
     truncated: delivery.truncated,
     linkFailed: delivery.linkFailed,
   });
-  try {
-    await runner.sendAgentText({ key: eventId, text, generation });
-  } catch (err) {
-    // The letter is stored, and the reading's own reply still reaches them.
-    logger.warn("email_notice_failed", { err: errName(err) });
-  }
+  // Owed until it goes: it can be the only word of a PDF or a bad link.
+  const notice = { key: eventId, text, generation };
+  if (!(await sendNotice(runner, notice, logger))) owe(sql, notice);
   logger.info("email_received", { files: stored.length, reading: reading.length, skipped, truncated: delivery.truncated, linkFailed: delivery.linkFailed });
   // Read once more after that await, with none until handleEvent has
   // written: an inbound clears both STOP and a close.
@@ -330,73 +414,21 @@ export interface ParsedEmail {
   // The words were cut to fit, so what is missing could change what is kept.
   truncated: boolean;
   links: string[];
+  // Some of the message was never read, so its links cannot be vouched for.
+  linksUnread: boolean;
 }
 
-// Where a link's address can be written so that a browser still reads it.
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: "&", AMP: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", colon: ":", sol: "/", bsol: "\\", period: ".", Tab: "\t", NewLine: "\n",
-  num: "#", quest: "?", equals: "=", lowbar: "_", hyphen: "-", dash: "-", commat: "@", percnt: "%",
-};
-
-function fromCodePoint(code: number): string {
-  return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
-}
-
-// As a browser reads them: the semicolon is optional on a number.
-export function decodeEntities(text: string): string {
-  return text.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([a-zA-Z]{2,8});)/g, (whole, dec?: string, hex?: string, name?: string) => {
-    if (dec) return fromCodePoint(Number(dec));
-    if (hex) return fromCodePoint(parseInt(hex, 16));
-    return NAMED_ENTITIES[name!] ?? whole;
-  });
-}
-
-const CLOSING_BLOCK: Record<string, RegExp> = { script: /<\/script\b/gi, style: /<\/style\b/gi };
-const BLOCK_TAG = /^\/?(?:br|p|div|table|tr|td|th|li|h[1-6])\b/i;
-
-// One pass with no backtracking, since the HTML is the sender's. A < with
-// no > after it is text, as it is to a browser; so is the rest of the page
-// after a script that never closes, which a browser would not show.
-export function htmlToText(html: string): string {
-  const parts: string[] = [];
-  let at = 0;
-  for (;;) {
-    const open = html.indexOf("<", at);
-    const close = open < 0 ? -1 : html.indexOf(">", open);
-    if (close < 0) {
-      parts.push(html.slice(at));
-      break;
-    }
-    parts.push(html.slice(at, open));
-    const tag = html.slice(open + 1, Math.min(close, open + 12));
-    const block = /^(script|style)\b/i.exec(tag)?.[1]?.toLowerCase();
-    if (block) {
-      const closing = CLOSING_BLOCK[block]!;
-      closing.lastIndex = close;
-      const end = closing.exec(html);
-      const after = end ? html.indexOf(">", end.index) : -1;
-      if (after < 0) break;
-      at = after + 1;
-      parts.push(" ");
-      continue;
-    }
-    parts.push(BLOCK_TAG.test(tag) ? "\n" : " ");
-    at = close + 1;
-  }
-  return decodeEntities(parts.join(""))
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n\s*/g, "\n\n")
-    .trim();
-}
-
-const LINK_ATTRIBUTE = /(?:^|[\s"'/])(?:xlink:)?(?:href|action|formaction)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 // Places an attribute can point that are not a web page.
 const HARMLESS_SCHEME = /^(?:mailto|tel|sms|cid):/i;
+const LINK_ATTRIBUTES = ["href", "xlink:href", "action", "formaction"];
+const UNSEEN_TAGS = new Set(["script", "style"]);
+const BLOCK_TAGS = new Set(["br", "p", "div", "table", "tr", "td", "th", "li", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "blockquote", "pre", "ul", "ol"]);
 
-// One attribute's value as a browser would resolve it. Null for what is not
-// a link out of the email. Any other scheme is kept: the link check fails it.
+// One attribute's value, entities already decoded by the parser, as a browser
+// would resolve it. Null for what is not a link out of the email. Any other
+// scheme is kept: the link check fails it.
 export function linkFromAttribute(value: string): string | null {
-  const url = decodeEntities(value)
+  const url = value
     .replace(/[\t\n\r]/g, "")
     .trim()
     .replace(/\\/g, "/");
@@ -408,15 +440,64 @@ export function linkFromAttribute(value: string): string | null {
   return extractLinks(url).length > 0 ? url : null;
 }
 
-// A link's address can hide behind other words in HTML, so every one is
-// written out in the text and checked.
-function linksInAttributes(html: string): string[] {
-  const out = new Set<string>();
-  for (const match of html.matchAll(LINK_ATTRIBUTE)) {
-    const link = linkFromAttribute(match[1] ?? match[2] ?? match[3] ?? "");
-    if (link) out.add(link);
-  }
-  return [...out];
+// What a person would see, and every link attribute, as a browser would
+// parse them. complete is false when the tag limit stopped the parse.
+export function readHtml(html: string): { text: string; hrefs: string[]; complete: boolean } {
+  const parts: string[] = [];
+  const hrefs = new Set<string>();
+  let unseen = 0;
+  let tags = 0;
+  let complete = true;
+  const counted = (): void => {
+    tags += 1;
+    if (tags > MAX_HTML_TAGS) {
+      complete = false;
+      parser.pause();
+    }
+  };
+  const parser = new Parser(
+    {
+      onopentag(name, attributes) {
+        counted();
+        if (UNSEEN_TAGS.has(name)) unseen += 1;
+        if (BLOCK_TAGS.has(name)) parts.push("\n");
+        for (const attribute of LINK_ATTRIBUTES) {
+          const value = attributes[attribute];
+          const link = value === undefined ? null : linkFromAttribute(value);
+          // One past the most that gets checked already fails the check.
+          if (link && hrefs.size <= MAX_LINKS) hrefs.add(link);
+        }
+      },
+      ontext(text) {
+        if (unseen === 0) parts.push(text);
+      },
+      onclosetag(name) {
+        counted();
+        if (UNSEEN_TAGS.has(name)) unseen = Math.max(0, unseen - 1);
+        if (BLOCK_TAGS.has(name)) parts.push("\n");
+      },
+    },
+    { decodeEntities: true },
+  );
+  parser.write(html);
+  if (complete) parser.end();
+  const text = parts
+    .join("")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n\s*/g, "\n\n")
+    .trim();
+  return { text, hrefs: [...hrefs], complete };
+}
+
+const comparable = (sentence: string): string => sentence.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const sentencesOf = (text: string): string[] => text.replace(/\s+/g, " ").split(/(?<=[.!?]) /).filter((s) => comparable(s));
+
+// The sentences of the HTML part that the plain part does not have. A plain
+// part is often a stale or shorter copy, and a correction may be only in the
+// HTML, so nothing the office wrote is dropped for being in one part alone.
+export function htmlOnlySentences(plain: string, htmlText: string): string[] {
+  const inPlain = new Set(sentencesOf(plain).map(comparable));
+  return sentencesOf(htmlText).filter((s) => !inPlain.has(comparable(s)));
 }
 
 function toBytes(content: Email["attachments"][number]["content"]): Uint8Array {
@@ -426,23 +507,25 @@ function toBytes(content: Email["attachments"][number]["content"]): Uint8Array {
 // Throws on a message the parser cannot read.
 export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
   const parsed = await PostalMime.parse(raw as Uint8Array<ArrayBuffer>);
-  const html = parsed.html ?? "";
-  const visible = htmlToText(html);
-  const body = parsed.text?.trim() || visible;
-  const hrefs = linksInAttributes(html);
-  const hidden = hrefs.filter((href) => !body.includes(href));
+  const fullHtml = parsed.html ?? "";
+  const fullPlain = parsed.text?.trim() ?? "";
+  const html = readHtml(fullHtml.slice(0, MAX_SCAN_CHARS));
+  const plain = fullPlain.slice(0, MAX_SCAN_CHARS);
+  const fullyRead = html.complete && fullHtml.length <= MAX_SCAN_CHARS && fullPlain.length <= MAX_SCAN_CHARS;
+  const htmlOnly = plain ? htmlOnlySentences(plain, html.text) : [];
+  const body = plain ? [plain, ...(htmlOnly.length ? [`The HTML version of this email also says:\n${htmlOnly.join("\n")}`] : [])].join("\n\n") : html.text;
+  const hidden = html.hrefs.filter((href) => !body.includes(href));
   const words = [body, ...(hidden.length ? [`Links in this email:\n${hidden.join("\n")}`] : [])].join("\n\n").trim();
-  // Every link counts, cut or not, and the HTML may say what the plain part
-  // does not.
+  // Every link counts, cut or not.
   const subject = parsed.subject ?? "";
-  const links = new Set([...extractLinks(subject), ...extractLinks(words), ...extractLinks(visible), ...hrefs]);
+  const links = new Set([...extractLinks(subject), ...extractLinks(words), ...html.hrefs]);
   const files: EmailFile[] = [];
   let skipped = 0;
   let truncated = false;
   if (words) {
     const head = [parsed.from?.address ? `From: ${parsed.from.address}` : "", subject ? `Subject: ${subject.slice(0, MAX_SUBJECT_CHARS)}` : ""].filter(Boolean).join("\n");
     const whole = `${head}\n\n${words}`.trim();
-    truncated = subject.length > MAX_SUBJECT_CHARS || whole.length > MAX_TEXT_CHARS;
+    truncated = !fullyRead || subject.length > MAX_SUBJECT_CHARS || whole.length > MAX_TEXT_CHARS;
     files.push({ mimeType: truncated ? TRUNCATED_TEXT_TYPE : "text/plain", contentB64: bytesToBase64(new TextEncoder().encode(whole.slice(0, MAX_TEXT_CHARS))) });
   }
   // Attached files come first, so an embedded image never takes their place.
@@ -460,7 +543,7 @@ export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
     }
     files.push({ mimeType, contentB64: bytesToBase64(bytes) });
   }
-  return { files, skipped, truncated, links: [...links] };
+  return { files, skipped, truncated, links: [...links], linksUnread: !fullyRead };
 }
 
 // True when any link is blocked, cannot be looked up (rule 6), or is one
@@ -570,7 +653,7 @@ export async function handleEmail(
       files: parsed.files,
       skipped: parsed.skipped,
       truncated: parsed.truncated,
-      linkFailed: await linksFail(parsed.links, checker),
+      linkFailed: parsed.linksUnread || (await linksFail(parsed.links, checker)),
     };
     const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
     const res = await stub.fetch("https://conversation/internal/email", { method: "POST", body: JSON.stringify(delivery) });

@@ -46,9 +46,11 @@ import {
   savePendingDelete,
 } from "./conversation-delete.js";
 import { numberEnv, type Env } from "./env.js";
-import { addressFor, clearInbox, dropEmailRoute, ensureInboxToken, loadInbox, parseEmailDelivery, receiveEmail } from "./email.js";
+import { addressFor, clearInbox, dropEmailRoute, ensureInboxToken, loadInbox, owedCount, parseEmailDelivery, receiveEmail, retryOwedNotices } from "./email.js";
 
 export const GLOBAL_STATE_ID = "global";
+// How soon an arrival text that did not go is tried again.
+const EMAIL_NOTICE_RETRY_MS = 60_000;
 
 class StateSpendLedger implements SpendLedger {
   private stub: DurableObjectStub;
@@ -263,6 +265,15 @@ export class ConversationDO implements DurableObject {
     }
   }
 
+  // Emails this instance is handling right now (email.ts).
+  private emailsInFlight = new Set<string>();
+
+  private async armForOwedNotices(): Promise<void> {
+    if (owedCount(this.ctx.storage.sql) > 0 && (await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + EMAIL_NOTICE_RETRY_MS);
+    }
+  }
+
   private crisisCheckNoticed = false;
 
   // Built per request from env; says once per instance when it is off.
@@ -438,6 +449,7 @@ export class ConversationDO implements DurableObject {
         spend: new StateSpendLedger(globalStateStub(this.env)),
         logger: this.logger,
         nowMs: () => Date.now(),
+        inFlight: this.emailsInFlight,
       });
       const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (answer.result === "queued") {
@@ -447,6 +459,7 @@ export class ConversationDO implements DurableObject {
         // email already recorded: the turn still needs its alarm.
         await this.ctx.storage.setAlarm(Date.now() + batchMs);
       }
+      await this.armForOwedNotices();
       return Response.json(answer);
     }
     if (request.method === "POST" && url.pathname === "/internal/delete") {
@@ -549,12 +562,15 @@ export class ConversationDO implements DurableObject {
     await this.retryPendingDelete();
     const stillPending = loadPendingDelete(this.ctx.storage.sql);
     if (stillPending) await this.ctx.storage.setAlarm(stillPending.nextAtMs);
-    const { result, retryAfterMs } = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
+    const handleHash = this.ctx.id.name ?? this.ctx.id.toString();
+    if (owedCount(this.ctx.storage.sql) > 0) await retryOwedNotices(this.ctx.storage.sql, this.runner(handleHash).runner, this.logger);
+    const { result, retryAfterMs } = await this.runTurnSerialized(handleHash);
     const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
     if (result === "retry") {
       await this.ctx.storage.setAlarm(Date.now() + retryAfterMs);
     } else if (result === "waiting" || (result === "ran" && new SqlConversationStore(this.ctx.storage.sql).pending().length > 0)) {
       await this.ctx.storage.setAlarm(Date.now() + batchMs);
     }
+    await this.armForOwedNotices();
   }
 }

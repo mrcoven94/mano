@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { AgentResponder, LinkChecker, extractLinks, parseBlooioEvent, type Responder, type TurnInput } from "@mano/channels";
+import { AgentResponder, LinkChecker, bytesToBase64, extractLinks, parseBlooioEvent, type Responder, type TurnInput } from "@mano/channels";
+import { dayKeyFor } from "@mano/channels";
 import { guardReply } from "@mano/persona";
 import {
   ARRIVED_PDF_TEXT,
@@ -21,10 +22,12 @@ import {
   clearInbox,
   ensureInboxToken,
   handleEmail,
+  retryOwedNotices,
   mintToken,
   parseEmailDelivery,
   receiveEmail,
   tokenFromAddress,
+  type EmailDelivery,
   type EmailMessageIn,
 } from "../src/email.js";
 import type { Env } from "../src/env.js";
@@ -48,7 +51,7 @@ function mime(opts: { text?: string; html?: string; files?: ReturnType<typeof at
   if (opts.text !== undefined) parts.push(`Content-Type: text/plain; charset=utf-8\r\n\r\n${opts.text}`);
   if (opts.html !== undefined) parts.push(`Content-Type: text/html; charset=utf-8\r\n\r\n${opts.html}`);
   for (const f of opts.files ?? []) {
-    const b64 = btoa(String.fromCharCode(...f.bytes));
+    const b64 = bytesToBase64(f.bytes);
     parts.push(`Content-Type: ${f.type}\r\nContent-Disposition: attachment; filename="${f.name}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64}`);
   }
   lines.push('Content-Type: multipart/mixed; boundary="b1"', "", ...parts.map((p) => `--b1\r\n${p}`), "--b1--", "");
@@ -77,6 +80,7 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
   const h: Harness = makeHarness({ responder });
   const sql = sqliteStorage(new DatabaseSync(":memory:"));
   const routes = new Map<string, string>();
+  const inFlight = new Set<string>();
   const state = {
     fetch: async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(String(input));
@@ -97,13 +101,13 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
     byteSettle: async (key: string, bytes: number) => void h.ledger.byteSettle(key, bytes),
     byteRelease: async (key: string) => void h.ledger.byteRelease(key),
   };
+  const receive = (delivery: EmailDelivery) =>
+    receiveEmail(delivery, { sql, store: h.store, runner: h.runner, documents: h.documents, photoConverter: null, spend, logger: h.logger, nowMs: () => h.now, inFlight });
   const conversation = {
     fetch: async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const delivery = parseEmailDelivery(JSON.parse(String(init?.body)));
       if (!delivery) return new Response("Bad email.", { status: 400 });
-      return Response.json(
-        await receiveEmail(delivery, { sql, store: h.store, runner: h.runner, documents: h.documents, photoConverter: null, spend, logger: h.logger, nowMs: () => h.now }),
-      );
+      return Response.json(await receive(delivery));
     },
   };
   const env = {
@@ -139,6 +143,7 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
     h,
     sql,
     state,
+    receive,
     routes,
     seen,
     send,
@@ -706,5 +711,235 @@ describe("files inside an email", () => {
     expect(inbox.seen.flatMap((t) => t.documents ?? [])).toHaveLength(6);
     for (const turn of inbox.seen) expect(turn.documents!.length).toBeLessThanOrEqual(5);
     expect(inbox.h.store.pending()).toEqual([]);
+  });
+});
+
+describe("what an email's HTML says", () => {
+  const stored = (inbox: Awaited<ReturnType<typeof openInbox>>) => new TextDecoder().decode([...inbox.h.documents.docs.values()][0]!.bytes);
+  const both = (text: string, html: string) =>
+    [
+      "From: County Office <office@county.example>",
+      "Subject: Your renewal",
+      'Content-Type: multipart/alternative; boundary="alt"',
+      "",
+      "--alt",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      text,
+      "--alt",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      html,
+      "--alt--",
+      "",
+    ].join("\r\n");
+
+  it("keeps words after a comment built to look like an open script", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: "<p>Your renewal is due November 20, 2026.</p><!-- > <script> --><p>That deadline is cancelled.</p>" }));
+    expect(stored(inbox)).toContain("That deadline is cancelled.");
+    expect(stored(inbox)).not.toContain("<script>");
+  });
+
+  it("leaves out scripts, styles and comments", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: "<style>p{color:red}</style><p>Renew.</p><script>var secret = 1;</script><!-- a note --><p>Thanks.</p>" }));
+    expect(stored(inbox)).toContain("Renew.");
+    expect(stored(inbox)).toContain("Thanks.");
+    for (const hidden of ["color:red", "secret", "a note"]) expect(stored(inbox)).not.toContain(hidden);
+  });
+
+  it("joins words a tag splits, as a browser shows them", async () => {
+    const asked: string[] = [];
+    const inbox = await openInbox({
+      dns: (host) => {
+        asked.push(host);
+        return Response.json({ Status: 0, Answer: [{ data: "192.0.2.1" }] });
+      },
+    });
+    await inbox.send(mime({ html: "<p>Go to ht<b></b>tps://split.example/login</p>" }));
+    expect(asked).toContain("split.example");
+  });
+
+  it("adds what only the HTML part says, without repeating the plain part", async () => {
+    const inbox = await openInbox();
+    await inbox.send(both("Your renewal is due November 20, 2026.", "<p>Your renewal is due November 20, 2026.</p><p>That deadline is cancelled.</p>"));
+    expect(stored(inbox)).toContain("That deadline is cancelled.");
+    expect(stored(inbox).match(/due November 20/g)).toHaveLength(1);
+  });
+
+  it("adds a sentence whose words are all in the plain part but not together", async () => {
+    const inbox = await openInbox();
+    await inbox.send(both("You need to renew. This is not a bill.", "<p>You do not need to renew.</p><p>This is not a bill.</p>"));
+    expect(stored(inbox)).toContain("You do not need to renew.");
+  });
+
+  it("adds nothing when the two parts say the same", async () => {
+    const inbox = await openInbox();
+    const plain = "Your renewal is due\r\nNovember 20, 2026. Send the form!";
+    await inbox.send(both(plain, "<div>Your renewal is <b>due</b> November 20, 2026.</div><div>Send the form!</div>"));
+    expect(stored(inbox)).not.toContain("also says");
+  });
+
+  for (const [name, href] of [
+    ["an overlong decimal entity", "&#00000000000000104;ttps://overlong.example/login"],
+    ["an overlong hex entity", "&#x00000000000000068;ttps://overlong.example/login"],
+    ["overlong entities for the slashes", "https:&#000000047;&#x00000002f;overlong.example/login"],
+  ] as const) {
+    it(`checks a link written with ${name}`, async () => {
+      const asked: string[] = [];
+      const inbox = await openInbox({
+        dns: (host) => {
+          asked.push(host);
+          return Response.json({ Status: 0, Answer: [{ data: "0.0.0.0" }] });
+        },
+      });
+      await inbox.send(mime({ html: `<p>Renew.</p><a href="${href}">Open</a>` }));
+      expect(asked).toContain("overlong.example");
+      expect(inbox.sentAfterOpen().join(" ")).toContain(LINK_TEXT);
+    });
+  }
+
+  it("bounds its work on hostile HTML near the size limit, and vouches for nothing it did not read", async () => {
+    const inbox = await openInbox();
+    const size = 14_000_000;
+    for (const [i, html] of ["<div>".repeat(size / 10) + "</b>".repeat(size / 8), "<!--".repeat(size / 4), "<a href=x>".repeat(size / 10)].entries()) {
+      const started = Date.now();
+      await inbox.send(mime({ html, subject: `Hostile ${i}` }));
+      expect(Date.now() - started).toBeLessThan(10_000);
+    }
+    const one = await openInbox();
+    await one.send(mime({ html: `<p>Renew.</p>${"<div>".repeat(60_000)}<a href="https://late.example/x">Open</a>` }));
+    expect(one.sentAfterOpen().join(" ")).toContain(LINK_TEXT);
+    expect(one.sentAfterOpen().join(" ")).toContain(TRUNCATED_TEXT);
+  }, 60_000);
+});
+
+describe("mail arriving at the same moment", () => {
+  const nineMb = (tag: number) => {
+    const bytes = new Uint8Array(9_000_000);
+    bytes.set(PDF);
+    bytes[100] = tag;
+    return attachment(`notice-${tag}.pdf`, "application/pdf", bytes);
+  };
+
+  it("spends one slot on copies of one message, and leaves the rest for real letters", async () => {
+    const inbox = await openInbox();
+    const uploads = gate();
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    inbox.h.documents.put = async (doc) => {
+      await uploads.opened;
+      return put(doc);
+    };
+    const raw = mime({ text: "Your renewal is due." });
+    const copies = Array.from({ length: MAX_EMAILS_PER_DAY }, () => inbox.send(raw));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    uploads.open();
+    for (const out of await Promise.all(copies)) expect(out.rejected).toBeNull();
+    expect(inbox.h.documents.docs.size).toBe(1);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_TEXT]);
+    for (let i = 1; i < MAX_EMAILS_PER_DAY; i++) expect((await inbox.send(mime({ text: `Letter ${i}` }))).rejected).toBeNull();
+  });
+
+  it("holds the day's byte cap for large files arriving at once", async () => {
+    const inbox = await openInbox();
+    const uploads = gate();
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    inbox.h.documents.put = async (doc) => {
+      await uploads.opened;
+      return put(doc);
+    };
+    const delivery = (tag: number) => ({
+      handleHash: TEST_HANDLE_HASH,
+      token: inbox.token,
+      key: `${tag}`.repeat(64),
+      files: [{ mimeType: "application/pdf", contentB64: bytesToBase64(nineMb(tag).bytes) }],
+      skipped: 0,
+      truncated: false,
+      linkFailed: false,
+    });
+    const sends = [1, 2, 3].map((tag) => inbox.receive(delivery(tag)));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    uploads.open();
+    const results = (await Promise.all(sends)).map((a) => a.result);
+    expect(results.filter((r) => r === "unavailable")).toHaveLength(1);
+    expect(inbox.h.store.meta().byteDayCount).toBe(18_000_000);
+    expect(inbox.h.documents.docs.size).toBe(2);
+  }, 30_000);
+
+  it("gives bytes back when a file was refused", async () => {
+    const inbox = await openInbox();
+    inbox.h.documents.refuse = true;
+    await inbox.send(mime({ files: [nineMb(1)] }));
+    expect(inbox.h.store.meta().byteDayCount).toBe(0);
+  }, 30_000);
+
+  it("bounces a partial upload, and its retry counts only what is new", async () => {
+    const inbox = await openInbox();
+    inbox.h.store.patchMeta({ byteDayKey: dayKeyFor(inbox.h.now), byteDayCount: 15_000_000 });
+    const six = new Uint8Array(6_000_000);
+    six.set(PDF);
+    const three = new Uint8Array(3_000_000);
+    three.set(PDF);
+    three[100] = 3;
+    const raw = mime({ files: [attachment("a.pdf", "application/pdf", six), attachment("b.pdf", "application/pdf", three)] });
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    let calls = 0;
+    inbox.h.documents.put = async (doc) => {
+      calls += 1;
+      return calls === 2 ? false : put(doc);
+    };
+    expect((await inbox.send(raw)).rejected).toBe(REJECT_LATER);
+    expect(inbox.sentAfterOpen()).toEqual([]);
+    expect((await inbox.send(raw)).rejected).toBeNull();
+    expect(inbox.h.documents.docs.size).toBe(2);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
+    expect(inbox.h.store.meta().byteDayCount).toBe(24_000_000);
+  }, 30_000);
+});
+
+describe("an arrival text that does not go", () => {
+  const failing = (inbox: Awaited<ReturnType<typeof openInbox>>) => {
+    const send = inbox.h.runner.sendAgentText.bind(inbox.h.runner);
+    let down = true;
+    inbox.h.runner.sendAgentText = async (opts) => {
+      if (down) throw new Error("provider down");
+      return send(opts);
+    };
+    return () => (down = false);
+  };
+
+  it("stays owed for a PDF alone until it goes, and only once", async () => {
+    const inbox = await openInbox();
+    const recover = failing(inbox);
+    const out = await inbox.send(mime({ files: [attachment("notice.pdf", "application/pdf", PDF)] }));
+    expect(out.rejected).toBeNull();
+    expect(inbox.sentAfterOpen()).toEqual([]);
+    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(1);
+    recover();
+    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
+    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
+  });
+
+  it("stays owed when a link warning is in it, though the letter is queued", async () => {
+    const inbox = await openInbox({ dns: () => Response.json({ Status: 0, Answer: [{ data: "0.0.0.0" }] }) });
+    const recover = failing(inbox);
+    await inbox.send(mime({ text: `See ${"https://bad.example/x"} today.` }));
+    expect(inbox.h.store.pending()).toHaveLength(1);
+    recover();
+    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${LINK_TEXT}`]);
+  });
+
+  it("is dropped once the person has said STOP", async () => {
+    const inbox = await openInbox();
+    const recover = failing(inbox);
+    await inbox.send(mime({ files: [attachment("notice.pdf", "application/pdf", PDF)] }));
+    recover();
+    await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_stop_owed", occurredAtMs: inbox.h.now + 1, text: "STOP" }), "webhook");
+    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    expect(inbox.sentAfterOpen().join(" ")).not.toContain("A letter came");
   });
 });

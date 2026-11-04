@@ -447,7 +447,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       // Verified against the shared crop's own transcription, not the
       // composed pseudo-text, so extra letters face the same check.
       const dropped = verifyExtraction(extra, page.extraction.fullText);
-      pages.push({ order: pages.length, file: page.file, crop: page.crop, image: page.image, frameTimeMs: page.frameTimeMs, rotationDegrees: page.rotationDegrees, extraction: extra, readFailed: false, dropped });
+      pages.push({ order: pages.length, file: page.file, crop: page.crop, image: page.image, truncated: page.truncated, frameTimeMs: page.frameTimeMs, rotationDegrees: page.rotationDegrees, extraction: extra, readFailed: false, dropped });
     }
   }
 
