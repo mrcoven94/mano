@@ -4,8 +4,6 @@
 // the question rendered from that frozen request; once Channels reports
 // it reached the person word for word, Engine's pointer makes it
 // answerable. Nothing leaves Mano until the person texts YES to it.
-import type { ToolContext } from "eve/tools";
-
 import type { ActionProposal, EngineApproval, PersonEngine } from "./engine.js";
 import { closeReplaced, holdBack, presentsExactly, proposalKey, proposalsOf, renderQuestion, waitingFrom } from "./pending.js";
 import { placeClaimId } from "./reminders.js";
@@ -36,7 +34,7 @@ export function sameDraft(a: EngineApproval, draft: Draft): boolean {
 
 export async function holdForYes(
   engine: PersonEngine,
-  ctx: Pick<ToolContext, "session">,
+  ctx: { session: { turn?: { id: string } | null } },
   turn: { turnId: string; turnAtMs: number },
   draft: Draft,
 ): Promise<HoldResult> {
@@ -257,7 +255,7 @@ async function oneAtATime<T>(turnId: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
-async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
+export async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       if ((await engine.reject(approvalId)).status === "rejected") return true;

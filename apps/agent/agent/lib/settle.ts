@@ -39,7 +39,7 @@ export function initialSettleState(turnId: string | null = null): SettleState {
   return { stopTexts: [], lastText: null, turnId, heldByForm: new Map() };
 }
 
-const FORM_TOOLS: ReadonlySet<string> = new Set(["fill_form", "start_form_draft"]);
+const FORM_TOOLS: ReadonlySet<string> = new Set(["fill_form", "start_form_draft", "share_case", "stop_sharing"]);
 
 // Only the last form call per form counts: one that did not end waiting
 // for a YES means nothing earlier for that form is shown, in any instance,

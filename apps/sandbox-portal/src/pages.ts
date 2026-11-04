@@ -34,7 +34,7 @@ const OLD_STYLE = `
   a { color: #003399; }
 `;
 
-function layout(title: string, body: string): string {
+export function layout(title: string, body: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><title>${escapeHtml(title)} - State Benefits Renewal</title>
@@ -58,7 +58,7 @@ export function homePage(): string {
     `<div class="notice"><b>Notice:</b> This demonstration portal accepts renewal applications from test residents only. It is not connected to any real benefits system.</div>
 <table class="form">
 <tr><td class="label">Renew your benefits</td><td>Fill out your yearly renewal online in three steps: household information, supporting documents, review. Submitting saves your application as a draft. The office files it and sends you a confirmation number.</td></tr>
-<tr><td class="label">Caseworkers</td><td><a href="/caseworker">View submitted applications</a> (staff test view).</td></tr>
+<tr><td class="label">Caseworkers</td><td><a href="/caseworker">View submitted applications</a> (staff test view). <a href="/staff">Cases residents shared</a> (staff sign-in).</td></tr>
 </table>
 <p><a class="btn" style="text-decoration:none; display:inline-block; margin-top:10px;" href="/apply">Start renewal application</a></p>`,
   );
