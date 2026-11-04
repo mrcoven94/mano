@@ -399,6 +399,17 @@ describe("the daily check", () => {
     expect(posts[0].text).toContain("household of 2");
   });
 
+  it("a number the person's newly named member retired leaves no size, so no text", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle("ao-retired");
+    await patch(h, { "person.address.state": "CA", "person.householdSize": 2, "income.job.amount": 2000, "income.job.frequency": "monthly", "person.alwaysOn": true });
+    // What update_profile writes when they name someone new after giving a number.
+    expect((await patch(h, { "household.sam.name": "Sam Example", "person.householdSize": null })).status).toBe(200);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toEqual([]);
+  });
+
   it("a confirmation in flight when a letter adds someone does not count them", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));
