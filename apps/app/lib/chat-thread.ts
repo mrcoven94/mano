@@ -2,7 +2,8 @@
 // really shown, apart from the screen so they can be tested.
 
 import { crisisGate } from "@mano/persona/crisis";
-import type { ChatMessage } from "./api/types";
+import type { ChatMessage, NewAttachment } from "./api/types";
+import type { QueuedMessage } from "./queue";
 
 // A reply that came back from a send but not from the conversation stays
 // on screen: a crisis line must show even when the conversation cannot be
@@ -69,6 +70,51 @@ export function canSend(text: string, sending: boolean): boolean {
 // or a crisis line appears at once, even while the conversation still loads.
 export function showsThread(messages: ChatMessage[]): boolean {
   return messages.length > 0;
+}
+
+// What fills the chat: the thread when there is anything to show, a loading
+// view until the first read of the conversation has finished, and only then
+// the empty card, so it never stands in for a thread still on its way.
+export function threadView(messages: ChatMessage[], loaded: boolean): "thread" | "loading" | "empty" {
+  if (showsThread(messages)) return "thread";
+  return loaded ? "empty" : "loading";
+}
+
+// Mail is anything but a voice note: the working line talks about mail.
+export function isMailSend(attachments: readonly Pick<NewAttachment, "kind">[]): boolean {
+  return attachments.some((a) => a.kind !== "voice");
+}
+
+// Mail on its way, and kept on screen once answered until the conversation
+// has been read again, so it does not blink out in between.
+export interface OutgoingMail {
+  item: QueuedMessage;
+  answered: boolean;
+}
+
+function asMessage(q: QueuedMessage, status: ChatMessage["status"]): ChatMessage {
+  return {
+    id: q.id,
+    role: "user",
+    text: q.text,
+    createdAt: q.createdAt,
+    attachments: q.attachments.map((a, i) => ({
+      id: `${q.id}-att-${i}`,
+      kind: a.kind,
+      name: a.name,
+      mimeType: a.mimeType,
+      size: a.bytesB64.length,
+    })),
+    status,
+  };
+}
+
+// The person's own messages the conversation does not hold yet. The one on
+// its way is not "waiting for connection", even while the outbox still lists
+// it, and a failed one is simply back to waiting.
+export function pendingMessages(queued: readonly QueuedMessage[], outgoing: OutgoingMail | null): ChatMessage[] {
+  const waiting = queued.filter((q) => q.id !== outgoing?.item.id).map((q) => asMessage(q, "queued"));
+  return outgoing ? [...waiting, asMessage(outgoing.item, "sending")] : waiting;
 }
 
 // The questions the person has read in this viewing that the server has not

@@ -1,9 +1,12 @@
 // One conversation with the person's agent: text, mail photos and video,
 // and voice notes. Offline messages wait in the outbox and send in order
-// when the engine is reachable again.
+// when the engine is reachable again. Mail on its way shows a working line
+// until it is answered or fails. A reply that asks about an approval links
+// to it when this client can read that approval.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import {
+  ActivityIndicator,
   AppState,
   FlatList,
   KeyboardAvoidingView,
@@ -15,7 +18,8 @@ import {
   View,
   type AppStateStatus,
 } from "react-native";
-import { useFocusEffect } from "expo-router";
+import * as Linking from "expo-linking";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
 import { deleteAsync } from "expo-file-system/legacy";
@@ -24,13 +28,14 @@ import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
-import { takeChatDraft } from "../../lib/chat-draft";
+import { takeChatDraft, takeMailAsk, type MailAsk } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
-import { EDGE_ON_SCREEN, canSend, crisisNoticeFor, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges, visibleMessageIds, type ListRow } from "../../lib/chat-thread";
+import { EDGE_ON_SCREEN, canSend, crisisNoticeFor, inDisplayOrder, isMailSend, listRows, mergeArrived, pendingMessages, questionsToAcknowledge, threadView, visibleEdges, visibleMessageIds, type ListRow, type OutgoingMail } from "../../lib/chat-thread";
 import { QuestionViewing } from "../../lib/question-viewing";
 import { useStrings } from "../../lib/i18n";
-import { submitMessage } from "../../lib/send";
+import { sendWatched, submitMessage, type SendWatcher } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
+import { PermissionDeniedError, mediaNoteText, noteFor, type MediaNote } from "../../lib/permission-note";
 import type { QueuedMessage } from "../../lib/queue";
 import { colors, radius, tapTarget, type } from "../../lib/theme";
 
@@ -41,7 +46,7 @@ function attachmentIcon(kind: Attachment["kind"]): "image-outline" | "videocam-o
   return "document-outline";
 }
 
-function Bubble({ message, queuedLabel }: { message: ChatMessage; queuedLabel: string }) {
+function Bubble({ message, queuedLabel, approval }: { message: ChatMessage; queuedLabel: string; approval: { title: string; open: () => void } | null }) {
   const mine = message.role === "user";
   return (
     <View style={[styles.bubbleRow, mine && styles.bubbleRowMine]}>
@@ -56,6 +61,22 @@ function Bubble({ message, queuedLabel }: { message: ChatMessage; queuedLabel: s
           </View>
         ))}
         {message.status === "queued" ? <Text style={styles.queuedNote}>{queuedLabel}</Text> : null}
+        {approval ? (
+          <Pressable onPress={approval.open} accessibilityRole="button" style={styles.approvalLink}>
+            <Text style={styles.approvalLinkText}>{approval.title}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function WorkingBubble({ text }: { text: string }) {
+  return (
+    <View style={styles.bubbleRow} accessibilityLiveRegion="polite" aria-live="polite">
+      <View style={[styles.bubble, styles.bubbleTheirs, styles.working]}>
+        <ActivityIndicator size="small" color={colors.muted} />
+        <Text style={[type.body, styles.textTheirs, styles.flexShrink]}>{text}</Text>
       </View>
     </View>
   );
@@ -63,16 +84,27 @@ function Bubble({ message, queuedLabel }: { message: ChatMessage; queuedLabel: s
 
 export default function Chat() {
   const s = useStrings();
+  const router = useRouter();
   const { client, session, mode, outbox, personStore, signOut } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [threadLoaded, setThreadLoaded] = useState(false);
   const [arrived, setArrived] = useState<ChatMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [batch, setBatch] = useState<PickedMedia[] | null>(null);
+  const [batchAsk, setBatchAsk] = useState<MailAsk | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [offlineNote, setOfflineNote] = useState(false);
+  // From the tap until the send is answered or fails. The send itself can
+  // start late, behind the outbox's encrypted write of the photos.
+  const [mailSubmitting, setMailSubmitting] = useState(false);
+  const [outgoing, setOutgoing] = useState<OutgoingMail | null>(null);
+  // Approvals this client can read. A web Worker with no approvals route
+  // leaves it empty, and a question there is answered in the chat.
+  const [openable, setOpenable] = useState<ReadonlySet<string>>(new Set());
+  const [mediaNote, setMediaNote] = useState<MediaNote>(null);
   const [recording, setRecording] = useState(false);
   const [voiceUri, setVoiceUri] = useState<string | null>(null);
   const [voicePlaying, setVoicePlaying] = useState(false);
@@ -82,15 +114,24 @@ export default function Chat() {
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
   const keepReply = useCallback((reply: ChatMessage) => setArrived((current) => [...current, reply]), []);
-  useClearOnSignOut(() => setArrived([]));
+  useClearOnSignOut(() => {
+    setArrived([]);
+    setThreadLoaded(false);
+    setMailSubmitting(false);
+    setOutgoing(null);
+    setOpenable(new Set());
+    setMediaNote(null);
+  });
+  const watchMail = useCallback<SendWatcher>((item, phase) => {
+    if (!isMailSend(item.attachments)) return;
+    setOutgoing(phase === "failed" ? null : { item, answered: phase === "sent" });
+  }, []);
   const thread = useMemo(() => mergeArrived(messages, arrived), [messages, arrived]);
 
   const refresh = useCallback(async () => {
     if (!session || !outbox) return;
     try {
-      await outbox.flush(session, async (item) => {
-        keepReply(await client.sendMessage(session, item.text, item.attachments, item.id));
-      });
+      await outbox.flush(session, (item) => sendWatched(client, session, item, keepReply, watchMail));
     } catch (err) {
       if (err instanceof AuthError) {
         await signOut();
@@ -98,9 +139,14 @@ export default function Chat() {
       }
       setOfflineNote(true);
     }
+    void client
+      .listApprovals(session)
+      .then((all) => setOpenable(new Set(all.map((a) => a.id))))
+      .catch(() => undefined);
     try {
       const [server, pending] = await Promise.all([client.listMessages(session), outbox.list()]);
       setMessages(server);
+      setOutgoing((current) => (current?.answered ? null : current));
       setQueued(pending);
       setOfflineNote(pending.length > 0);
     } catch (err) {
@@ -110,8 +156,10 @@ export default function Chat() {
       }
       setQueued(await outbox.list());
       setOfflineNote(true);
+    } finally {
+      setThreadLoaded(true);
     }
-  }, [client, session, outbox, signOut, keepReply]);
+  }, [client, session, outbox, signOut, keepReply, watchMail]);
 
   useFocusEffect(
     useCallback(() => {
@@ -193,6 +241,17 @@ export default function Chat() {
     }, [session]),
   );
 
+  // A deadline card asked for a photo: open the mail panel for that paper.
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      const ask = takeMailAsk(session.token);
+      if (!ask) return;
+      setBatchAsk(ask);
+      setBatch((current) => current ?? []);
+    }, [session]),
+  );
+
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
       if (state === "active") void refresh();
@@ -206,8 +265,9 @@ export default function Chat() {
     if (!session || !outbox) return false;
     if (!body.trim() && attachments.length === 0) return false;
     setSending(true);
+    if (isMailSend(attachments)) setMailSubmitting(true);
     try {
-      const report = await submitMessage(client, session, outbox, body.trim(), attachments, keepReply);
+      const report = await submitMessage(client, session, outbox, body.trim(), attachments, keepReply, watchMail);
       setText("");
       setQueued(await outbox.list());
       setOfflineNote(report.kept.length > 0);
@@ -225,6 +285,7 @@ export default function Chat() {
       return false;
     } finally {
       setSending(false);
+      setMailSubmitting(false);
     }
   };
 
@@ -251,58 +312,66 @@ export default function Chat() {
   const toNew = (p: PickedMedia): NewAttachment => ({ kind: p.kind, name: p.name, mimeType: p.mimeType, bytesB64: p.bytesB64 });
 
   const sendPhotos = async (): Promise<void> => {
+    setMediaNote(null);
     try {
       const picked = await pickMailPhotos();
       if (picked.length === 0) return;
       setAttachOpen(false);
       await sendNow(s.mailSent, picked.map(toNew));
-    } catch {
-      // Permission denied: the person stays in the conversation.
+    } catch (err) {
+      setMediaNote(noteFor(err));
     }
   };
 
   const sendVideo = async (): Promise<void> => {
+    setMediaNote(null);
     try {
       const picked = (await takeMailVideo()) ?? (await pickMailVideo());
       if (!picked) return;
       setAttachOpen(false);
       await sendNow(s.videoSent, [toNew(picked)]);
-    } catch {
-      // Permission denied: the person stays in the conversation.
+    } catch (err) {
+      setMediaNote(noteFor(err));
     }
   };
 
   const batchAddPhoto = async (): Promise<void> => {
+    setMediaNote(null);
     setBatchBusy(true);
     try {
       const photo = await takeMailPhoto();
       if (photo) setBatch((b) => [...(b ?? []), photo]);
-    } catch {
-      // Permission denied: the batch keeps what it has.
+    } catch (err) {
+      // The batch keeps what it has.
+      setMediaNote(noteFor(err));
     } finally {
       setBatchBusy(false);
     }
   };
 
   const batchAddLibrary = async (): Promise<void> => {
+    setMediaNote(null);
     setBatchBusy(true);
     try {
       const picked = await pickMailPhotos();
       if (picked.length > 0) setBatch((b) => [...(b ?? []), ...picked]);
-    } catch {
-      // Permission denied: the batch keeps what it has.
+    } catch (err) {
+      // The batch keeps what it has.
+      setMediaNote(noteFor(err));
     } finally {
       setBatchBusy(false);
     }
   };
 
   const batchAddVideo = async (): Promise<void> => {
+    setMediaNote(null);
     setBatchBusy(true);
     try {
       const picked = (await takeMailVideo()) ?? (await pickMailVideo());
       if (picked) setBatch((b) => [...(b ?? []), picked]);
-    } catch {
-      // Permission denied: the batch keeps what it has.
+    } catch (err) {
+      // The batch keeps what it has.
+      setMediaNote(noteFor(err));
     } finally {
       setBatchBusy(false);
     }
@@ -312,9 +381,11 @@ export default function Chat() {
     const items = batch ?? [];
     if (items.length === 0) return;
     setBatchBusy(true);
+    const words = batchAsk === "pay-stub" ? s.payStubSent : s.mailSent;
     setBatch(null);
+    setBatchAsk(null);
     setAttachOpen(false);
-    await sendNow(s.mailSent, items.map(toNew));
+    await sendNow(words, items.map(toNew));
     setBatchBusy(false);
   };
 
@@ -332,14 +403,16 @@ export default function Chat() {
       }
       return;
     }
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) return;
+    setMediaNote(null);
     try {
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) throw new PermissionDeniedError("microphone");
       recorder.record();
       setVoiceUri(null);
       setRecording(true);
-    } catch {
+    } catch (err) {
       setRecording(false);
+      setMediaNote(noteFor(err));
     }
   };
 
@@ -377,22 +450,10 @@ export default function Chat() {
     }
   };
 
-  const queuedAsMessages: ChatMessage[] = queued.map((q) => ({
-    id: q.id,
-    role: "user",
-    text: q.text,
-    createdAt: q.createdAt,
-    attachments: q.attachments.map((a, i) => ({
-      id: `${q.id}-att-${i}`,
-      kind: a.kind,
-      name: a.name,
-      mimeType: a.mimeType,
-      size: a.bytesB64.length,
-    })),
-    status: "queued",
-  }));
-
-  const all = inDisplayOrder(thread, queuedAsMessages);
+  const all = inDisplayOrder(thread, pendingMessages(queued, outgoing));
+  const working = mailSubmitting || (outgoing !== null && !outgoing.answered);
+  const body = working ? "thread" : threadView(all, threadLoaded);
+  const note = mediaNote ? mediaNoteText(mediaNote, Platform.OS, s) : null;
   const crisisNotice = crisisNoticeFor(thread, crisisSettled);
   const shown = [...all].reverse();
   const heldCount = queued.filter((q) => q.held === true).length;
@@ -427,7 +488,9 @@ export default function Chat() {
         </View>
 
         {/* An inverted list draws its empty component upside down on the web. */}
-        {!showsThread(shown) ? (
+        {body === "loading" ? (
+          <LoadingView />
+        ) : body === "empty" ? (
           <View style={styles.empty}>
             <EmptyView body={s.agentEmpty} />
           </View>
@@ -439,7 +502,18 @@ export default function Chat() {
             inverted
             contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => (item.kind === "edge" ? <View style={styles.edge} /> : <Bubble message={item.message} queuedLabel={s.queued} />)}
+            ListHeaderComponent={working ? <WorkingBubble text={s.workingMail} /> : undefined}
+            renderItem={({ item }) => {
+              if (item.kind === "edge") return <View style={styles.edge} />;
+              const approvalId = item.message.ask?.approvalId;
+              return (
+                <Bubble
+                  message={item.message}
+                  queuedLabel={s.queued}
+                  approval={approvalId && openable.has(approvalId) ? { title: s.openApproval, open: () => router.push({ pathname: "/approvals/[id]", params: { id: approvalId } }) } : null}
+                />
+              );
+            }}
             viewabilityConfig={EDGE_ON_SCREEN}
             onViewableItemsChanged={onViewableItemsChanged}
           />
@@ -448,9 +522,9 @@ export default function Chat() {
         {batch !== null ? (
           <View style={styles.batch}>
             <Text style={type.cardTitle}>
-              {s.mailTitle} ({batch.length})
+              {batchAsk === "pay-stub" ? s.photographPayStub : s.mailTitle} ({batch.length})
             </Text>
-            <Text style={[type.small, styles.batchBody]}>{s.mailBody}</Text>
+            <Text style={[type.small, styles.batchBody]}>{batchAsk === "pay-stub" ? s.payStubBody : s.mailBody}</Text>
             <View style={styles.batchRow}>
               <Pressable onPress={batchAddPhoto} disabled={batchBusy} style={styles.chip} accessibilityRole="button">
                 <Ionicons name="camera-outline" size={18} color={colors.text} />
@@ -460,10 +534,12 @@ export default function Chat() {
                 <Ionicons name="images-outline" size={18} color={colors.text} />
                 <Text style={styles.chipText}>{s.attachPhoto}</Text>
               </Pressable>
-              <Pressable onPress={batchAddVideo} disabled={batchBusy} style={styles.chip} accessibilityRole="button">
-                <Ionicons name="videocam-outline" size={18} color={colors.text} />
-                <Text style={styles.chipText}>{s.mailAddVideo}</Text>
-              </Pressable>
+              {batchAsk === "pay-stub" ? null : (
+                <Pressable onPress={batchAddVideo} disabled={batchBusy} style={styles.chip} accessibilityRole="button">
+                  <Ionicons name="videocam-outline" size={18} color={colors.text} />
+                  <Text style={styles.chipText}>{s.mailAddVideo}</Text>
+                </Pressable>
+              )}
             </View>
             <View style={styles.batchRow}>
               <Pressable
@@ -474,7 +550,14 @@ export default function Chat() {
               >
                 <Text style={styles.sendText}>{s.mailSend}</Text>
               </Pressable>
-              <Pressable onPress={() => setBatch(null)} style={styles.ghostBtn} accessibilityRole="button">
+              <Pressable
+                onPress={() => {
+                  setBatch(null);
+                  setBatchAsk(null);
+                }}
+                style={styles.ghostBtn}
+                accessibilityRole="button"
+              >
                 <Text style={styles.ghostText}>{s.mailCancel}</Text>
               </Pressable>
             </View>
@@ -525,6 +608,22 @@ export default function Chat() {
             >
               <Ionicons name="mic-outline" size={20} color={recording ? colors.alert : colors.text} />
               <Text style={styles.attachText}>{recording ? s.recording : s.attachVoice}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {note ? (
+          <View style={styles.crisisNotice} accessibilityRole="alert">
+            <View style={styles.flex}>
+              <Text style={type.small}>{note.text}</Text>
+              {note.opensSettings ? (
+                <Pressable onPress={() => void Linking.openSettings().catch(() => undefined)} accessibilityRole="button" style={styles.approvalLink}>
+                  <Text style={styles.approvalLinkText}>{s.openSettings}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Pressable onPress={() => setMediaNote(null)} style={styles.iconBtn} accessibilityRole="button" accessibilityLabel={s.close}>
+              <Ionicons name="close-outline" size={24} color={colors.text} />
             </Pressable>
           </View>
         ) : null}
@@ -585,6 +684,10 @@ const styles = StyleSheet.create({
   crisisNotice: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.envelope },
   screen: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
+  flexShrink: { flexShrink: 1 },
+  working: { flexDirection: "row", alignItems: "center", gap: 10 },
+  approvalLink: { minHeight: tapTarget, justifyContent: "center" },
+  approvalLinkText: { color: colors.pen, fontSize: 16, fontWeight: "600" },
   header: { paddingHorizontal: 20, paddingTop: 16, maxWidth: 640, width: "100%", alignSelf: "center" },
   offline: { backgroundColor: colors.envelope, borderRadius: radius.sm, padding: 10, marginBottom: 8 },
   retry: { marginTop: 8 },

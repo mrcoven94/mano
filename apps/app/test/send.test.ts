@@ -65,6 +65,49 @@ describe("submitMessage", () => {
     expect(pending[0]?.held).toBe(true);
   });
 
+  describe("watching a send", () => {
+    const photo = [{ kind: "photo" as const, name: "m.jpg", mimeType: "image/jpeg", bytesB64: "AA==" }];
+
+    it("goes from sending to sent, with the reply delivered first", async () => {
+      const outbox = new Outbox(new MemoryStore());
+      const { client } = stubClient(async () => ({ id: "r" }));
+      const steps: string[] = [];
+      await submitMessage(
+        client,
+        sessionFor("alice"),
+        outbox,
+        "mail",
+        photo,
+        () => steps.push("reply"),
+        (item, phase) => steps.push(`${item.text}:${phase}`),
+      );
+      expect(steps).toEqual(["mail:sending", "reply", "mail:sent"]);
+    });
+
+    it("ends in failed and keeps the mail when the network fails, with no reply", async () => {
+      const outbox = new Outbox(new MemoryStore());
+      const { client } = stubClient(async () => {
+        throw new Error("offline");
+      });
+      const phases: string[] = [];
+      const report = await submitMessage(client, sessionFor("alice"), outbox, "mail", photo, undefined, (_item, phase) => phases.push(phase));
+      expect(phases).toEqual(["sending", "failed"]);
+      expect(report.kept).toEqual([report.opId]);
+    });
+
+    it("ends in failed when the outcome is unknown or the session ended", async () => {
+      for (const error of [new UnreconciledSendError("x"), new AuthError()]) {
+        const outbox = new Outbox(new MemoryStore());
+        const { client } = stubClient(async () => {
+          throw error;
+        });
+        const phases: string[] = [];
+        await submitMessage(client, sessionFor("alice"), outbox, "mail", photo, undefined, (_item, phase) => phases.push(phase)).catch(() => undefined);
+        expect(phases).toEqual(["sending", "failed"]);
+      }
+    });
+  });
+
   it("reuses the same operation ID across a retry", async () => {
     const outbox = new Outbox(new MemoryStore());
     const seen: (string | undefined)[] = [];
