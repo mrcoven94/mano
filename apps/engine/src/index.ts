@@ -96,7 +96,15 @@
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
 //   GET  /api/persons/:id/ws?ticket=           chat socket (closes when the session expires)
+//   GET  /api/persons/:id/shares               { active, revoked } what the person shares, with open document
+//                                              requests (session or agent; src/case-sharing.ts)
 //   GET  /api/orgs/:id/cases                   staff only
+//   GET  /api/orgs/:id/cases/:caseId           staff only: what the person shared; 404 when not shared or revoked
+//   POST /api/orgs/:id/cases/:caseId/document-requests  { documentKind, idempotencyKey } staff only: the person
+//                                              gets one text; 404 when not shared or revoked
+//   GET  /api/orgs/:id/cases/:caseId/documents/:docId   staff only: bytes the person sent; 404 when not shared or revoked
+//   POST /api/staff/session                    { orgId } a staff session for the sandbox org only, for the
+//                                              sandbox portal's bearer token (SANDBOX_PORTAL_TOKEN)
 //   POST /api/admin/persons/:id/synthetic      { synthetic } (operator secret)
 //
 // Bodies are capped at about 1 MB for actions and 15 MB for uploads.
@@ -154,12 +162,14 @@ import {
   authenticateService,
   serviceMayUse,
   getSessionSecret,
+  mintSessionToken,
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
 import { checkerSetting, createExecutor, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
+import { SANDBOX_ORG_ID } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
 import {
@@ -194,6 +204,12 @@ function orgStub(env: Env, orgId: string) {
 }
 
 const FORBIDDEN = () => Response.json({ error: "Forbidden." }, { status: 403 });
+
+// Staff never learn why a case is absent: never shared, revoked and
+// expired read the same.
+const NOT_SHARED = () => Response.json({ error: "This case is not shared with this organization." }, { status: 404 });
+
+const STAFF_SESSION_SECONDS = 15 * 60;
 
 // A write prepared under a conversation generation a delete has moved
 // past: nothing was written. The answer carries no state of the new one.
@@ -531,6 +547,18 @@ export default {
       return Response.json(result);
     }
 
+    if (url.pathname === "/api/staff/session" && request.method === "POST") {
+      const token = bearerToken(request);
+      if (!env.SANDBOX_PORTAL_TOKEN || !token || !secretsEqual(token, env.SANDBOX_PORTAL_TOKEN)) return FORBIDDEN();
+      const read = await readCappedJson(request, MAX_ACTION_BODY);
+      if (!read.ok) return read.response;
+      if ((read.value as { orgId?: unknown } | null)?.orgId !== SANDBOX_ORG_ID) return FORBIDDEN();
+      const configured = getSessionSecret(env);
+      if (!configured) return Response.json({ error: "Sessions are not configured." }, { status: 503 });
+      const session = await mintSessionToken({ kind: "staff", sub: "sandbox-portal-staff", org: SANDBOX_ORG_ID }, configured.secret, STAFF_SESSION_SECONDS);
+      return Response.json({ token: session, expiresInSeconds: STAFF_SESSION_SECONDS });
+    }
+
     const adminMatch = url.pathname.match(/^\/api\/admin\/persons\/([^/]+)\/synthetic$/);
     if (adminMatch && request.method === "POST") {
       if (!env.OPERATOR_SECRET) {
@@ -734,6 +762,9 @@ export default {
           return Response.json({ error: message }, { status: 500 });
         }
       }
+      if (rest === "/shares" && request.method === "GET") {
+        return Response.json(await agent.listShares(subject));
+      }
       if (rest === "/memory" && request.method === "GET") {
         return Response.json({ memories: await agent.listMemory(subject) });
       }
@@ -816,9 +847,40 @@ export default {
       const rest = orgMatch[2] ?? "";
       // Cases reach the org only through consent messages from a person's
       // agent; there is deliberately no share route here.
+      const org = stub as unknown as OrgAgent;
       if (rest === "/cases" && request.method === "GET") {
-        const cases = await (stub as unknown as OrgAgent).listCases(orgId);
-        return Response.json({ cases });
+        const cases = await org.listCases(orgId);
+        return Response.json({ cases: cases.map(({ personId: _personId, ...shared }) => shared) });
+      }
+      const caseMatch = rest.match(/^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/);
+      if (caseMatch) {
+        const caseId = decodeURIComponent(caseMatch[1]);
+        const sub = caseMatch[2] ?? "";
+        if (sub === "" && request.method === "GET") {
+          const view = await org.getCase(orgId, caseId);
+          return view ? Response.json({ case: view }) : NOT_SHARED();
+        }
+        if (sub === "/document-requests" && request.method === "POST") {
+          const read = await readCappedJson(request, MAX_ACTION_BODY);
+          if (!read.ok) return read.response;
+          const { documentKind, idempotencyKey } = (read.value ?? {}) as { documentKind?: unknown; idempotencyKey?: unknown };
+          const out = await org.requestDocument(orgId, caseId, { documentKind, idempotencyKey });
+          if (out.status === "not_shared") return NOT_SHARED();
+          if (out.status === "bad_input") return Response.json({ error: out.reason }, { status: 400 });
+          if (out.status === "unavailable") return Response.json({ error: "Could not reach the person's agent. Send it again." }, { status: 503 });
+          return Response.json(out, { status: 201 });
+        }
+        if (sub.startsWith("/documents/") && request.method === "GET") {
+          const document = await org.readDocument(orgId, caseId, decodeURIComponent(sub.slice("/documents/".length)));
+          if (!document) return NOT_SHARED();
+          return new Response(base64ToBytes(document.contentB64) as BodyInit, {
+            headers: {
+              "content-type": "application/octet-stream",
+              "content-disposition": `attachment; filename="${document.name.replace(/["\r\n]/g, "_")}"`,
+              "cache-control": "no-store",
+            },
+          });
+        }
       }
       return new Response("Not found", { status: 404 });
     }

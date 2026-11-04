@@ -115,7 +115,7 @@ describe("LAP-747: a consent write that fails rolls back the receipt with it", (
 
     // The revocation's own write fails once: its table is missing.
     await runInDurableObject(stub, (_i, state) => {
-      state.storage.sql.exec("DROP TABLE revoked_cases");
+      state.storage.sql.exec("DROP TABLE revoked_shares");
     });
     const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747-fails" });
     const key = revoke.approval!.idempotencyKey;
@@ -131,7 +131,7 @@ describe("LAP-747: a consent write that fails rolls back the receipt with it", (
     expect(await consents(name)).toHaveLength(1);
 
     await runInDurableObject(stub, (_i, state) => {
-      state.storage.sql.exec("CREATE TABLE IF NOT EXISTS revoked_cases(case_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL)");
+      state.storage.sql.exec("CREATE TABLE IF NOT EXISTS revoked_shares(recipient TEXT NOT NULL, case_id TEXT NOT NULL, revoked_at TEXT NOT NULL, PRIMARY KEY (recipient, case_id))");
     });
     expect((await person.approve(revoke.approval!.id, name)).status).toBe("reconciled");
     expect(await consents(name)).toHaveLength(0);

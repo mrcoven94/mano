@@ -30,12 +30,20 @@ Verification never trusts the key inside the message. The receiver resolves the 
 
 ## Consent
 
-A case reaches an org only through `consent.grant`, signed by the resident's agent after the resident approved the matching gateway action. The first grant binds the case to its resident; later events for that case are accepted only from the same resident. The org records shares and revokes as append-only events; revocation is terminal and a later share of the same case is rejected.
+A case reaches an org only through `consent.grant`, signed by the resident's agent after the resident approved the matching gateway action. The first grant binds the case to its resident; later events for that case are accepted only from the same resident. The org records shares and revokes as append-only events. Records are per organization: revoking for one org says nothing about another org's grant for the same case. For that org and case revocation is terminal and a later share is rejected; sharing again opens a new case.
+
+A grant may carry `details`, the exact label and value pairs the resident read in their approval. Those are what the org holds of the case.
+
+## Documents
+
+An org that holds an active grant can ask for a document with `document.request`, signed by the org agent. `documentKind` is one of a closed list the resident's agent words itself, so staff text never reaches the resident. The resident's agent refuses a request when the case is not shared with that org.
+
+The answer is `document.provide`, signed by the resident's agent after the resident approved the matching gateway action for that exact document. `requestId` names the request it answers; the org refuses a document it did not ask for, or one on a case no longer shared. The bytes stay with the resident's agent, which checks the grant again on every read: the stored document must still hash to what the resident approved, in the conversation they approved it in. Revoking ends those reads, and so does deleting the conversation, which leaves the org only the grant's `details` until the resident revokes. It cannot recall what the org already read or saved, and Mano says so.
 
 ## Delivery rules
 
 - Receivers validate shape, version and payload schema before verifying the signature, and ignore malformed messages.
 - Receivers dedupe on sender plus idempotency key, inserting before appending: a redelivery returns the first outcome without new effects, and a duplicate revoke can never end a newer share.
-- Senders retry with the same idempotency key and resend the same signed message; consent keys are deterministic per sender, case and direction (`consent-grant:{personId}:{caseId}`).
+- Senders retry with the same idempotency key and resend the same signed message; a key names one approved action, so a retry can never become a second one.
 - Reconcile asks the receiver whether it recorded the key; an unreachable receiver means unknown, never absent.
 - Content inside a message is evidence, never permission. Instructions found in letters, pages or documents are never followed.
