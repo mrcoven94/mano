@@ -226,14 +226,18 @@ export class HoldCalls {
   // who was called. The rows stay with only their opaque IDs, because a dial
   // in flight can still name a leg, and that leg has to be hung up.
   async conversationDeleted(): Promise<void> {
-    const calls = this.deps.sql.exec("SELECT call_json FROM hold_calls").toArray().map((row) => JSON.parse(row.call_json as string) as HoldCall);
-    this.deps.transaction(() => {
-      for (const call of calls) this.write({ ...call, officeName: "", officeNumber: "", menu: null });
+    // Every call ends in this one step, so no event can act on one while
+    // another's hang up waits. One stuck hang up does not hold up the others.
+    const steps = this.deps.transaction(() => {
       this.deps.sql.exec("DELETE FROM hold_call_events");
+      return this.deps.sql.exec("SELECT call_json FROM hold_calls").toArray().map((row) => {
+        const call = JSON.parse(row.call_json as string) as HoldCall;
+        const out = stepHoldCall({ ...call, officeName: "", officeNumber: "", menu: null }, { kind: "deleted" });
+        this.write(out.call);
+        return { ...out, moved: out.call.state !== call.state };
+      });
     });
-    for (const call of calls) {
-      if (call.state !== "ended") await this.apply(call.id, { kind: "deleted" });
-    }
+    await Promise.allSettled(steps.map((step) => this.finish(step)));
   }
 
   private capSeconds(services: CallServices): number {
@@ -252,8 +256,11 @@ export class HoldCalls {
       this.write(out.call);
       return { ...out, moved: out.call.state !== call.state };
     });
-    if (!step) return;
-    if (step.moved) await this.deps.audit(`hold_call.${step.call.state}`, id);
+    if (step) await this.finish(step);
+  }
+
+  private async finish(step: { call: HoldCall; effects: HoldEffect[]; moved: boolean }): Promise<void> {
+    if (step.moved) await this.deps.audit(`hold_call.${step.call.state}`, step.call.id);
     await this.run(step.call, step.effects);
   }
 
@@ -266,26 +273,33 @@ export class HoldCalls {
       } catch {
         // A hang up that fails leaves its leg open, which keeps blocking a
         // replacement until a webhook confirms it or its cap has passed.
-        // Anything else leaves the call in a state Mano did not intend, so it ends.
+        // Anything else leaves the call in a state Mano did not intend, so it
+        // ends, unless the call has moved on and the failure no longer matters.
+        // Each await here lets events in, so the check comes after it too.
         if (effect.do === "hang_up") {
           await this.deps.audit("hold_call.hang_up_failed", call.id);
           continue;
         }
+        if (!this.stillApplies(call.id, effect)) continue;
         await this.deps.audit("hold_call.effect_failed", call.id);
+        if (!this.stillApplies(call.id, effect)) continue;
         await this.apply(call.id, { kind: "provider_failed" });
         return;
       }
     }
   }
 
-  // Audits and timers before an effect let other events in, so a step's
-  // effects may be out of date by the time they run. Nothing awaits between
-  // this check and the provider call.
+  // Whether the call is still where this effect belongs. Audits, timers and
+  // provider calls let other events in, so a step's effects, and a failure of
+  // one, may be out of date. Nothing awaits between this check and what it
+  // guards.
   private stillApplies(id: string, effect: HoldEffect): boolean {
     const call = this.read(id);
     switch (effect.do) {
       case "dial_person":
-        return call?.state === "ringing_person" && call.personCallId === null && call.legs.person === "none";
+        return call?.state === "ringing_person" && call.personCallId === null;
+      case "arm_ring_limit":
+        return call?.state === "ringing_person";
       case "bridge":
         return call?.state === "bridged" && call.officeCallId === effect.officeCallId && call.personCallId === effect.personCallId;
       case "send_dtmf":

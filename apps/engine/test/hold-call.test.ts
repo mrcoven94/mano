@@ -25,6 +25,9 @@ class FakeProvider implements CallProvider {
   // While set, a dial stays pending. Polled rather than awaited, because a
   // test and the agent run in different request contexts.
   holdDial = false;
+  holdListen = false;
+  listensTried = 0;
+  failListen = false;
   failHangUp = false;
   holdHangUp = false;
   hangUpsTried = 0;
@@ -40,6 +43,9 @@ class FakeProvider implements CallProvider {
     this.ops.push(`dtmf ${id} ${digits}`);
   }
   async startListening(id: string) {
+    this.listensTried += 1;
+    while (this.holdListen) await new Promise((r) => setTimeout(r, 5));
+    if (this.failListen) throw new Error("listen failed");
     this.ops.push(`listen ${id}`);
   }
   async bridge(office: string, person: string) {
@@ -752,6 +758,121 @@ describe("the person's dial follows the same rules as the office's", () => {
     const [office, person] = h.provider.placed;
     expect(person!.maxSeconds).toBe(office!.maxSeconds);
     expect(person!.idempotencyKey).not.toBe(office!.idempotencyKey);
+  });
+});
+
+describe("deleting the conversation with more than one call on record", () => {
+  it("ends every call in one step, so audio on the second cannot ring the person while the first hangs up", async () => {
+    const h = setup({}, async () => "hello, this is Sam");
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, {});
+      // The first call is bridged and past its cap, so a second is allowed.
+      await p.calls.begin(p.req);
+      await p.event("office", "answered", "a1");
+      await p.calls.onAudio(holdCallId(h), new Uint8Array([1]));
+      await p.event("person", "answered", "a2");
+      const row = state.storage.sql.exec("SELECT id, call_json FROM hold_calls").toArray()[0] as { id: string; call_json: string };
+      const expired = { ...JSON.parse(row.call_json), liveUntilMs: Date.now() - 1 };
+      state.storage.sql.exec("UPDATE hold_calls SET call_json = ?, blocks_until_ms = ? WHERE id = ?", JSON.stringify(expired), expired.liveUntilMs, row.id);
+
+      await p.calls.begin({ ...p.req, idempotencyKey: "paused-2" });
+      const second = h.provider.placed[2]!.holdCallId;
+      await p.calls.onEvent({ eventId: "b1", holdCallId: second, personId: h.person, leg: "office", kind: "answered", providerCallId: "office-leg" });
+
+      h.provider.holdHangUp = true;
+      const deleting = p.deleteConversation();
+      const states = state.storage.sql.exec("SELECT call_json FROM hold_calls").toArray().map((c) => JSON.parse(c.call_json as string).state);
+      expect(states).toEqual(["ended", "ended"]);
+      while (h.provider.hangUpsTried === 0) await new Promise((r) => setTimeout(r, 1));
+      await p.calls.onAudio(second, new Uint8Array([1]));
+      h.provider.holdHangUp = false;
+      await deleting;
+    });
+    expect(h.provider.ops.filter((op) => op.startsWith("place person"))).toHaveLength(1);
+  });
+});
+
+describe("an effect that fails after the call moved on", () => {
+  const humanLine = async () => "hello, this is Sam";
+
+  it("keeps a bridged call when a pending listen fails late", async () => {
+    const h = setup({}, humanLine);
+    await approve(h);
+    h.provider.holdListen = true;
+    const answering = webhook(h, "office", "answered", "e1");
+    await vi.waitFor(() => expect(h.provider.listensTried).toBe(1), { timeout: 5000, interval: 10 });
+    await hear(h);
+    await webhook(h, "person", "answered", "e2");
+    expect(h.provider.ops).toContain("bridge office-leg person-leg");
+    h.provider.failListen = true;
+    h.provider.holdListen = false;
+    await answering;
+    expect(h.provider.ops.filter((op) => op.startsWith("hang_up"))).toEqual([]);
+    await nothingQueued(h);
+  });
+
+  it("keeps a bridged call when the call moved on while the failure was being logged", async () => {
+    const h = setup({}, humanLine);
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, { audit: "hold_call.effect_failed" });
+      await p.calls.begin(p.req);
+      h.provider.failListen = true;
+      const answering = p.event("office", "answered", "e1");
+      await p.reached();
+      await p.calls.onAudio(holdCallId(h), new Uint8Array([1]));
+      await p.event("person", "answered", "e2");
+      p.release();
+      await answering;
+    });
+    expect(h.provider.ops).toContain("bridge office-leg person-leg");
+    expect(h.provider.ops.filter((op) => op.startsWith("hang_up"))).toEqual([]);
+  });
+
+  it("keeps a call the person answered while a failed dial was being logged", async () => {
+    const h = setup({}, humanLine);
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, { audit: "hold_call.effect_failed" });
+      await p.calls.begin(p.req);
+      await p.event("office", "answered", "e1");
+      h.provider.failPlace = new TimeoutError();
+      const hearing = p.calls.onAudio(holdCallId(h), new Uint8Array([1]));
+      await p.reached();
+      await p.event("person", "answered", "e2");
+      p.release();
+      await hearing;
+    });
+    expect(h.provider.ops).toContain("bridge office-leg person-leg");
+    expect(h.provider.ops.filter((op) => op.startsWith("hang_up"))).toEqual([]);
+  });
+
+  it("still ends the call when a listen fails and nothing moved on", async () => {
+    const h = setup();
+    await approve(h);
+    h.provider.failListen = true;
+    await webhook(h, "office", "answered", "e1");
+    expect(h.provider.ops).toContain("hang_up office-leg");
+    expect(await textSent(h)).toContain("Something went wrong");
+  });
+
+  it("still ends the call when the person's dial fails and nothing moved on", async () => {
+    const h = setup({}, humanLine);
+    await approve(h);
+    await webhook(h, "office", "answered", "e1");
+    h.provider.failPlace = new TimeoutError();
+    await hear(h);
+    expect(h.provider.ops).toContain("hang_up office-leg");
+    expect(await textSent(h)).toContain("Something went wrong");
+  });
+
+  it("still ends the call when the bridge fails and nothing moved on", async () => {
+    const h = setup({}, humanLine);
+    await approve(h);
+    await webhook(h, "office", "answered", "e1");
+    await hear(h);
+    h.provider.failBridge = true;
+    await webhook(h, "person", "answered", "e2");
+    expect(h.provider.ops).toContain("hang_up office-leg");
+    expect(await textSent(h)).toContain("Something went wrong");
   });
 });
 
