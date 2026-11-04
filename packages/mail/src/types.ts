@@ -68,10 +68,16 @@ export interface LetterFields {
   excerpt: string;
 }
 
+// What the reader says a document appears to be. It names a document,
+// nothing more: no kind says a person qualifies for anything.
+export type DocumentKind = "pay_stub" | "utility_bill" | "benefits_letter" | "id" | "unknown";
+
 export interface Letter {
   id: string;
   pages: LetterPage[];
   fields: LetterFields;
+  // Absent when the reading did not say.
+  documentKind?: DocumentKind;
   // Every page was read and no text on them holds a date.
   noDateInText?: boolean;
 }

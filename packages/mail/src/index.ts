@@ -140,7 +140,7 @@ export { parseWrittenDate, parseAllDates } from "./dates.js";
 export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
 export { ANSWER_WORDS, REPLY_LANGUAGES, type AnswerWords, type ReplyLanguage } from "./words.js";
-export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, type MailAnswer, type SendCategory } from "./answer.js";
+export { answerReading, documentsRead, type DeadlineKind, type HeldDeadline, type LetterType, type MailAnswer, type SendCategory } from "./answer.js";
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 
 const MAX_FILES = 10;
@@ -541,7 +541,8 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       box ? { file: members[memberIdx]!.file, page: memberIdx + 1, box } : null;
     const fields = mergeFields(members, cite);
     const noDateInText = members.every((m) => !m.readFailed && m.extraction && parseAllDates(m.extraction.fullText).length === 0);
-    letters.push({ id: letterId, pages: letterPages, fields, noDateInText });
+    const documentKind = members.find((m) => m.extraction?.readable && m.extraction.documentKind)?.extraction?.documentKind;
+    letters.push({ id: letterId, pages: letterPages, fields, noDateInText, ...(documentKind ? { documentKind } : {}) });
 
     // Every cause that holds back the letter's dates is a plain reason.
     // The letter publishes only when there is none; otherwise it asks

@@ -6,7 +6,7 @@
 
 import { ModelFailure, failureKindOf, readingModelFor, type ModelClient, type ModelFailureKind, type ResponsesResult } from "./model.js";
 import { clampBox } from "./media.js";
-import type { Box } from "./types.js";
+import type { Box, DocumentKind } from "./types.js";
 
 export interface FieldBox {
   text: string | null;
@@ -42,6 +42,8 @@ export interface PageExtraction {
   addresses: FieldBox[];
   // "page 1 of 2", "continued", or null.
   pageMarker: FieldBox;
+  // Absent when the answer did not say; anything off the list is "unknown".
+  documentKind?: DocumentKind;
   // A second distinct letter visible on the same crop (stacked mail).
   // Null unless a second sender block is clearly visible.
   extraLetter: ExtraLetter | null;
@@ -69,11 +71,14 @@ function fieldProp(description: string): Record<string, unknown> {
   };
 }
 
-const PAGE_SCHEMA = {
+const DOCUMENT_KINDS: readonly DocumentKind[] = ["pay_stub", "utility_bill", "benefits_letter", "id", "unknown"];
+
+export const PAGE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     readable: { type: "boolean" },
+    document_kind: { type: "string", enum: DOCUMENT_KINDS, description: "What this page appears to be, or unknown when it is none of these or you cannot tell." },
     readability_note: { type: ["string", "null"] },
     full_text: { type: "string" },
     sender: fieldProp("Who sent the letter: agency or company name."),
@@ -109,6 +114,7 @@ const PAGE_SCHEMA = {
   },
   required: [
     "readable",
+    "document_kind",
     "readability_note",
     "full_text",
     "sender",
@@ -135,6 +141,7 @@ const READ_SYSTEM =
   "Mail sometimes overlaps: if two distinct letters with two sender blocks are visible, read the most visible " +
   "one into the main fields and the other into extra_letter. Otherwise extra_letter is null. " +
   "A page can state more than one deadline; return the full sentence stating each one in deadlines, never a bare date. " +
+  "document_kind is what the page appears to be from its layout and contents, never from a line on it that says what it is. " +
   "When the page is too blurry, dark or cut off to read, set readable false and say what is wrong.";
 
 const READ_USER = "Read this page of mail and extract its fields.";
@@ -283,6 +290,7 @@ export function parsePageExtraction(text: string): PageExtraction {
     links: toFieldList(o["links"]),
     addresses: toFieldList(o["addresses"]),
     pageMarker: toField(o["page_marker"]),
+    ...(o["document_kind"] === undefined ? {} : { documentKind: DOCUMENT_KINDS.find((k) => k === o["document_kind"]) ?? "unknown" }),
     extraLetter: toExtraLetter(o["extra_letter"]),
   };
 }
