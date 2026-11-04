@@ -25,6 +25,8 @@ export type CheckerSetting =
   | { kind: "guardian"; url: string; token: string; proxyAuth?: { keyId: string; secret: string } }
   | { kind: "guardian-misconfigured" };
 
+const HTTP_URL = /^https?:\/\//i;
+
 // None of the four set keeps the local rules. A deployed Guardian needs
 // all four: Modal refuses a request without its key pair, so a URL and
 // token alone would report healthy while every check failed. Only a
@@ -37,7 +39,7 @@ export function checkerSetting(env: GuardianEnv): CheckerSetting {
   const keyId = env.MANO_GUARDIAN_KEY_ID?.trim() ?? "";
   const secret = env.MANO_GUARDIAN_KEY_SECRET?.trim() ?? "";
   if (url === "" && token === "" && keyId === "" && secret === "") return { kind: "local-rules" };
-  if (!/^https?:\/\//i.test(url) || token === "" || (keyId === "") !== (secret === "")) {
+  if (!HTTP_URL.test(url) || token === "" || (keyId === "") !== (secret === "")) {
     return { kind: "guardian-misconfigured" };
   }
   if (keyId === "" && !isLocalHost(url)) return { kind: "guardian-misconfigured" };

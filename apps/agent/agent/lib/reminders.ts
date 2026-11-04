@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 
 export const REMINDER_PREFIX = "Reminder: ";
+const NON_WORD_RUN = /[^\p{L}\p{N}]+/gu;
 
 // A reminder's identity comes from the signed turn, the time the person
 // asked for before any zone applies (lib/when.ts, ParsedWhen.asked) and
@@ -33,6 +34,6 @@ export function placeClaimId(base: string, attempt: string, place: number): stri
 }
 
 export function sameWords(a: string, b: string): boolean {
-  const words = (t: string) => t.replace(REMINDER_PREFIX, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const words = (t: string) => t.replace(REMINDER_PREFIX, "").toLowerCase().replace(NON_WORD_RUN, " ").trim();
   return words(a) === words(b);
 }

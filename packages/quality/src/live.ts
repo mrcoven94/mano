@@ -68,11 +68,13 @@ const ADDRESS_RE = /\b\d{1,5}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+(St
 const CASE_NO_RE = /\b(case|claim|member|id)\s*(#|number|no\.?)?\s*:?\s*[A-Z0-9-]{4,}\b/gi;
 const NAME_INTRO_RE = /\b([Mm]y name is|[Tt]his is|[Ss]oy|[Mm]e llamo)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/g;
 const GREETING_NAME_RE = /\b([Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Tt]hanks|[Tt]hank you|[Ss]incerely|[Rr]egards|[Bb]est|[Gg]racias)[, ]+([Ii]'m|[Ii] am|[Tt]his is)?\s*([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)/g;
+const WHITESPACE_RE = /\s+/;
+const CONTRIBUTOR_SUFFIX_RE = /-contributor$/i;
 // Words that follow a greeting but are never names. "Hi there" stays.
 const GREETING_NON_NAMES = new Set(["there", "all", "everyone", "everybody", "team", "teams", "folks", "friend", "friends", "again", "here", "for", "the", "your", "you", "me", "this", "that", "it", "my", "our", "so", "very"]);
 
 function maskGreeting(match: string, _greeting: string, _intro: string | undefined, name: string): string {
-  const first = (name.split(/\s+/)[0] ?? "").toLowerCase();
+  const first = (name.split(WHITESPACE_RE)[0] ?? "").toLowerCase();
   if (GREETING_NON_NAMES.has(first)) return match;
   return "[greeting]";
 }
@@ -132,7 +134,7 @@ export class LiveQuality {
     // refused. The fake judge is allowed because it never calls a model.
     // A -contributor ID is never allowed on real content, whatever the
     // configuration says, so the suffix check comes before the identity check.
-    if (deps.judge?.live && /-contributor$/i.test(deps.judge.id)) {
+    if (deps.judge?.live && CONTRIBUTOR_SUFFIX_RE.test(deps.judge.id)) {
       throw new Error("live grading refuses -contributor model IDs; real content goes to a Standard ID only");
     }
     if (deps.judge?.live && deps.judge.id !== expectedJudgeId(deps)) {

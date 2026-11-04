@@ -4,6 +4,10 @@
 // one thread everywhere, and move case data on merge. Until the engine PR
 // merges, the stand-in below implements the same shape in memory.
 
+const TRAILING_SLASH_RE = /\/$/;
+const BASE64URL_DASH_RE = /-/g;
+const BASE64URL_UNDERSCORE_RE = /_/g;
+
 export interface ThreadMessage {
   id: string;
   role: "user" | "assistant";
@@ -231,7 +235,7 @@ export class HttpEngineAccounts implements EngineAccountsPort {
 
   constructor(config: HttpEngineAccountsConfig) {
     if (!config.baseUrl || !config.serviceKey) throw new Error("Accounts are not configured.");
-    this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.baseUrl = config.baseUrl.replace(TRAILING_SLASH_RE, "");
     this.serviceKey = config.serviceKey;
     this.fetchFn = config.fetchFn ?? fetch;
   }
@@ -305,7 +309,7 @@ export function parseSessionExpiry(token: string): number | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3 || parts[0] !== "v1" || !parts[1]) return null;
-    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const b64 = parts[1].replace(BASE64URL_DASH_RE, "+").replace(BASE64URL_UNDERSCORE_RE, "/");
     const bin = typeof Buffer !== "undefined" ? Buffer.from(b64, "base64").toString("binary") : atob(b64);
     const claims = JSON.parse(bin) as { exp?: unknown };
     return typeof claims.exp === "number" ? claims.exp * 1000 : null;

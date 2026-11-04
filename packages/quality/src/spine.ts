@@ -242,8 +242,10 @@ const MARIA_PROFILE: Profile = {
   programs: [{ id: "program-1", program: said("SNAP"), state: said("IL"), caseNumber: said("R-1042") }],
 };
 
+const XML_SPECIAL_RE = /[&<>"']/g;
+
 function escapeXml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
+  return text.replace(XML_SPECIAL_RE, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 }
 
 // One screen of the stand-in fill: the portal's household step with the

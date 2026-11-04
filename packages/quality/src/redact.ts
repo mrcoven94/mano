@@ -44,8 +44,16 @@ const PROVIDERS = [
   "deepgram",
 ];
 
+const REGEXP_SPECIAL_CHARS_RE = /[.*+?^${}()|[\]\\]/g;
+const WHITESPACE_RUN_RE = /\s+/g;
+// Judge-prefixed IDs, matched before family patterns split them.
+const JUDGE_ID_RE = /\bjudge:[a-z0-9_.-]+/gi;
+// Bare model IDs: vedette-spark-1.3-contributor and similar.
+const BARE_MODEL_ID_RE = /\b[a-z]+-(?:spark|wonder|glimmer|contributor)(?:-[a-z0-9.]+)*\b/gi;
+const REPEATED_MODEL_RE = /\[model\](?:\s*\[model\])+/g;
+
 function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return s.replace(REGEXP_SPECIAL_CHARS_RE, "\\$&");
 }
 
 function familyPattern(family: { name: string; variants: string[] }): RegExp {
@@ -56,15 +64,14 @@ function familyPattern(family: { name: string; variants: string[] }): RegExp {
 }
 
 function phrasePattern(phrase: string): RegExp {
-  return new RegExp(`\\b${escapeRegExp(phrase).replace(/\s+/g, "\\s+")}\\b`, "gi");
+  return new RegExp(`\\b${escapeRegExp(phrase).replace(WHITESPACE_RUN_RE, "\\s+")}\\b`, "gi");
 }
 
 function buildPatterns(): RegExp[] {
   const patterns: RegExp[] = [
     // Judge-prefixed IDs first, before family patterns split them.
-    /\bjudge:[a-z0-9_.-]+/gi,
-    // Bare model IDs: vedette-spark-1.3-contributor and similar.
-    /\b[a-z]+-(?:spark|wonder|glimmer|contributor)(?:-[a-z0-9.]+)*\b/gi,
+    JUDGE_ID_RE,
+    BARE_MODEL_ID_RE,
   ];
   // Longer phrases first so "SAM 3.1" wins over "SAM 3".
   const phrases = [...PRODUCT_NAMES].sort((a, b) => b.length - a.length);
@@ -82,7 +89,7 @@ export function stripModelNames(text: string): string {
     re.lastIndex = 0;
     out = out.replace(re, "[model]");
   }
-  return out.replace(/\[model\](?:\s*\[model\])+/g, "[model]");
+  return out.replace(REPEATED_MODEL_RE, "[model]");
 }
 
 export interface StaffCase {

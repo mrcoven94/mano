@@ -27,6 +27,7 @@ export interface ReplayFixture {
 }
 
 export const REPLAY_FIXTURE_PATH = new URL("./smoke-replay.json", import.meta.url);
+const RUN_ID_SEPARATORS_RE = /[-:T]/g;
 
 export function loadReplayFixture(): ReplayFixture {
   return JSON.parse(readFileSync(REPLAY_FIXTURE_PATH, "utf8")) as ReplayFixture;
@@ -146,7 +147,7 @@ export async function runReplay(loaded: ReplayFixture = loadReplayFixture()): Pr
   const judge = new FakeJudge();
   const bench = await runBench({ onlyCaseIds: new Set(ids), judge, dns: new LocalDns(), pathSet, env: {}, skipCalibration: true });
   const report = finishReport(bench.report, {
-    runId: `replay-${startedAt.slice(0, 16).replace(/[-:T]/g, "")}`,
+    runId: `replay-${startedAt.slice(0, 16).replace(RUN_ID_SEPARATORS_RE, "")}`,
     startedAt, finishedAt: new Date().toISOString(), gitSha: null, broken: false,
     paths: bench.paths, judge, dns: "local", env: {},
   }, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: line.model });

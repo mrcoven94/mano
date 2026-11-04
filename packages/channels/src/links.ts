@@ -23,6 +23,9 @@ const LINK_PATTERN =
   /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
 
+const TRAILING_SLASH_RE = /\/$/;
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 export function extractLinks(text: string): string[] {
   const found = new Set<string>();
   for (const match of text.match(LINK_PATTERN) ?? []) {
@@ -47,15 +50,15 @@ export class LinkChecker {
 
   constructor(opts: LinkCheckerOptions = {}) {
     this.fetchFn = opts.fetchFn ?? boundFetch;
-    this.securityBase = (opts.securityBase ?? SECURITY_DOH_BASE).replace(/\/$/, "");
-    this.familyBase = (opts.familyBase ?? FAMILY_DOH_BASE).replace(/\/$/, "");
+    this.securityBase = (opts.securityBase ?? SECURITY_DOH_BASE).replace(TRAILING_SLASH_RE, "");
+    this.familyBase = (opts.familyBase ?? FAMILY_DOH_BASE).replace(TRAILING_SLASH_RE, "");
     this.timeoutMs = opts.timeoutMs ?? 10000;
   }
 
   async checkUrl(url: string, family = false): Promise<LinkCheckResult> {
     let host: string;
     try {
-      const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`;
+      const candidate = URL_SCHEME_RE.test(url) ? url : `https://${url}`;
       const parsed = new URL(candidate);
       if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         return { ok: false, reason: "bad_url", host: "" };

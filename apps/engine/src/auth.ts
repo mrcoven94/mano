@@ -56,14 +56,20 @@ export function sessionConfigured(env: SessionEnv): boolean {
   return getSessionSecret(env) !== null;
 }
 
+const PLUS = /\+/g;
+const SLASH = /\//g;
+const PADDING = /=+$/;
+const DASH = /-/g;
+const UNDERSCORE = /_/g;
+
 function b64urlEncode(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(s).replace(PLUS, "-").replace(SLASH, "_").replace(PADDING, "");
 }
 
 function b64urlDecode(s: string): Uint8Array {
-  const padded = s.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = s.replace(DASH, "+").replace(UNDERSCORE, "/");
   const bin = atob(padded);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
