@@ -1896,7 +1896,15 @@ export class ConversationRunner {
   // closed, opted out, deleted) is a handled 200. noReplay: the provider
   // gets one try, and a send not accepted answers failed instead of being
   // replayed, on an alarm or otherwise.
-  async sendAgentText(opts: { key: string; text: string; generation: number; noReplay?: boolean }): Promise<{
+  async sendAgentText(opts: {
+    key: string;
+    text: string;
+    generation: number;
+    noReplay?: boolean;
+    // Set when a STOP or a close since then must cancel this text, even if
+    // the person has come back. Checked right before each bubble.
+    epoch?: number;
+  }): Promise<{
     sent: boolean;
     reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted" | "refused" | "failed";
     duplicate?: boolean;
@@ -1945,7 +1953,16 @@ export class ConversationRunner {
       const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: opts.noReplay ? NO_REPLAY_TAG : "agent" }));
       this.checkGeneration(generation);
       // Agent texts carry no reactions, so the epoch is only passed along.
-      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, this.store.meta().decorationEpoch);
+      // With no await between the check and the provider call in sendBubble.
+      for (const part of opts.epoch === undefined ? [bubbles] : bubbles.map((b) => [b])) {
+        if (opts.epoch !== undefined && this.store.meta().decorationEpoch !== opts.epoch) {
+          await this.deps.spend.release(reserveKey);
+          store.finishAgentSend(opts.key, nowMs(), "refused");
+          logger.info("agent_send_cancelled", { handle: this.logHandle(), turn });
+          return { sent: false, reason: "closed" };
+        }
+        await this.sendBubbles(turn, part, chatId, to, 0, generation, this.store.meta().decorationEpoch);
+      }
       this.checkSendsResolved(turn, generation);
       // Sent only when the provider accepted every bubble; a refusal or a
       // definite failure is final and reported as not sent.

@@ -333,9 +333,9 @@ type NoticeSender = Pick<ConversationRunner, "sendAgentText">;
 // it for another try. It is sent once, under no-replay: the turn machinery must
 // never send a stale notice after a STOP and a return, and a try that may have
 // landed is not sent again under its own key.
-async function sendNotice(runner: NoticeSender, notice: OwedNotice, logger: Logger): Promise<boolean> {
+async function sendNotice(runner: NoticeSender, notice: OwedNotice, epoch: number, logger: Logger): Promise<boolean> {
   try {
-    const out = await runner.sendAgentText({ ...notice, noReplay: true });
+    const out = await runner.sendAgentText({ ...notice, noReplay: true, epoch });
     return out.reason !== "budget" && out.reason !== "failed";
   } catch (err) {
     logger.warn("email_notice_failed", { err: errName(err) });
@@ -362,7 +362,7 @@ export async function sendOneOwedNotice(
   // A key of its own for each try, since a no-replay key answers the same way
   // for good. The cost is a second notice if a try that looked lost had landed.
   const notice = { key: `${row.key}#${row.attempts}`, text: row.text, generation: Number(row.generation) };
-  if (await sendNotice(runner, notice, logger)) return void drop();
+  if (await sendNotice(runner, notice, Number(row.epoch), logger)) return void drop();
   const attempts = Number(row.attempts) + 1;
   if (attempts >= NOTICE_MAX_ATTEMPTS) {
     logger.warn("email_notice_abandoned", { attempts });
@@ -413,12 +413,13 @@ async function storeAndQueue(
   const text = arrivalText({ reading: reading.length > 0, pdf, skipped, cut, linkFailed: delivery.linkFailed });
   // Owed until it goes: it can be the only word of a PDF or a bad link.
   const notice = { key: eventId, text, generation };
-  if (!(await sendNotice(runner, notice, logger))) owe(sql, notice, settled.decorationEpoch, nowMs() + NOTICE_RETRY_MS);
+  if (!(await sendNotice(runner, notice, settled.decorationEpoch, logger))) owe(sql, notice, settled.decorationEpoch, nowMs() + NOTICE_RETRY_MS);
   logger.info("email_received", { files: stored.length, reading: reading.length, skipped: delivery.skipped, cut, linkFailed: delivery.linkFailed });
   // Read once more after that await, with none until handleEvent has
-  // written: an inbound clears both STOP and a close.
+  // written: an inbound clears both STOP and a close, and a STOP followed by
+  // a return still ends what this email had started.
   const now = store.meta();
-  if (reading.length === 0 || now.optedOut || now.closed || now.generation !== generation) {
+  if (reading.length === 0 || now.decorationEpoch !== settled.decorationEpoch || now.optedOut || now.closed || now.generation !== generation) {
     store.recordEvent(eventId, "email", nowMs());
     return { result: "noted" };
   }

@@ -1039,6 +1039,81 @@ describe("an arrival text that does not go", () => {
     });
   });
 
+  describe("when STOP and a return land while it waits on the budget", () => {
+    const stopAndReturn = async (inbox: Awaited<ReturnType<typeof openInbox>>) => {
+      await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_stop_paused", occurredAtMs: inbox.h.now + 1, text: "STOP" }), "webhook");
+      inbox.h.advance(1000);
+      await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_back_paused", occurredAtMs: inbox.h.now, text: "START" }), "webhook");
+      expect(inbox.h.store.meta().optedOut).toBe(false);
+    };
+    const pausedBudget = (inbox: Awaited<ReturnType<typeof openInbox>>) => {
+      const opened = gate();
+      const reserve = inbox.h.ledger.reserve.bind(inbox.h.ledger);
+      let reached = () => undefined as void;
+      const waiting = new Promise<void>((resolve) => (reached = resolve));
+      let first = true;
+      inbox.h.ledger.reserve = ((key: string, worst: number) => {
+        if (!first) return reserve(key, worst);
+        first = false;
+        reached();
+        return opened.opened.then(() => reserve(key, worst));
+      }) as never;
+      return { waiting, open: opened.open };
+    };
+    const arrivals = (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.h.channel.sends.filter((m) => m.text.startsWith("A letter came"));
+
+    it("does not send an owed retry", async () => {
+      const inbox = await openInbox();
+      const provider = failing(inbox);
+      await inbox.send(pdfMail());
+      expect(owedCount(inbox.sql)).toBe(1);
+      provider.down = false;
+      inbox.h.advance(61_000);
+      const budget = pausedBudget(inbox);
+      const retry = tryOne(inbox);
+      await budget.waiting;
+      await stopAndReturn(inbox);
+      budget.open();
+      await retry;
+      expect(arrivals(inbox)).toEqual([]);
+      expect(owedCount(inbox.sql)).toBe(0);
+    });
+
+    it("does not send the first arrival text, or read the letter to the person after they stopped", async () => {
+      const inbox = await openInbox();
+      const budget = pausedBudget(inbox);
+      const sending = inbox.send(mime({ text: "Your renewal is due." }));
+      await budget.waiting;
+      await stopAndReturn(inbox);
+      budget.open();
+      expect((await sending).rejected).toBeNull();
+      expect(arrivals(inbox)).toEqual([]);
+      expect(inbox.h.store.pending().filter((p) => p.eventId.startsWith("email:"))).toEqual([]);
+      expect(owedCount(inbox.sql)).toBe(0);
+    });
+
+    it("gives its budget hold back", async () => {
+      const inbox = await openInbox();
+      const provider = failing(inbox);
+      await inbox.send(pdfMail());
+      provider.down = false;
+      inbox.h.advance(61_000);
+      const release = inbox.h.ledger.release.bind(inbox.h.ledger);
+      const released: string[] = [];
+      inbox.h.ledger.release = ((key: string) => {
+        released.push(key);
+        return release(key);
+      }) as never;
+      const budget = pausedBudget(inbox);
+      const retry = tryOne(inbox);
+      await budget.waiting;
+      await stopAndReturn(inbox);
+      budget.open();
+      await retry;
+      expect(released.filter((k) => k.includes("email:"))).toHaveLength(1);
+    });
+  });
+
   it("gives up after a day of an outage, and says so in the log", async () => {
     const inbox = await openInbox();
     const provider = failing(inbox);
