@@ -31,7 +31,7 @@ export default function MedicaidExample() {
           <h3>A letter becomes a next step.</h3>
           <p>One recorded check on November 4, 2026. Maria, the office and the letter are made up.</p>
         </div>
-        <Stage width={1040} height={620} compact={{ below: 720, width: 358, height: 900 }} className="md-example" fidelity="realistic">
+        <Stage width={1040} height={620} compact={{ below: 720, width: 358, height: 820 }} className="md-example" fidelity="realistic">
           {(_, __, layout) => (
             <>
               <div className="md-paper">
@@ -50,7 +50,7 @@ export default function MedicaidExample() {
                 )}
               </div>
               <div className="md-result">
-                <div className="md-result-top">What Mano read <a href="/home/medicaid-reading.json">View extracted data</a></div>
+                <div className="md-result-top">Recorded result <a href="/home/medicaid-reading.json">View extracted data</a></div>
                 <div className="md-program">{fields.program.value} renewal</div>
                 <p className="md-case">Case {fields.referenceNo.value}</p>
                 <div className="md-date-label">Renewal date to check</div>

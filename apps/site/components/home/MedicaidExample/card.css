@@ -39,7 +39,7 @@
     .md-office { margin-top:24px;font-size:14px;font-weight:550; }
     .md-source-quote { font-size:16px;line-height:1.55;margin-top:14px; }
     .md-source-case { font-size:12px;color:var(--muted);margin-top:16px; }
-    .md-result { left:0;right:0;top:300px;padding:22px;min-height:550px; }
+    .md-result { left:0;right:0;top:270px;padding:22px; }
     .md-result-top { margin-bottom:22px; }
     .md-program { font-size:18px; }
     .md-date { font-size:30px; }
