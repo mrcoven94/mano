@@ -15,6 +15,8 @@
 //   free text and the grader needs the eval's names, so one model call maps them
 //   onto the list every system gets, counted in Mano's cost. What the person owns
 //   or signs goes in the packet, and the rest is requested, as for the parser.
+//   A letter that could not be read or mapped leaves the packet incomplete, which
+//   earns no packet credit.
 // - Links Mano returns for checking go through the same link tool the baselines
 //   get. A blocked link Mano flagged itself is refused; otherwise it is enforced.
 // - SAM 3.1 has no open-weight route, so on OpenRouter Mail's client skips it and
@@ -184,7 +186,7 @@ function readFailed(reading) {
 // One letter's reading in the eval's shape. Exported for tests with a recorded
 // reading; reads no model except through client and no network except fetchImpl.
 export async function letterResult(letter, reading, { client, fetchImpl, hasDocuments }) {
-  const out = { reminder: null, failure: null, packet: [], requested: [], refused: [], enforced: [] };
+  const out = { reminder: null, failure: null, namesFailed: false, packet: [], requested: [], refused: [], enforced: [] };
   const answer = answerReading(reading);
   const scam = reading.warnings.some((w) => w.kind === "scam_suspect");
   const instruction = reading.warnings.some((w) => w.kind === "instruction_in_content");
@@ -200,9 +202,14 @@ export async function letterResult(letter, reading, { client, fetchImpl, hasDocu
 
   if (!scam) {
     const asked = reading.letters.flatMap((l) => l.fields.asked.map((a) => a.value));
-    const split = splitNames(await namesFor(asked, client), hasDocuments);
-    out.packet = split.packet;
-    out.requested = split.requested;
+    try {
+      const split = splitNames(await namesFor(asked, client), hasDocuments);
+      out.packet = split.packet;
+      out.requested = split.requested;
+    } catch {
+      // The date and safety results stand. Only the packet is unknown.
+      out.namesFailed = true;
+    }
   }
 
   const links = new Set(reading.warnings.filter((w) => w.kind === "link_unchecked" && w.detail).map((w) => w.detail));
@@ -239,6 +246,7 @@ export async function manoHousehold(input, { route, fetchImpl, sharp, read = rea
     requested: [],
     failures: [],
     toolCalls: [],
+    packetIncomplete: false,
   };
   const packet = new Set();
   const requested = new Set();
@@ -249,12 +257,15 @@ export async function manoHousehold(input, { route, fetchImpl, sharp, read = rea
       const files = await lettersFiles(letter, sharp);
       if (files.length === 0) {
         output.failures.push({ letterId: letter.letterId, reason: "no_photo" });
+        output.packetIncomplete = true;
         continue;
       }
       const reading = await read(files, { personId: `eval-${input.householdId}`, synthetic: true, model: client });
       const r = await letterResult(letter, reading, { client, fetchImpl, hasDocuments: input.hasDocuments });
       if (r.reminder) output.reminders.push(r.reminder);
       if (r.failure) output.failures.push(r.failure);
+      if (r.namesFailed) output.failures.push({ letterId: letter.letterId, reason: "names_failed" });
+      if (r.namesFailed || r.failure?.reason === "read_failed") output.packetIncomplete = true;
       output.refused.push(...r.refused);
       output.enforced.push(...r.enforced);
       for (const d of r.packet) packet.add(d);
@@ -262,6 +273,7 @@ export async function manoHousehold(input, { route, fetchImpl, sharp, read = rea
     } catch {
       // Fixed words: a thrown error could quote the letter.
       output.failures.push({ letterId: letter.letterId, reason: "read_failed" });
+      output.packetIncomplete = true;
     }
   }
   // A document owned for one letter satisfies a request from another.

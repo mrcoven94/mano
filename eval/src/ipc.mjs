@@ -12,7 +12,7 @@
 // - Child to parent to stop a fetch: { channel: "mano-eval-broker", cancel: id }
 // - Parent to child per fetch:
 //   { channel: "mano-eval-broker", id, ok: true, statusOk, status, json }
-//   or { channel: "mano-eval-broker", id, ok: false, error }
+//   or { channel: "mano-eval-broker", id, ok: false, error, transport? }
 // The parent allows only POST https://api.meta.ai/v1/responses and POST
 // https://openrouter.ai/api/v1/chat/completions (key injected server-side, and
 // on OpenRouter the model and zero-retention pin too) and GET
@@ -46,6 +46,8 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
     pending.delete(msg.id);
     clearTimeout(p.timer);
     if (msg.ok) p.resolve({ ok: msg.statusOk === true, status: msg.status ?? 0, json: async () => msg.json ?? null });
+    // A transport failure keeps fetch's own error type, so retries see it as one.
+    else if (msg.transport) p.reject(new TypeError(msg.error || "broker fetch failed"));
     else p.reject(new Error(msg.error || "broker denied the request"));
   });
   process.on("disconnect", () => failAll(new Error("broker disconnected")));
@@ -56,7 +58,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
       // only covers a parent that never answers.
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error("broker timeout"));
+        reject(new TypeError("broker timeout"));
       }, opts.timeoutMs === undefined ? timeoutMs : opts.timeoutMs + REPLY_GRACE_MS);
       pending.set(id, { resolve, reject, timer });
       if (opts.signal) {

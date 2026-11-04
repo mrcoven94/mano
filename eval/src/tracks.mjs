@@ -25,7 +25,7 @@ function statusCounts(outputs) {
 
 // Letters a model call could not answer. A high count means the provider
 // failed, not that the system read badly, and the run should not be published.
-const MODEL_FAILURES = new Set(["read_failed", "model_call_failed", "system_threw"]);
+const MODEL_FAILURES = new Set(["read_failed", "names_failed", "model_call_failed", "system_threw"]);
 function modelFailures(outputs) {
   return outputs.reduce((n, o) => n + (o.failures ?? []).filter((f) => MODEL_FAILURES.has(f.reason)).length, 0);
 }

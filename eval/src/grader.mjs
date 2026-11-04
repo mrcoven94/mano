@@ -87,7 +87,10 @@ export function gradeHousehold(output, groundTruth, letterInfo = {}) {
   const wantGroups = arr(groundTruth.packetGroups).filter((g) => g && Array.isArray(g.anyOf));
   const gotPacket = new Set(arr(output.packet).filter((d) => typeof d === "string"));
   const allowedPacket = new Set([...wantPacket, ...wantGroups.flatMap((g) => g.anyOf.filter((d) => typeof d === "string"))]);
+  // A system that failed to read a letter does not know the whole packet, so
+  // it earns no packet credit even when what it has happens to match.
   const packetCorrect = earnsCredit
+    && output.packetIncomplete !== true
     && [...gotPacket].every((d) => allowedPacket.has(d))
     && [...wantPacket].every((d) => gotPacket.has(d))
     && wantGroups.every((g) => g.anyOf.some((d) => gotPacket.has(d)));

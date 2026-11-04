@@ -30,7 +30,7 @@ await build({
   external: ["sharp", "heic-decode"],
   logLevel: "silent",
 });
-const { brokeredModelClient, letterResult, splitNames } = await import(join(bundleDir, "adapter.mjs"));
+const { brokeredModelClient, letterResult, manoHousehold, splitNames } = await import(join(bundleDir, "adapter.mjs"));
 
 const jsonResponse = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 const LETTER = "County Human Services\n\nYour renewal must arrive by November 25, 2026.\n\nSend your pay stub.";
@@ -168,6 +168,47 @@ test("only an unreadable page earns the readable-copy credit, never a failed cal
   assert.equal(await score(unread), 1, "nothing was read, so the answer asks for the page again");
   assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "read_failed", letterId: null, prompt: "", citation: null }] })), 0);
   assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "missing_page", letterId: "L1", prompt: "", citation: null }] })), 0, "the answer asks for nothing here");
+});
+
+const emptyPacketKey = { "hh-900": { letters: { "hh-900-L1": { hardCase: null } }, groundTruth: { deadlines: [], correctPacket: [], packetGroups: [], mustRefuse: [], mustRequest: [], decoyLetterIds: [] } } };
+const fakeSharp = () => ({ jpeg: () => ({ toBuffer: async () => Buffer.from("x") }) });
+
+test("a failed read earns no packet credit, even for an empty packet", async () => {
+  const out = await manoHousehold(HOUSEHOLD, { route: "openrouter", fetchImpl: noNet, sharp: fakeSharp, read: async () => { throw new Error("boom"); } });
+  assert.equal(out.packetIncomplete, true);
+  assert.equal(gradeAll([out], emptyPacketKey).correctPackets, 0);
+  const clean = { householdId: "hh-900", status: "ok", reminders: [], packet: [], refused: [], enforced: [], requested: [], failures: [], toolCalls: [] };
+  assert.equal(gradeAll([clean], emptyPacketKey).correctPackets, 1, "a clean empty packet still earns it");
+});
+
+test("a failed name mapping keeps the date and leaves the packet incomplete", async () => {
+  const asked = reading({ questions: [confirm("2026-11-25")] });
+  asked.letters[0].fields.asked = [{ value: "Send your pay stub.", citation: null }];
+  const badNames = { responses: async () => ({ text: "not json" }) };
+  const r = await letterResult(letter, asked, { client: badNames, fetchImpl: noNet, hasDocuments: [] });
+  assert.equal(r.namesFailed, true);
+  assert.deepEqual(r.reminder, { letterId: "hh-900-L1", dueDate: "2026-11-25" });
+});
+
+test("a broker transport failure reaches Mail's client as one it retries", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-retry-"));
+  const probe = join(dir, "probe.mjs");
+  await writeFile(probe, `import { writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const out = args[args.indexOf("--out") + 1];
+const answer = new Promise((resolve) => process.on("message", (m) => { if (m && m.id === 1) resolve(m); }));
+process.send({ channel: "mano-eval-broker", id: 1, url: "https://openrouter.ai/api/v1/chat/completions", method: "POST", headers: {}, body: "{}" });
+const m = await answer;
+await writeFile(out, JSON.stringify([{ householdId: "hh-900", transport: m.transport, error: m.error }]));
+process.disconnect();
+`);
+  try {
+    const { outputs } = await withOpenRouterEnv(() => runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl: async () => { throw new Error("secret text from the provider"); } }));
+    assert.equal(outputs[0].transport, true);
+    assert.equal(outputs[0].error, "broker fetch failed", "the provider's words never cross");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("a page Mano says nothing about is still a failure", async () => {

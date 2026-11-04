@@ -275,7 +275,7 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           }
           reply({ ok: true, statusOk: res.ok === true, status: res.status ?? 0, json });
         } catch (err) {
-          reply({ ok: false, error: `broker fetch failed: ${String((err && err.message) || err).slice(0, 200)}` });
+          reply({ ok: false, transport: true, error: "broker fetch failed" });
         }
       })();
     });
