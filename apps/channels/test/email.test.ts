@@ -20,9 +20,14 @@ import {
   TRUNCATED_TEXT,
   addressFor,
   clearInbox,
+  emailBytesToday,
   ensureInboxToken,
   handleEmail,
-  retryOwedNotices,
+  htmlOnlySentences,
+  nextOwedAt,
+  owedCount,
+  readHtml,
+  sendOneOwedNotice,
   mintToken,
   parseEmailDelivery,
   receiveEmail,
@@ -80,7 +85,6 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
   const h: Harness = makeHarness({ responder });
   const sql = sqliteStorage(new DatabaseSync(":memory:"));
   const routes = new Map<string, string>();
-  const inFlight = new Set<string>();
   const state = {
     fetch: async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(String(input));
@@ -102,7 +106,7 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
     byteRelease: async (key: string) => void h.ledger.byteRelease(key),
   };
   const receive = (delivery: EmailDelivery) =>
-    receiveEmail(delivery, { sql, store: h.store, runner: h.runner, documents: h.documents, photoConverter: null, spend, logger: h.logger, nowMs: () => h.now, inFlight });
+    receiveEmail(delivery, { sql, store: h.store, runner: h.runner, documents: h.documents, photoConverter: null, spend, logger: h.logger, nowMs: () => h.now });
   const conversation = {
     fetch: async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const delivery = parseEmailDelivery(JSON.parse(String(init?.body)));
@@ -143,6 +147,7 @@ function makeInbox(opts: { dns?: (host: string) => Response | Promise<Response>;
     h,
     sql,
     state,
+    spend,
     receive,
     routes,
     seen,
@@ -307,9 +312,9 @@ describe("a letter by email", () => {
     const out = await inbox.send(mime({ files: [attachment("scan.jpg", "image/jpeg", JPEG), attachment("notice.pdf", "application/pdf", PDF)] }));
     expect(out.rejected).toBeNull();
     expect(inbox.h.documents.docs.size).toBe(2);
-    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${PDF_TOO_TEXT}`]);
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${PDF_TOO_TEXT} ${TRUNCATED_TEXT}`]);
     await runTurnAfterBatch(inbox.h);
-    expect(inbox.seen[0]!.documents!.map((d) => d.mimeType)).toEqual(["image/jpeg"]);
+    expect(inbox.seen[0]!.documents!.map((d) => d.mimeType)).toEqual(["image/jpeg; truncated=yes"]);
   });
 
   it("says plainly that a PDF alone is saved and not read, with no turn", async () => {
@@ -325,7 +330,7 @@ describe("a letter by email", () => {
     const out = await inbox.send(mime({ text: "See attached.", files: [attachment("letter.jpg", "image/jpeg", new TextEncoder().encode("MZ not a photo"))] }));
     expect(out.rejected).toBeNull();
     expect(inbox.h.documents.docs.size).toBe(1);
-    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${SKIPPED_TEXT}`]);
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${SKIPPED_TEXT} ${TRUNCATED_TEXT}`]);
   });
 
   it("answers a redelivery once", async () => {
@@ -862,8 +867,8 @@ describe("mail arriving at the same moment", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     uploads.open();
     const results = (await Promise.all(sends)).map((a) => a.result);
-    expect(results.filter((r) => r === "unavailable")).toHaveLength(1);
-    expect(inbox.h.store.meta().byteDayCount).toBe(18_000_000);
+    expect(results.filter((r) => r === "busy")).toHaveLength(1);
+    expect(emailBytesToday(inbox.sql, inbox.h.store.meta().generation, dayKeyFor(inbox.h.now))).toBe(18_000_000);
     expect(inbox.h.documents.docs.size).toBe(2);
   }, 30_000);
 
@@ -871,7 +876,7 @@ describe("mail arriving at the same moment", () => {
     const inbox = await openInbox();
     inbox.h.documents.refuse = true;
     await inbox.send(mime({ files: [nineMb(1)] }));
-    expect(inbox.h.store.meta().byteDayCount).toBe(0);
+    expect(emailBytesToday(inbox.sql, inbox.h.store.meta().generation, dayKeyFor(inbox.h.now))).toBe(0);
   }, 30_000);
 
   it("bounces a partial upload, and its retry counts only what is new", async () => {
@@ -894,52 +899,254 @@ describe("mail arriving at the same moment", () => {
     expect((await inbox.send(raw)).rejected).toBeNull();
     expect(inbox.h.documents.docs.size).toBe(2);
     expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
-    expect(inbox.h.store.meta().byteDayCount).toBe(24_000_000);
+    expect(inbox.h.store.meta().byteDayCount).toBe(15_000_000);
+    expect(emailBytesToday(inbox.sql, inbox.h.store.meta().generation, dayKeyFor(inbox.h.now))).toBe(9_000_000);
   }, 30_000);
 });
 
 describe("an arrival text that does not go", () => {
   const failing = (inbox: Awaited<ReturnType<typeof openInbox>>) => {
     const send = inbox.h.runner.sendAgentText.bind(inbox.h.runner);
-    let down = true;
+    const state = { down: true, tries: 0 };
     inbox.h.runner.sendAgentText = async (opts) => {
-      if (down) throw new Error("provider down");
+      state.tries += 1;
+      if (state.down) throw new Error("provider down");
       return send(opts);
     };
-    return () => (down = false);
+    return state;
   };
+  const tryOne = (inbox: Awaited<ReturnType<typeof openInbox>>) => sendOneOwedNotice(inbox.sql, inbox.h.store, inbox.h.runner, inbox.h.logger, () => inbox.h.now);
+  const pdfMail = (n = 0) => mime({ subject: `Notice ${n}`, files: [attachment("notice.pdf", "application/pdf", PDF)] });
 
   it("stays owed for a PDF alone until it goes, and only once", async () => {
     const inbox = await openInbox();
-    const recover = failing(inbox);
-    const out = await inbox.send(mime({ files: [attachment("notice.pdf", "application/pdf", PDF)] }));
+    const provider = failing(inbox);
+    const out = await inbox.send(pdfMail());
     expect(out.rejected).toBeNull();
     expect(inbox.sentAfterOpen()).toEqual([]);
-    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(1);
-    recover();
-    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    expect(owedCount(inbox.sql)).toBe(1);
+    provider.down = false;
+    inbox.h.advance(61_000);
+    await tryOne(inbox);
+    expect(owedCount(inbox.sql)).toBe(0);
     expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
-    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    await tryOne(inbox);
     expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
   });
 
   it("stays owed when a link warning is in it, though the letter is queued", async () => {
     const inbox = await openInbox({ dns: () => Response.json({ Status: 0, Answer: [{ data: "0.0.0.0" }] }) });
-    const recover = failing(inbox);
-    await inbox.send(mime({ text: `See ${"https://bad.example/x"} today.` }));
+    const provider = failing(inbox);
+    await inbox.send(mime({ text: "See https://bad.example/x today." }));
     expect(inbox.h.store.pending()).toHaveLength(1);
-    recover();
-    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
+    provider.down = false;
+    inbox.h.advance(61_000);
+    await tryOne(inbox);
+    expect(owedCount(inbox.sql)).toBe(0);
     expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${LINK_TEXT}`]);
   });
 
-  it("is dropped once the person has said STOP", async () => {
+  for (const [name, end] of [
+    ["STOP", (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.h.runner.handleEvent(inboundEvent({ id: "evt_stop_owed", occurredAtMs: inbox.h.now + 1, text: "STOP" }), "webhook")],
+    ["a close", (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.h.runner.handleEvent({ ...inboundEvent({ id: "evt_close_owed", occurredAtMs: inbox.h.now + 1 }), kind: "chat.closed", rawType: "chat.closed", text: null }, "webhook")],
+  ] as const) {
+    it(`is dropped by ${name}, and does not come back when the person returns`, async () => {
+      const inbox = await openInbox();
+      const provider = failing(inbox);
+      await inbox.send(pdfMail());
+      expect(owedCount(inbox.sql)).toBe(1);
+      provider.down = false;
+      await end(inbox);
+      inbox.h.advance(61_000);
+      await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_back_owed", occurredAtMs: inbox.h.now, text: "START" }), "webhook");
+      await tryOne(inbox);
+      expect(owedCount(inbox.sql)).toBe(0);
+      expect(inbox.sentAfterOpen().join(" ")).not.toContain("A letter came");
+    });
+  }
+
+  it("sends at most one each time, and waits out its backoff", async () => {
     const inbox = await openInbox();
-    const recover = failing(inbox);
-    await inbox.send(mime({ files: [attachment("notice.pdf", "application/pdf", PDF)] }));
-    recover();
-    await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_stop_owed", occurredAtMs: inbox.h.now + 1, text: "STOP" }), "webhook");
-    expect(await retryOwedNotices(inbox.sql, inbox.h.runner, inbox.h.logger)).toBe(0);
-    expect(inbox.sentAfterOpen().join(" ")).not.toContain("A letter came");
+    const provider = failing(inbox);
+    await inbox.send(pdfMail(1));
+    await inbox.send(pdfMail(2));
+    expect(owedCount(inbox.sql)).toBe(2);
+    expect(provider.tries).toBe(2);
+    await tryOne(inbox);
+    expect(provider.tries).toBe(2);
+    inbox.h.advance(61_000);
+    await tryOne(inbox);
+    expect(provider.tries).toBe(3);
+    await tryOne(inbox);
+    expect(provider.tries).toBe(4);
+    await tryOne(inbox);
+    expect(provider.tries).toBe(4);
+    provider.down = false;
+    inbox.h.advance(121_000);
+    await tryOne(inbox);
+    expect(owedCount(inbox.sql)).toBe(1);
+    expect(inbox.sentAfterOpen()).toHaveLength(1);
+  });
+
+  it("gives up after a day of an outage, and says so in the log", async () => {
+    const inbox = await openInbox();
+    const provider = failing(inbox);
+    await inbox.send(pdfMail());
+    let waits = 0;
+    while (owedCount(inbox.sql) > 0 && waits < 100) {
+      inbox.h.now = nextOwedAt(inbox.sql)!;
+      await tryOne(inbox);
+      waits += 1;
+    }
+    expect(owedCount(inbox.sql)).toBe(0);
+    expect(waits).toBeLessThan(40);
+    expect(provider.tries).toBe(waits + 1);
+    expect(inbox.h.lines.join("\n")).toContain("email_notice_abandoned");
+  });
+});
+
+describe("an email is stored whole or bounced", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+  const generation = (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.h.store.meta().generation;
+  const rows = (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.sql.exec("SELECT state, bytes FROM email_messages").toArray() as { state: string; bytes: number }[];
+
+  it("bounces all of it when the day's bytes cannot hold all of it", async () => {
+    const inbox = await openInbox();
+    inbox.h.store.patchMeta({ byteDayKey: dayKeyFor(inbox.h.now), byteDayCount: 24_990_000 });
+    const out = await inbox.send(mime({ text: `${"That deadline is cancelled. ".repeat(700)}`, files: [attachment("date.png", "image/png", PNG)] }));
+    expect(out.rejected).toBe(REJECT_LATER);
+    expect(inbox.h.documents.docs.size).toBe(0);
+    expect(inbox.h.store.pending()).toEqual([]);
+    expect(inbox.sentAfterOpen()).toEqual([]);
+    expect(rows(inbox)).toEqual([]);
+  });
+
+  it("marks every file of an email it could not read whole, the image included", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: `<p>Due November 20, 2026.</p>${"<br>".repeat(25_000)}<p>That deadline is cancelled.</p>`, files: [attachment("date.png", "image/png", PNG)] }));
+    expect(inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType)).toEqual(["text/plain; truncated=yes", "image/png; truncated=yes"]);
+    expect(inbox.sentAfterOpen().join(" ")).toContain(TRUNCATED_TEXT);
+  });
+
+  it("marks an image alone when the HTML holds nothing it read", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: `${"<br>".repeat(25_000)}<p>That deadline is cancelled.</p>`, files: [attachment("date.png", "image/png", PNG)] }));
+    expect(inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType)).toEqual(["image/png; truncated=yes"]);
+    expect(inbox.sentAfterOpen().join(" ")).toContain(TRUNCATED_TEXT);
+  });
+
+  it("marks the words when a file was left out or a PDF cannot be read", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ text: "Due November 20, 2026.", files: [attachment("update.docx", "application/octet-stream", new TextEncoder().encode("PK not a photo"))] }));
+    expect(inbox.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain; truncated=yes");
+    const second = await openInbox();
+    await second.send(mime({ text: "Due November 20, 2026.", files: [attachment("update.pdf", "application/pdf", PDF)] }));
+    expect(second.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain; truncated=yes");
+  });
+
+  it("leaves no row when the reservation throws", async () => {
+    const inbox = await openInbox();
+    const reserve = inbox.spend.byteReserve;
+    inbox.spend.byteReserve = async () => {
+      throw new Error("ledger down");
+    };
+    const raw = mime({ text: "Your renewal is due." });
+    expect((await inbox.send(raw)).rejected).toBe(REJECT_LATER);
+    expect(rows(inbox)).toEqual([]);
+    inbox.spend.byteReserve = reserve;
+    expect((await inbox.send(raw)).rejected).toBeNull();
+    expect(rows(inbox)).toHaveLength(1);
+  });
+
+  it("reuses the row a crash left, and counts it once", async () => {
+    const inbox = await openInbox();
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    let first = true;
+    inbox.h.documents.put = async (doc) => {
+      if (first) {
+        first = false;
+        return new Promise<boolean>(() => undefined);
+      }
+      return put(doc);
+    };
+    const raw = mime({ text: "Your renewal is due." });
+    void inbox.send(raw);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rows(inbox).map((r) => r.state)).toEqual(["claimed"]);
+    const size = rows(inbox)[0]!.bytes;
+    expect((await inbox.send(raw)).rejected).toBeNull();
+    expect(rows(inbox)).toEqual([{ state: "stored", bytes: size }]);
+    expect(emailBytesToday(inbox.sql, generation(inbox), dayKeyFor(inbox.h.now))).toBe(size);
+  });
+
+  it("does not let a failure from before a delete refund a row after it", async () => {
+    const inbox = await openInbox();
+    const uploads = gate();
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    let first = true;
+    inbox.h.documents.put = async (doc) => {
+      if (first) {
+        first = false;
+        await uploads.opened;
+        return false;
+      }
+      return put(doc);
+    };
+    const raw = mime({ text: "Your renewal is due." });
+    const old = inbox.send(raw);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inbox.h.store.wipe(inbox.h.now);
+    clearInbox(inbox.sql);
+    await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_after_delete", occurredAtMs: inbox.h.now + 1, text: "Hi again" }), "webhook");
+    const token = await ensureInboxToken(inbox.sql, inbox.h.store, inbox.state, TEST_HANDLE_HASH);
+    inbox.h.advance(1000);
+    expect((await inbox.send(raw, {}, addressFor(token!, DOMAIN))).rejected).toBeNull();
+    expect(rows(inbox)).toHaveLength(1);
+    uploads.open();
+    await old;
+    expect(rows(inbox)).toHaveLength(1);
+    expect(rows(inbox)[0]!.state).toBe("stored");
+  });
+
+  it("counts its bytes against texted photos too", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ text: "Your renewal is due." }));
+    const row = rows(inbox)[0]!;
+    inbox.h.store.patchMeta({ byteDayKey: dayKeyFor(inbox.h.now), byteDayCount: 25_000_000 - row.bytes - 5 });
+    expect((await inbox.send(mime({ text: "A second letter with more words than five bytes." }))).rejected).toBe(REJECT_LATER);
+  });
+});
+
+describe("work on hostile input", () => {
+  it("counts tags before parsing, so closing tags with no match cannot run long", () => {
+    const started = Date.now();
+    const read = readHtml(`${"<div>".repeat(24_000)}${"</b>".repeat(469_000)}`);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(read.complete).toBe(false);
+  });
+
+  it("reads what comes before the limit", () => {
+    const read = readHtml(`<p>Due November 20, 2026.</p>${"<br>".repeat(25_000)}<p>Cancelled.</p>`);
+    expect(read.complete).toBe(false);
+    expect(read.text).toContain("Due November 20, 2026.");
+    expect(read.text).not.toContain("Cancelled");
+  });
+
+  it("finds links quickly in a long run of labels in a body", async () => {
+    const inbox = await openInbox();
+    const started = Date.now();
+    await inbox.send(mime({ text: "a.".repeat(100_000) }));
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
+describe("comparing the plain part and the HTML part", () => {
+  it("keeps a sentence that differs only in a sign", () => {
+    expect(htmlOnlySentences("Your interview is at 9:00 UTC-05:00.", "Your interview is at 9:00 UTC+05:00.")).toContain("Your interview is at 9:00 UTC+05:00.");
+  });
+
+  it("ignores only case and spacing", () => {
+    expect(htmlOnlySentences("Send  the\nform.", "SEND the form.")).toEqual([]);
+    expect(htmlOnlySentences("Pay $10.", "Pay $100.")).toEqual(["Pay $100."]);
   });
 });

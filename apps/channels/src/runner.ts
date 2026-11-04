@@ -152,6 +152,8 @@ export interface RunnerDeps {
   responder: Responder;
   // The person's Engine documents, where texted photos are stored.
   documents: DocumentStore | null;
+  // What email took of the same day's bytes (email.ts keeps that count).
+  emailBytesToday?: (day: string) => number;
   // Makes a JPEG copy of a HEIC, HEIF or WebP photo. Null keeps the
   // original, and the reply asks for a screenshot instead.
   photoConverter?: PhotoConverter | null;
@@ -1526,7 +1528,7 @@ export class ConversationRunner {
       }
       const meta = store.meta();
       const byteDay = dayKeyFor(nowMs());
-      const usedToday = meta.byteDayKey === byteDay ? meta.byteDayCount : 0;
+      const usedToday = (meta.byteDayKey === byteDay ? meta.byteDayCount : 0) + (this.deps.emailBytesToday?.(byteDay) ?? 0);
       if (usedToday + MAX_ATTACHMENT_BYTES > HANDLE_BYTES_DAILY) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;

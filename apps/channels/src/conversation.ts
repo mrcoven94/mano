@@ -46,11 +46,9 @@ import {
   savePendingDelete,
 } from "./conversation-delete.js";
 import { numberEnv, type Env } from "./env.js";
-import { addressFor, clearInbox, dropEmailRoute, ensureInboxToken, loadInbox, owedCount, parseEmailDelivery, receiveEmail, retryOwedNotices } from "./email.js";
+import { addressFor, clearInbox, dropEmailRoute, emailBytesToday, ensureInboxToken, loadInbox, nextOwedAt, parseEmailDelivery, receiveEmail, sendOneOwedNotice } from "./email.js";
 
 export const GLOBAL_STATE_ID = "global";
-// How soon an arrival text that did not go is tried again.
-const EMAIL_NOTICE_RETRY_MS = 60_000;
 
 class StateSpendLedger implements SpendLedger {
   private stub: DurableObjectStub;
@@ -265,13 +263,14 @@ export class ConversationDO implements DurableObject {
     }
   }
 
-  // Emails this instance is handling right now (email.ts).
-  private emailsInFlight = new Set<string>();
-
+  // An alarm for the next arrival text owed, unless one comes sooner.
   private async armForOwedNotices(): Promise<void> {
-    if (owedCount(this.ctx.storage.sql) > 0 && (await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + EMAIL_NOTICE_RETRY_MS);
-    }
+    const next = nextOwedAt(this.ctx.storage.sql);
+    if (next === null) return;
+    const armed = await this.ctx.storage.getAlarm();
+    // Never sooner than a second out, so a backlog cannot spin the alarm.
+    const at = Math.max(next, Date.now() + 1000);
+    if (armed === null || armed > at) await this.ctx.storage.setAlarm(at);
   }
 
   private crisisCheckNoticed = false;
@@ -296,6 +295,7 @@ export class ConversationDO implements DurableObject {
       channel,
       responder,
       documents: engineDocuments(this.env, handleHash),
+      emailBytesToday: (day) => emailBytesToday(this.ctx.storage.sql, new SqlConversationStore(this.ctx.storage.sql).meta().generation, day),
       photoConverter: this.env.IMAGES ? imagesConverter(this.env.IMAGES) : null,
       spend: new StateSpendLedger(globalStateStub(this.env)),
       logger: this.logger,
@@ -449,7 +449,6 @@ export class ConversationDO implements DurableObject {
         spend: new StateSpendLedger(globalStateStub(this.env)),
         logger: this.logger,
         nowMs: () => Date.now(),
-        inFlight: this.emailsInFlight,
       });
       const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (answer.result === "queued") {
@@ -563,13 +562,18 @@ export class ConversationDO implements DurableObject {
     const stillPending = loadPendingDelete(this.ctx.storage.sql);
     if (stillPending) await this.ctx.storage.setAlarm(stillPending.nextAtMs);
     const handleHash = this.ctx.id.name ?? this.ctx.id.toString();
-    if (owedCount(this.ctx.storage.sql) > 0) await retryOwedNotices(this.ctx.storage.sql, this.runner(handleHash).runner, this.logger);
     const { result, retryAfterMs } = await this.runTurnSerialized(handleHash);
     const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
     if (result === "retry") {
       await this.ctx.storage.setAlarm(Date.now() + retryAfterMs);
     } else if (result === "waiting" || (result === "ran" && new SqlConversationStore(this.ctx.storage.sql).pending().length > 0)) {
       await this.ctx.storage.setAlarm(Date.now() + batchMs);
+    }
+    // One at a time and only with no input waiting: during an outage a send
+    // can take as long as its timeout, and nothing the person wrote waits on it.
+    const sql = this.ctx.storage.sql;
+    if (nextOwedAt(sql) !== null && new SqlConversationStore(sql).pending().length === 0) {
+      await sendOneOwedNotice(sql, new SqlConversationStore(sql), this.runner(handleHash).runner, this.logger, () => Date.now());
     }
     await this.armForOwedNotices();
   }

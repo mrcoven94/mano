@@ -414,7 +414,15 @@ describe("a letter that came by email", () => {
     const cut = { documents: [{ id: EMAIL_DOC, mimeType: "text/plain; truncated=yes" }] };
     const { body } = await send(photoTurn("turn_emailcut01", cut), deps([RENEWAL_PAGE]));
     expect(engine.deadlineCalls).toHaveLength(0);
-    expect(body.text).toContain("I read only the first part of this email");
+    expect(body.text).toContain("I could not read all of this email");
+  });
+
+  it("holds no deadline from a photo that came in an email it could not read whole", async () => {
+    engine.putDocument(PERSON, EMAIL_DOC, new Uint8Array(await letterPhoto()));
+    const cut = { documents: [{ id: EMAIL_DOC, mimeType: "image/jpeg; truncated=yes" }] };
+    const { body } = await send(photoTurn("turn_emailcut02", cut), deps([RENEWAL_PAGE]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+    expect(body.text).toContain("I could not read all of this email");
   });
 
   it("says the email is saved when the reading fails, and does not ask the person to resend a photo they never sent", async () => {

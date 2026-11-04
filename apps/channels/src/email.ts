@@ -56,14 +56,19 @@ const MAX_LINKS = 25;
 // 15 MB a message can be. Past either limit the letter counts as cut and
 // its links as failed, since nothing vouches for what was not read.
 const MAX_SCAN_CHARS = 2_000_000;
-// Each close tag costs the parser a walk of its open tags, so tags in the
-// millions would take minutes. Far more than a real letter holds.
-const MAX_HTML_TAGS = 50_000;
+// Each close tag costs the parser a walk of its open tags, so a message's
+// tags are counted before it parses any. Far more than a real letter holds.
+const MAX_HTML_TAGS = 20_000;
 // Mail reads this type as text it must not hold a date from.
-const TRUNCATED_TEXT_TYPE = "text/plain; truncated=yes";
+const TRUNCATED_MARK = "; truncated=yes";
 // Each email can cost a text and a model reading, so a leaked address
 // cannot run far.
 export const MAX_EMAILS_PER_DAY = 10;
+// An arrival text that did not go is tried again after a minute, doubling
+// to an hour, for about a day. A person's own texts are not held up by it.
+const NOTICE_RETRY_MS = 60_000;
+const NOTICE_RETRY_MAX_MS = 3_600_000;
+const NOTICE_MAX_ATTEMPTS = 30;
 
 export const REJECT_UNKNOWN = "Address not found.";
 export const REJECT_TOO_LARGE = "Message too large. The limit is 15 MB.";
@@ -77,7 +82,7 @@ export const ARRIVED_PDF_TEXT =
   "A letter came to your Mano email as a PDF. I saved it, but I cannot read PDFs yet. Send me a photo or screenshot of it and I will read that.";
 export const PDF_TOO_TEXT = "It also has a PDF I saved but cannot read yet.";
 export const SKIPPED_TEXT = "It had other files I could not take.";
-export const TRUNCATED_TEXT = "It is too long for me to read in full, so I will not save a date from it. Ask the office for the dates.";
+export const TRUNCATED_TEXT = "I could not read all of it, so I will not save a date from it. Ask the office for the dates.";
 export const LINK_TEXT = "A link in it did not pass my safety check, so do not open it.";
 
 export function addressFor(token: string, domain: string): string {
@@ -103,34 +108,42 @@ export function tokenFromAddress(to: string, domain: string): string | null {
   return base === EMAIL_LOCAL && more === undefined && token && TOKEN.test(token) ? token : null;
 }
 
-// The conversation's own record: its token, and how many emails today.
-interface InboxRow {
-  token: string;
-  dayKey: string;
-  dayCount: number;
-}
-
 function inboxTable(sql: SqlStorage): void {
-  sql.exec("CREATE TABLE IF NOT EXISTS email_inbox (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL, day_key TEXT NOT NULL, day_count INTEGER NOT NULL)");
-  // Files already counted against the day's bytes, so a retry counts only
-  // what is new.
-  sql.exec("CREATE TABLE IF NOT EXISTS email_bytes (byte_key TEXT PRIMARY KEY, day_key TEXT NOT NULL)");
-  // Arrival texts that have not gone yet; the alarm keeps trying.
-  sql.exec("CREATE TABLE IF NOT EXISTS email_owed (key TEXT PRIMARY KEY, text TEXT NOT NULL, generation INTEGER NOT NULL)");
+  sql.exec("CREATE TABLE IF NOT EXISTS email_inbox (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL)");
+  // The one count of email: a row is a day's slot and its bytes, for one
+  // message in one conversation generation. A redelivery finds its own row
+  // and adds nothing, a crash leaves a row the redelivery reuses, and a row
+  // from before a delete is never counted or touched.
+  sql.exec(
+    "CREATE TABLE IF NOT EXISTS email_messages (message_key TEXT NOT NULL, generation INTEGER NOT NULL, day_key TEXT NOT NULL, bytes INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY (message_key, generation))",
+  );
+  // Arrival texts that have not gone yet. The epoch moves on a STOP, a close
+  // or a delete, which ends what is owed even if the person comes back.
+  sql.exec(
+    "CREATE TABLE IF NOT EXISTS email_owed (key TEXT PRIMARY KEY, text TEXT NOT NULL, generation INTEGER NOT NULL, epoch INTEGER NOT NULL, attempts INTEGER NOT NULL, next_at_ms INTEGER NOT NULL)",
+  );
 }
 
-export function loadInbox(sql: SqlStorage): InboxRow | null {
+export function emailBytesToday(sql: SqlStorage, generation: number, day: string): number {
   inboxTable(sql);
-  const row = sql.exec("SELECT token, day_key, day_count FROM email_inbox WHERE id = 1").toArray()[0] as
-    | { token: string; day_key: string; day_count: number }
-    | undefined;
-  return row ? { token: row.token, dayKey: row.day_key, dayCount: Number(row.day_count) } : null;
+  const row = sql.exec("SELECT COALESCE(SUM(bytes), 0) AS used FROM email_messages WHERE generation = ? AND day_key = ?", generation, day).toArray()[0] as { used: number };
+  return Number(row.used);
+}
+
+function emailsToday(sql: SqlStorage, generation: number, day: string): number {
+  return sql.exec("SELECT message_key FROM email_messages WHERE generation = ? AND day_key = ?", generation, day).toArray().length;
+}
+
+export function loadInbox(sql: SqlStorage): { token: string } | null {
+  inboxTable(sql);
+  const row = sql.exec("SELECT token FROM email_inbox WHERE id = 1").toArray()[0] as { token: string } | undefined;
+  return row ? { token: row.token } : null;
 }
 
 export function clearInbox(sql: SqlStorage): void {
   inboxTable(sql);
   sql.exec("DELETE FROM email_inbox");
-  sql.exec("DELETE FROM email_bytes");
+  sql.exec("DELETE FROM email_messages");
   sql.exec("DELETE FROM email_owed");
 }
 
@@ -153,7 +166,7 @@ export async function ensureInboxToken(
     await dropEmailRoute(state, token, createLogger());
     return null;
   }
-  sql.exec("INSERT INTO email_inbox (id, token, day_key, day_count) VALUES (1, ?, '', 0)", token);
+  sql.exec("INSERT INTO email_inbox (id, token) VALUES (1, ?)", token);
   return token;
 }
 
@@ -205,9 +218,6 @@ export interface ReceiveDeps {
   spend: Pick<SpendLedger, "byteReserve" | "byteSettle" | "byteRelease">;
   logger: Logger;
   nowMs: () => number;
-  // Messages being handled right now. In memory on purpose: a crash leaves
-  // no claim behind to swallow the redelivery.
-  inFlight: Set<string>;
 }
 
 export function documentIdFor(generation: number, key: string, index: number): string {
@@ -218,69 +228,94 @@ function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
-export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boolean; truncated: boolean; linkFailed: boolean }): string {
+export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boolean; cut: boolean; linkFailed: boolean }): string {
   const parts = opts.reading ? [ARRIVED_TEXT, ...(opts.pdf ? [PDF_TOO_TEXT] : [])] : [ARRIVED_PDF_TEXT];
   if (opts.skipped) parts.push(SKIPPED_TEXT);
-  if (opts.truncated && opts.reading) parts.push(TRUNCATED_TEXT);
+  if (opts.cut && opts.reading) parts.push(TRUNCATED_TEXT);
   if (opts.linkFailed) parts.push(LINK_TEXT);
   return parts.join(" ");
 }
 
 // Inside the person's conversation: the token must be this conversation's
-// current one, so an address ends the moment a delete clears it.
+// current one, so an address ends the moment a delete clears it. An email is
+// stored whole or bounced, and copies of one message run the same steps, each
+// of which is safe to repeat.
 export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): Promise<EmailAnswer> {
-  const { sql, store, documents, nowMs, inFlight } = deps;
-  const inbox = loadInbox(sql);
-  if (!inbox || inbox.token !== delivery.token) return { result: "unknown" };
+  const { sql, store, documents, photoConverter, spend, nowMs } = deps;
   const eventId = `email:${delivery.key}`;
-  // A copy while the first is still going spends nothing. If the first
-  // fails, its bounce tells the sender.
-  if (store.hasEvent(eventId) || inFlight.has(eventId)) return { result: "duplicate" };
-  const meta = store.meta();
-  if (meta.optedOut || meta.closed || (!meta.chatId && !meta.to)) return { result: "closed" };
+  const refused = (): EmailAnswer | null => {
+    if (loadInbox(sql)?.token !== delivery.token) return { result: "unknown" };
+    if (store.hasEvent(eventId)) return { result: "duplicate" };
+    const meta = store.meta();
+    return meta.optedOut || meta.closed || (!meta.chatId && !meta.to) ? { result: "closed" } : null;
+  };
+  const early = refused();
+  if (early) return early;
   if (!documents) return { result: "unavailable" };
+  // A converted photo is what gets stored, so that is the size that counts.
+  const forms: { bytes: Uint8Array; mimeType: string }[] = [];
+  for (const file of delivery.files) {
+    const raw = base64ToBytes(file.contentB64);
+    forms.push(file.mimeType === "text/plain" ? { bytes: raw, mimeType: file.mimeType } : await storedForm(raw, file.mimeType, photoConverter));
+  }
+  const late = refused();
+  if (late) return late;
+
+  // From here to the insert there is no await, so mail arriving at once
+  // cannot all see the same room.
+  const meta = store.meta();
+  const { generation } = meta;
   const day = dayKeyFor(nowMs());
-  const today = inbox.dayKey === day ? inbox.dayCount : 0;
-  if (today >= MAX_EMAILS_PER_DAY) return { result: "busy" };
-  // The slot is taken here, before the first await, so mail arriving at
-  // once cannot all read the same count. One that ends up refused gives it
-  // back, since it may be sent again.
-  sql.exec("UPDATE email_inbox SET day_key = ?, day_count = ? WHERE id = 1", day, today + 1);
-  inFlight.add(eventId);
-  const release = () => sql.exec("UPDATE email_inbox SET day_count = MAX(day_count - 1, 0) WHERE id = 1 AND day_key = ?", day);
+  const size = forms.reduce((sum, form) => sum + form.bytes.byteLength, 0);
+  const own = () => sql.exec("SELECT state FROM email_messages WHERE message_key = ? AND generation = ?", delivery.key, generation).toArray()[0] as { state: string } | undefined;
+  if (!own()) {
+    const photos = meta.byteDayKey === day ? meta.byteDayCount : 0;
+    if (emailsToday(sql, generation, day) >= MAX_EMAILS_PER_DAY || photos + emailBytesToday(sql, generation, day) + size > HANDLE_BYTES_DAILY) return { result: "busy" };
+    sql.exec("DELETE FROM email_messages WHERE day_key != ? OR generation != ?", day, generation);
+    sql.exec("INSERT INTO email_messages (message_key, generation, day_key, bytes, state) VALUES (?, ?, ?, ?, 'claimed')", delivery.key, generation, day, size);
+  }
+  const byteKey = `${delivery.handleHash}:${eventId}`;
+  // Only a row still claimed comes back: stored files are really there, and
+  // the row of another generation is not this one's to touch.
+  const release = async (): Promise<void> => {
+    if (own()?.state === "claimed") sql.exec("DELETE FROM email_messages WHERE message_key = ? AND generation = ?", delivery.key, generation);
+    await spend.byteRelease(byteKey).catch((err: unknown) => deps.logger.warn("email_release_failed", { err: errName(err) }));
+  };
   try {
-    const answer = await storeAndQueue(delivery, documents, meta.generation, day, eventId, deps);
-    if (answer.result === "unavailable" || answer.result === "closed" || answer.result === "unknown") release();
+    if (!(await spend.byteReserve(byteKey, size)).allowed) {
+      await release();
+      return { result: "busy" };
+    }
+    const answer = await storeAndQueue(delivery, forms, documents, generation, day, size, eventId, deps);
+    if (answer.result === "unavailable" || answer.result === "closed" || answer.result === "unknown") await release();
     return answer;
   } catch (err) {
-    release();
+    await release();
     throw err;
-  } finally {
-    inFlight.delete(eventId);
   }
 }
 
-// Takes the file's bytes from the day's allowance with no await, so large
-// files arriving at once cannot all see room. False when there is none.
-function claimBytes(sql: SqlStorage, store: ConversationStore, byteKey: string, day: string, bytes: number): boolean {
-  const meta = store.meta();
-  const usedToday = meta.byteDayKey === day ? meta.byteDayCount : 0;
-  if (usedToday + bytes > HANDLE_BYTES_DAILY) return false;
-  store.patchMeta({ byteDayCount: usedToday + bytes, byteDayKey: day });
-  sql.exec("DELETE FROM email_bytes WHERE day_key != ?", day);
-  sql.exec("INSERT INTO email_bytes (byte_key, day_key) VALUES (?, ?)", byteKey, day);
-  return true;
+export interface OwedNotice {
+  key: string;
+  text: string;
+  generation: number;
 }
 
-function refundBytes(sql: SqlStorage, store: ConversationStore, byteKey: string, day: string, bytes: number): void {
-  const meta = store.meta();
-  if (meta.byteDayKey === day) store.patchMeta({ byteDayCount: Math.max(0, meta.byteDayCount - bytes) });
-  sql.exec("DELETE FROM email_bytes WHERE byte_key = ?", byteKey);
+// When an arrival text is tried again after this many tries.
+function noticeBackoffMs(attempts: number): number {
+  return Math.min(NOTICE_RETRY_MAX_MS, NOTICE_RETRY_MS * 2 ** Math.max(0, attempts - 1));
 }
 
-export function owe(sql: SqlStorage, notice: { key: string; text: string; generation: number }): void {
+export function owe(sql: SqlStorage, notice: OwedNotice, epoch: number, nextAtMs: number): void {
   inboxTable(sql);
-  sql.exec("INSERT OR REPLACE INTO email_owed (key, text, generation) VALUES (?, ?, ?)", notice.key, notice.text, notice.generation);
+  sql.exec(
+    "INSERT OR REPLACE INTO email_owed (key, text, generation, epoch, attempts, next_at_ms) VALUES (?, ?, ?, ?, 1, ?)",
+    notice.key,
+    notice.text,
+    notice.generation,
+    epoch,
+    nextAtMs,
+  );
 }
 
 export function owedCount(sql: SqlStorage): number {
@@ -288,11 +323,17 @@ export function owedCount(sql: SqlStorage): number {
   return sql.exec("SELECT key FROM email_owed").toArray().length;
 }
 
+export function nextOwedAt(sql: SqlStorage): number | null {
+  inboxTable(sql);
+  const row = sql.exec("SELECT next_at_ms FROM email_owed ORDER BY next_at_ms LIMIT 1").toArray()[0] as { next_at_ms: number } | undefined;
+  return row ? Number(row.next_at_ms) : null;
+}
+
 type NoticeSender = Pick<ConversationRunner, "sendAgentText">;
 
 // True when the text went or never can: a delete, STOP, a close or a definite
 // refusal ends it. A throw or today's budget leaves it for another try.
-async function sendNotice(runner: NoticeSender, notice: { key: string; text: string; generation: number }, logger: Logger): Promise<boolean> {
+async function sendNotice(runner: NoticeSender, notice: OwedNotice, logger: Logger): Promise<boolean> {
   try {
     return (await runner.sendAgentText(notice)).reason !== "budget";
   } catch (err) {
@@ -301,83 +342,75 @@ async function sendNotice(runner: NoticeSender, notice: { key: string; text: str
   }
 }
 
-// How many are still owed afterward.
-export async function retryOwedNotices(sql: SqlStorage, runner: NoticeSender, logger: Logger): Promise<number> {
+// One owed text whose time has come. The caller holds it back while the
+// person has input waiting.
+export async function sendOneOwedNotice(
+  sql: SqlStorage,
+  store: Pick<ConversationStore, "meta">,
+  runner: NoticeSender,
+  logger: Logger,
+  nowMs: () => number,
+): Promise<void> {
   inboxTable(sql);
-  const owed = sql.exec("SELECT key, text, generation FROM email_owed").toArray() as { key: string; text: string; generation: number }[];
-  for (const row of owed) {
-    if (await sendNotice(runner, { key: row.key, text: row.text, generation: Number(row.generation) }, logger)) {
-      sql.exec("DELETE FROM email_owed WHERE key = ?", row.key);
-    }
+  const row = sql.exec("SELECT key, text, generation, epoch, attempts FROM email_owed WHERE next_at_ms <= ? ORDER BY next_at_ms LIMIT 1", nowMs()).toArray()[0] as
+    | { key: string; text: string; generation: number; epoch: number; attempts: number }
+    | undefined;
+  if (!row) return;
+  const drop = () => sql.exec("DELETE FROM email_owed WHERE key = ?", row.key);
+  if (Number(row.epoch) !== store.meta().decorationEpoch) return void drop();
+  if (await sendNotice(runner, { key: row.key, text: row.text, generation: Number(row.generation) }, logger)) return void drop();
+  const attempts = Number(row.attempts) + 1;
+  if (attempts >= NOTICE_MAX_ATTEMPTS) {
+    logger.warn("email_notice_abandoned", { attempts });
+    return void drop();
   }
-  return owedCount(sql);
+  sql.exec("UPDATE email_owed SET attempts = ?, next_at_ms = ? WHERE key = ?", attempts, nowMs() + noticeBackoffMs(attempts), row.key);
 }
 
 async function storeAndQueue(
   delivery: EmailDelivery,
+  forms: { bytes: Uint8Array; mimeType: string }[],
   documents: DocumentStore,
   generation: number,
   day: string,
+  size: number,
   eventId: string,
   deps: ReceiveDeps,
 ): Promise<EmailAnswer> {
-  const { sql, store, runner, photoConverter, spend, logger, nowMs } = deps;
+  const { sql, store, runner, spend, logger, nowMs } = deps;
   const stored: { id: string; mimeType: string }[] = [];
-  let skipped = delivery.skipped;
-  for (const [index, file] of delivery.files.entries()) {
-    const raw = base64ToBytes(file.contentB64);
-    const form = file.mimeType.startsWith("text/plain") ? { bytes: raw, mimeType: file.mimeType } : await storedForm(raw, file.mimeType, photoConverter);
-    const size = form.bytes.byteLength;
-    const byteKey = `${delivery.handleHash}:${eventId}:${index}`;
-    const counted = sql.exec("SELECT 1 FROM email_bytes WHERE byte_key = ?", byteKey).toArray().length > 0;
-    if (!counted) {
-      if (!claimBytes(sql, store, byteKey, day, size)) {
-        skipped += 1;
-        continue;
-      }
-      if (!(await spend.byteReserve(byteKey, size)).allowed) {
-        refundBytes(sql, store, byteKey, day, size);
-        skipped += 1;
-        continue;
-      }
-    }
+  for (const [index, form] of forms.entries()) {
     const id = documentIdFor(generation, delivery.key, index);
     const saved = await documents.put({ id, name: id, bytes: form.bytes, generation }).catch((err: unknown) => {
       logger.warn("email_store_failed", { err: errName(err) });
       return false;
     });
-    // A store that failed may work next time, so the sender is asked to
-    // send it again rather than losing the file. What did store stays
-    // counted, and the retry passes over it.
-    if (!saved) {
-      if (!counted) {
-        refundBytes(sql, store, byteKey, day, size);
-        await spend.byteRelease(byteKey);
-      }
-      return { result: "unavailable" };
-    }
-    await spend.byteSettle(byteKey, size).catch((err: unknown) => logger.warn("email_settle_failed", { err: errName(err) }));
+    // A store that failed may work next time, so the sender is asked to send
+    // it again rather than losing a part.
+    if (!saved) return { result: "unavailable" };
     stored.push({ id, mimeType: form.mimeType });
   }
-  if (stored.length === 0) return { result: "unavailable" };
   // A delete during the uploads wins; Engine refused anything after it.
   const uploaded = store.meta();
   if (uploaded.generation !== generation) return { result: "unknown" };
+  sql.exec("INSERT OR REPLACE INTO email_messages (message_key, generation, day_key, bytes, state) VALUES (?, ?, ?, ?, 'stored')", delivery.key, generation, day, size);
+  await spend.byteSettle(`${delivery.handleHash}:${eventId}`, size).catch((err: unknown) => logger.warn("email_settle_failed", { err: errName(err) }));
   // So does a STOP or a close. Nobody will be told, so the sender must be.
-  if (uploaded.optedOut || uploaded.closed) return { result: "closed" };
+  const settled = store.meta();
+  if (settled.generation !== generation) return { result: "unknown" };
+  if (settled.optedOut || settled.closed) return { result: "closed" };
 
   const reading = stored.filter((d) => d.mimeType !== "application/pdf");
-  const text = arrivalText({
-    reading: reading.length > 0,
-    pdf: reading.length < stored.length,
-    skipped: skipped > 0,
-    truncated: delivery.truncated,
-    linkFailed: delivery.linkFailed,
-  });
+  const pdf = reading.length < stored.length;
+  const skipped = delivery.skipped > 0;
+  // Any part not read could change what the read parts say, so none of them
+  // can hold a date.
+  const cut = delivery.truncated || skipped || pdf;
+  const text = arrivalText({ reading: reading.length > 0, pdf, skipped, cut, linkFailed: delivery.linkFailed });
   // Owed until it goes: it can be the only word of a PDF or a bad link.
   const notice = { key: eventId, text, generation };
-  if (!(await sendNotice(runner, notice, logger))) owe(sql, notice);
-  logger.info("email_received", { files: stored.length, reading: reading.length, skipped, truncated: delivery.truncated, linkFailed: delivery.linkFailed });
+  if (!(await sendNotice(runner, notice, logger))) owe(sql, notice, settled.decorationEpoch, nowMs() + NOTICE_RETRY_MS);
+  logger.info("email_received", { files: stored.length, reading: reading.length, skipped: delivery.skipped, cut, linkFailed: delivery.linkFailed });
   // Read once more after that await, with none until handleEvent has
   // written: an inbound clears both STOP and a close.
   const now = store.meta();
@@ -398,7 +431,7 @@ async function storeAndQueue(
     handle: now.to || null,
     direction: "inbound",
     text: null,
-    attachments: reading.map((stored) => ({ url: "", stored })),
+    attachments: reading.map((d) => ({ url: "", stored: { id: d.id, mimeType: cut ? `${d.mimeType}${TRUNCATED_MARK}` : d.mimeType } })),
     errorCode: null,
     errorMessage: null,
     occurredAtMs: nowMs(),
@@ -441,24 +474,20 @@ export function linkFromAttribute(value: string): string | null {
 }
 
 // What a person would see, and every link attribute, as a browser would
-// parse them. complete is false when the tag limit stopped the parse.
+// parse them, up to the tag limit. complete is false when that left some out.
 export function readHtml(html: string): { text: string; hrefs: string[]; complete: boolean } {
+  let at = -1;
+  for (let tags = 0; tags <= MAX_HTML_TAGS; tags++) {
+    at = html.indexOf("<", at + 1);
+    if (at < 0) break;
+  }
+  const complete = at < 0;
   const parts: string[] = [];
   const hrefs = new Set<string>();
   let unseen = 0;
-  let tags = 0;
-  let complete = true;
-  const counted = (): void => {
-    tags += 1;
-    if (tags > MAX_HTML_TAGS) {
-      complete = false;
-      parser.pause();
-    }
-  };
   const parser = new Parser(
     {
       onopentag(name, attributes) {
-        counted();
         if (UNSEEN_TAGS.has(name)) unseen += 1;
         if (BLOCK_TAGS.has(name)) parts.push("\n");
         for (const attribute of LINK_ATTRIBUTES) {
@@ -472,15 +501,14 @@ export function readHtml(html: string): { text: string; hrefs: string[]; complet
         if (unseen === 0) parts.push(text);
       },
       onclosetag(name) {
-        counted();
         if (UNSEEN_TAGS.has(name)) unseen = Math.max(0, unseen - 1);
         if (BLOCK_TAGS.has(name)) parts.push("\n");
       },
     },
     { decodeEntities: true },
   );
-  parser.write(html);
-  if (complete) parser.end();
+  parser.write(complete ? html : html.slice(0, at));
+  parser.end();
   const text = parts
     .join("")
     .replace(/[ \t]+/g, " ")
@@ -489,8 +517,9 @@ export function readHtml(html: string): { text: string; hrefs: string[]; complet
   return { text, hrefs: [...hrefs], complete };
 }
 
-const comparable = (sentence: string): string => sentence.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-const sentencesOf = (text: string): string[] => text.replace(/\s+/g, " ").split(/(?<=[.!?]) /).filter((s) => comparable(s));
+// Case and spacing only: a sign or a symbol can be the whole difference.
+const comparable = (sentence: string): string => sentence.toLowerCase();
+const sentencesOf = (text: string): string[] => text.replace(/\s+/g, " ").split(/(?<=[.!?]) /).filter((s) => /[\p{L}\p{N}]/u.test(s));
 
 // The sentences of the HTML part that the plain part does not have. A plain
 // part is often a stale or shorter copy, and a correction may be only in the
@@ -521,12 +550,13 @@ export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
   const links = new Set([...extractLinks(subject), ...extractLinks(words), ...html.hrefs]);
   const files: EmailFile[] = [];
   let skipped = 0;
-  let truncated = false;
+  // Cut whether or not any words survived, so an attachment is marked too.
+  let truncated = !fullyRead || subject.length > MAX_SUBJECT_CHARS;
   if (words) {
     const head = [parsed.from?.address ? `From: ${parsed.from.address}` : "", subject ? `Subject: ${subject.slice(0, MAX_SUBJECT_CHARS)}` : ""].filter(Boolean).join("\n");
     const whole = `${head}\n\n${words}`.trim();
-    truncated = !fullyRead || subject.length > MAX_SUBJECT_CHARS || whole.length > MAX_TEXT_CHARS;
-    files.push({ mimeType: truncated ? TRUNCATED_TEXT_TYPE : "text/plain", contentB64: bytesToBase64(new TextEncoder().encode(whole.slice(0, MAX_TEXT_CHARS))) });
+    truncated ||= whole.length > MAX_TEXT_CHARS;
+    files.push({ mimeType: "text/plain", contentB64: bytesToBase64(new TextEncoder().encode(whole.slice(0, MAX_TEXT_CHARS))) });
   }
   // Attached files come first, so an embedded image never takes their place.
   const attachments = [...parsed.attachments.filter((a) => !a.related), ...parsed.attachments.filter((a) => a.related)];

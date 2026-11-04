@@ -160,6 +160,19 @@ describe("the domain of an email address", () => {
     expect(out.removed).toBe(1);
   });
 
+  it("takes linear time on a long run of labels that never ends in a name", () => {
+    const started = Date.now();
+    expect(extractLinks("a.".repeat(100_000))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("still finds a link at the end of more labels than a host can hold", () => {
+    // Split where the bound falls: a host too long to look up fails the check.
+    const links = extractLinks(`${"a.".repeat(200)}evil.example.com/login`);
+    expect(links.join(".")).toContain("evil.example.com/login");
+    expect(links[0]!.length).toBeGreaterThan(253);
+  });
+
   it("takes linear time on a long run of labels after an @", () => {
     const started = Date.now();
     extractLinks(`@${"a.".repeat(200_000)}test`);

@@ -123,13 +123,12 @@ describe("the email handler in workerd", () => {
     expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
   });
 
-  it("arms the alarm for an arrival text still owed, and the alarm sends it", async () => {
+  it("sends an owed arrival text only once input is done, then one per alarm", async () => {
     const { stub, token } = await openConversation("owed");
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
-      String(input instanceof Request ? input.url : input).includes("/documents") ? Response.json({ id: "stored" }) : Response.json({ Status: 0, Answer: [{ data: "192.0.2.1" }] }),
-    );
+    const later = Date.now() + 3_600_000;
     await runInDurableObject(stub, (_, state) => {
-      owe(state.storage.sql, { key: "email:worker-owed", text: "A letter came to your Mano email as a PDF.", generation: 0 });
+      owe(state.storage.sql, { key: "email:worker-owed-1", text: "Owed text 1.", generation: 0 }, 0, Date.now() - 1);
+      owe(state.storage.sql, { key: "email:worker-owed-2", text: "Owed text 2.", generation: 0 }, 0, later);
     });
     const res = await stub.fetch("https://conversation/internal/email", {
       method: "POST",
@@ -137,13 +136,21 @@ describe("the email handler in workerd", () => {
     });
     expect(res.status).toBe(200);
     expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
+    const owed = () => runInDurableObject(stub, (_, state) => state.storage.sql.exec("SELECT key FROM email_owed").toArray().length);
+    const sent = () =>
+      runInDurableObject(stub, (_, state) => (state.storage.sql.exec("SELECT bubble_text FROM outbounds").toArray() as { bubble_text: string }[]).map((r) => r.bubble_text));
+    // "Hi Mano" is still waiting for its batch window.
     await runDurableObjectAlarm(stub);
-    const left = await runInDurableObject(stub, (_, state) => state.storage.sql.exec("SELECT key FROM email_owed").toArray());
-    expect(left).toEqual([]);
-    const texts = await runInDurableObject(stub, (_, state) =>
-      (state.storage.sql.exec("SELECT bubble_text FROM outbounds").toArray() as { bubble_text: string }[]).map((r) => r.bubble_text),
-    );
-    expect(texts).toContain("A letter came to your Mano email as a PDF.");
+    expect(await owed()).toBe(2);
+    await runInDurableObject(stub, (_, state) => {
+      state.storage.sql.exec("DELETE FROM pending");
+      return state.storage.setAlarm(Date.now() + 60_000);
+    });
+    await runDurableObjectAlarm(stub);
+    expect(await owed()).toBe(1);
+    expect((await sent()).filter((t) => t.startsWith("Owed text"))).toEqual(["Owed text 1."]);
+    const armed = await runInDurableObject(stub, (_, state) => state.storage.getAlarm());
+    expect(armed).toBeGreaterThan(later - 1000);
   });
 
   it("ends the address on a delete", async () => {

@@ -2030,7 +2030,7 @@ describe("an email's text", () => {
     const cut = await read("text/plain; truncated=yes");
     expect(cut.outcome).toBe("read");
     expect(cut.deadlines).toEqual([]);
-    expect(cut.text).toContain("I read only the first part of this email");
+    expect(cut.text).toContain("I could not read all of this email");
   });
 
   it("holds no date from a second letter inside text that was cut", async () => {

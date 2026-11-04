@@ -182,7 +182,7 @@ function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
 const SCAM =
   "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.";
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
-const TRUNCATED = "I read only the first part of this email, so I did not save a date from it. Ask the office for the dates.";
+const TRUNCATED = "I could not read all of this email, so I did not save a date from it. Ask the office for the dates.";
 const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
 const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?";
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
