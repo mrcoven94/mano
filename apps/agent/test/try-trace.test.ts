@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BudgetExceeded, SegmentationSkipped } from "@mano/mail";
 
 import { identityOf, tracedFillDeps, tracedMailModel, tryStepTrace } from "../agent/lib/try-trace.js";
+import { BACKUP_ANSWERED } from "../agent/lib/muse.js";
 import type { FillDeps } from "../agent/lib/computer-fill.js";
 
 const DEMO = `${TRY_HANDLE_PREFIX}${"a".repeat(56)}`;
@@ -63,6 +64,15 @@ describe("reports for the judge demo", () => {
     step(trace, "modal/meta-models/Muse-Spark-Open-816B-A42B");
     await trace.flush();
     expect(reports[0]!.model).toMatchObject({ model: "meta-models/Muse-Spark-Open-816B-A42B", where: "Modal", state: "live" });
+  });
+
+  it("names OpenRouter when the backup answered a step that started under Modal's name", async () => {
+    const trace = tryStepTrace(DEMO, { observe: () => undefined });
+    trace.observe({ type: "step.started", meta: { at: at(0) }, data: { modelId: "modal/meta-models/Muse-Spark-Open-816B-A42B" } } as never);
+    trace.observe({ type: "message.appended", meta: { at: at(1500) } });
+    trace.observe({ type: "step.completed", meta: { at: at(9000) }, data: { providerMetadata: { gateway: { generationId: BACKUP_ANSWERED } } } } as never);
+    await trace.flush();
+    expect(reports[0]!.model).toMatchObject({ model: "meta/muse-spark-open", where: "OpenRouter, zero retention", status: "ok" });
   });
 
   it("says stand-in when no model was called", async () => {
