@@ -1,13 +1,19 @@
 import { Agent } from "agents";
 import {
+  PROTOCOL_VERSION,
+  signMessage,
   validateMessageShape,
   verifyMessage,
+  type DocumentRequestPayload,
+  type MessageType,
   type ProtocolMessage,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest, type AuditEntry } from "../gateway/audit.js";
-import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
+import { generateAgentKeypair, importAgentPrivateKey, resolveAgentKey } from "./agent-keys.js";
+import { DOCUMENT_KINDS, documentKindLabel } from "../case-sharing.js";
+import type { PersonAgent } from "./person-agent.js";
 import {
   applyConsentDelivery,
   consentEventRecorded,
@@ -31,6 +37,28 @@ export interface ConsentResult {
   // sender must reconcile, never treat it as a definite refusal.
   retryable?: boolean;
 }
+
+// What staff see of one active case: only what the person shared and what
+// they sent in answer to a request. Never the person's agent ID.
+export interface CaseView {
+  caseId: string;
+  purpose: string;
+  sharedAt: string;
+  details: { label: string; value: string }[];
+  requests: { id: string; documentKind: string; label: string; status: string; requestedAt: string }[];
+  documents: { id: string; name: string; label: string; providedAt: string }[];
+  requestableKinds: Record<string, string>;
+}
+
+export type DocumentRequestResult =
+  | { status: "requested"; requestId: string }
+  // Not shared with this org, or no longer: nothing was asked.
+  | { status: "not_shared" }
+  | { status: "bad_input"; reason: string }
+  // The person's agent did not answer: the same key can be sent again.
+  | { status: "unavailable" };
+
+const REQUEST_KEY = /^[A-Za-z0-9_-]{8,128}$/;
 
 // Synced to staff screens: the org's active shared cases.
 export interface OrgState {
@@ -58,6 +86,16 @@ export class OrgAgent extends Agent<Env, OrgState> {
       } catch {
         // The column already exists: additive migrations are idempotent.
       }
+      // The values the person's approval froze, carried by the grant.
+      try {
+        sql.exec(`ALTER TABLE case_events ADD COLUMN details_json TEXT`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
+      // What staff asked for, with the signed message resent on a retry,
+      // and what the person sent. The bytes stay with the person's agent.
+      sql.exec(`CREATE TABLE IF NOT EXISTS document_requests(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, document_kind TEXT NOT NULL, status TEXT NOT NULL, message_json TEXT NOT NULL, requested_at TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS shared_documents(document_id TEXT NOT NULL, case_id TEXT NOT NULL, name TEXT NOT NULL, document_kind TEXT NOT NULL, provided_at TEXT NOT NULL, PRIMARY KEY (case_id, document_id))`);
       sql.exec(`CREATE TABLE IF NOT EXISTS agent_keys(agent_id TEXT PRIMARY KEY, public_key_b64 TEXT NOT NULL, first_seen TEXT NOT NULL)`);
       // Dedupe on sender plus idempotency key: retries resend the same
       // key, so a duplicate revoke can never end a newer share.
@@ -145,44 +183,9 @@ export class OrgAgent extends Agent<Env, OrgState> {
   // Accepts a signed consent message delivered by a person's agent. Only
   // this path adds cases to the org; the worker exposes no share route.
   async receiveConsent(message: unknown): Promise<ConsentResult> {
-    if (!validateMessageShape(message)) {
-      return { accepted: false, reason: "Malformed consent message." };
-    }
-    const msg = message as ProtocolMessage;
-    if (msg.type !== "consent.grant" && msg.type !== "consent.revoke") {
-      return { accepted: false, reason: `Wrong message type: ${msg.type}.` };
-    }
-    const addressed = ORG_AGENT_ID.exec(msg.toAgentId);
-    if (!addressed) {
-      return { accepted: false, reason: "This message is not addressed to an org agent." };
-    }
-    // A pinned ID rejects anything else, but pinning waits until a
-    // signature verifies below: an unverified message never sets it.
-    if (this.orgId && this.orgId !== addressed[1]) {
-      return { accepted: false, reason: "This message is addressed to a different org." };
-    }
-    if (!msg.approvedByHumanId) {
-      return { accepted: false, reason: "Consent needs a person's approval." };
-    }
-    if (!isCaseId(msg.caseId)) {
-      return { accepted: false, reason: CASE_ID_RULE };
-    }
-    const expected = await this.keyForSender(msg.fromAgentId);
-    if (!expected) {
-      return { accepted: false, reason: `Unknown sender: ${msg.fromAgentId}.` };
-    }
-    if (!(await verifyMessage(msg, expected))) {
-      return { accepted: false, reason: "Bad consent signature." };
-    }
-    if (!this.orgId) {
-      this.orgId = addressed[1];
-      await this.ctx.storage.put("orgId", this.orgId);
-    }
-
-    const payload = msg.payload as Record<string, unknown> | null;
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return { accepted: false, reason: "Consent payload must be an object." };
-    }
+    const inbound = await this.verifiedInbound(message, ["consent.grant", "consent.revoke"]);
+    if ("refused" in inbound) return inbound.refused;
+    const { msg, payload } = inbound;
     const sender = senderPerson(msg.fromAgentId);
     const owner = this.caseOwner(msg.caseId, msg.type === "consent.grant" ? sender : null);
     if (owner !== sender) {
@@ -228,7 +231,7 @@ export class OrgAgent extends Agent<Env, OrgState> {
     const scope: DeliveryScope = { fromAgentId: msg.fromAgentId, idempotencyKey: msg.idempotencyKey, event: "share" };
     const delivery = this.applyDelivery(scope, () => {
       this.db().exec("UPDATE case_owners SET expires_at_ms = ? WHERE case_id = ?", expiresAtMs, msg.caseId);
-      this.appendEvent(msg.caseId, "share", sender, payload.purpose as string, msg.id, now, msg.idempotencyKey);
+      this.appendEvent(msg.caseId, "share", sender, payload.purpose as string, msg.id, now, msg.idempotencyKey, JSON.stringify(payload.details ?? []));
     });
     if (delivery === "duplicate") return { accepted: true, duplicate: true };
     if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
@@ -239,6 +242,85 @@ export class OrgAgent extends Agent<Env, OrgState> {
     });
     this.syncState();
     return { accepted: true };
+  }
+
+  // A document the person approved sending, in answer to a request this
+  // org made on a case still shared with it. Only the record comes here.
+  async receiveDocument(message: unknown): Promise<ConsentResult> {
+    const inbound = await this.verifiedInbound(message, ["document.provide"]);
+    if ("refused" in inbound) return inbound.refused;
+    const { msg, payload } = inbound;
+    const sender = senderPerson(msg.fromAgentId);
+    if (this.activeCase(msg.caseId)?.personId !== sender) {
+      return { accepted: false, reason: "This case is not shared with this org." };
+    }
+    const { documentId, requestId, documentKind, name } = payload;
+    const request = this.db().exec("SELECT id FROM document_requests WHERE id = ? AND case_id = ?", String(requestId), msg.caseId).toArray();
+    if (typeof documentId !== "string" || request.length === 0 || !documentKindLabel(documentKind)) {
+      return { accepted: false, reason: "This org did not ask for that document." };
+    }
+    const now = new Date().toISOString();
+    const scope: DeliveryScope = { fromAgentId: msg.fromAgentId, idempotencyKey: msg.idempotencyKey, event: "document" };
+    const delivery = this.applyDelivery(scope, () => {
+      this.db().exec(
+        "INSERT OR IGNORE INTO shared_documents(document_id, case_id, name, document_kind, provided_at) VALUES (?, ?, ?, ?, ?)",
+        documentId, msg.caseId, typeof name === "string" && name ? name : documentId, documentKind as string, now,
+      );
+      this.db().exec("UPDATE document_requests SET status = 'provided' WHERE id = ? AND case_id = ?", String(requestId), msg.caseId);
+      this.appendEvent(msg.caseId, "document", sender, "", msg.id, now, msg.idempotencyKey);
+    });
+    if (delivery === "duplicate") return { accepted: true, duplicate: true };
+    if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
+    this.audit({ event: "case.document_received", caseHash: await auditDigest(msg.caseId), fromHash: await auditDigest(msg.fromAgentId) });
+    return { accepted: true };
+  }
+
+  // Checks common to everything a person's agent delivers: shape, address,
+  // the human approval, the case ID, and a signature against the sender's
+  // own key. Pins the org ID once a signature verifies.
+  private async verifiedInbound(
+    message: unknown,
+    types: readonly MessageType[],
+  ): Promise<{ msg: ProtocolMessage; payload: Record<string, unknown> } | { refused: ConsentResult }> {
+    const refused = (reason: string) => ({ refused: { accepted: false, reason } });
+    if (!validateMessageShape(message)) {
+      return refused("Malformed consent message.");
+    }
+    const msg = message as ProtocolMessage;
+    if (!types.includes(msg.type)) {
+      return refused(`Wrong message type: ${msg.type}.`);
+    }
+    const addressed = ORG_AGENT_ID.exec(msg.toAgentId);
+    if (!addressed) {
+      return refused("This message is not addressed to an org agent.");
+    }
+    // A pinned ID rejects anything else, but pinning waits until a
+    // signature verifies below: an unverified message never sets it.
+    if (this.orgId && this.orgId !== addressed[1]) {
+      return refused("This message is addressed to a different org.");
+    }
+    if (!msg.approvedByHumanId) {
+      return refused("Consent needs a person's approval.");
+    }
+    if (!isCaseId(msg.caseId)) {
+      return refused(CASE_ID_RULE);
+    }
+    const expected = await this.keyForSender(msg.fromAgentId);
+    if (!expected) {
+      return refused(`Unknown sender: ${msg.fromAgentId}.`);
+    }
+    if (!(await verifyMessage(msg, expected))) {
+      return refused("Bad consent signature.");
+    }
+    if (!this.orgId) {
+      this.orgId = addressed[1];
+      await this.ctx.storage.put("orgId", this.orgId);
+    }
+    const payload = msg.payload as Record<string, unknown> | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return refused("Consent payload must be an object.");
+    }
+    return { msg, payload: payload as Record<string, unknown> };
   }
 
   // The resident a case is bound to. A grant binds an unbound case to its
@@ -291,22 +373,130 @@ export class OrgAgent extends Agent<Env, OrgState> {
 
   private appendEvent(
     caseId: string,
-    event: "share" | "revoke",
+    event: ConsentEventType,
     personId: string,
     purpose: string,
     messageId: string,
     at: string,
     idempotencyKey: string,
+    detailsJson: string | null = null,
   ) {
     this.db().exec(
-      "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
-      caseId, event, personId, purpose, messageId, at, idempotencyKey,
+      "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key, details_json) VALUES (?,?,?,?,?,?,?,?)",
+      caseId, event, personId, purpose, messageId, at, idempotencyKey, detailsJson,
     );
   }
 
   async listCases(verifiedOrg: string): Promise<SharedCase[]> {
     await this.assertOrg(verifiedOrg);
     return this.activeCases();
+  }
+
+  // One active case for staff, or null when it is not shared with this
+  // org: never shared, revoked and expired all read the same.
+  async getCase(verifiedOrg: string, caseId: string): Promise<CaseView | null> {
+    await this.assertOrg(verifiedOrg);
+    const active = this.activeCase(caseId);
+    if (!active) return null;
+    const share = this.db().exec(
+      "SELECT details_json FROM case_events WHERE case_id = ? AND event = 'share' ORDER BY id DESC LIMIT 1",
+      caseId,
+    ).toArray()[0] as { details_json: string | null } | undefined;
+    const requests = this.db().exec(
+      "SELECT id, document_kind, status, requested_at FROM document_requests WHERE case_id = ? ORDER BY requested_at",
+      caseId,
+    ).toArray() as unknown as { id: string; document_kind: string; status: string; requested_at: string }[];
+    const documents = this.db().exec(
+      "SELECT document_id, name, document_kind, provided_at FROM shared_documents WHERE case_id = ? ORDER BY provided_at",
+      caseId,
+    ).toArray() as unknown as { document_id: string; name: string; document_kind: string; provided_at: string }[];
+    return {
+      caseId: active.caseId,
+      purpose: active.purpose,
+      sharedAt: active.sharedAt,
+      details: JSON.parse(share?.details_json ?? "[]") as { label: string; value: string }[],
+      requests: requests.map((r) => ({ id: r.id, documentKind: r.document_kind, label: documentKindLabel(r.document_kind) ?? r.document_kind, status: r.status, requestedAt: r.requested_at })),
+      documents: documents.map((d) => ({ id: d.document_id, name: d.name, label: documentKindLabel(d.document_kind) ?? d.document_kind, providedAt: d.provided_at })),
+      requestableKinds: DOCUMENT_KINDS,
+    };
+  }
+
+  // Staff ask the person for a document. The signed request is stored
+  // before it goes, so a retry under the same key resends the same message
+  // and the person is texted once.
+  async requestDocument(verifiedOrg: string, caseId: string, input: { documentKind: unknown; idempotencyKey: unknown }): Promise<DocumentRequestResult> {
+    await this.assertOrg(verifiedOrg);
+    const { documentKind, idempotencyKey } = input;
+    if (typeof documentKind !== "string" || !documentKindLabel(documentKind)) return { status: "bad_input", reason: "Unknown document kind." };
+    if (typeof idempotencyKey !== "string" || !REQUEST_KEY.test(idempotencyKey)) return { status: "bad_input", reason: "A request needs an idempotency key." };
+    const active = this.activeCase(caseId);
+    if (!active) return { status: "not_shared" };
+    const stored = this.db().exec("SELECT case_id, message_json FROM document_requests WHERE id = ?", idempotencyKey).toArray()[0] as { case_id: string; message_json: string } | undefined;
+    if (stored && stored.case_id !== caseId) return { status: "bad_input", reason: "That idempotency key was used for another case." };
+    const message: ProtocolMessage = stored
+      ? (JSON.parse(stored.message_json) as ProtocolMessage)
+      : await this.signDocumentRequest(active, documentKind, idempotencyKey);
+    if (!stored) {
+      this.db().exec(
+        "INSERT OR IGNORE INTO document_requests(id, case_id, document_kind, status, message_json, requested_at) VALUES (?, ?, ?, 'open', ?, ?)",
+        idempotencyKey, caseId, documentKind, JSON.stringify(message), message.createdAt,
+      );
+    }
+    const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
+    let answer: { accepted: boolean };
+    try {
+      answer = await person.receiveDocumentRequest(message);
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (!answer.accepted) {
+      this.db().exec("UPDATE document_requests SET status = 'refused' WHERE id = ? AND status = 'open'", idempotencyKey);
+      return { status: "not_shared" };
+    }
+    this.audit({ event: "case.document_request", caseHash: await auditDigest(caseId) });
+    return { status: "requested", requestId: idempotencyKey };
+  }
+
+  private async signDocumentRequest(active: SharedCase, documentKind: string, idempotencyKey: string): Promise<ProtocolMessage> {
+    const jwk = await this.ctx.storage.get<JsonWebKey>("agentPrivateKeyJwk");
+    const publicKeyB64 = await this.getPublicKey();
+    if (!jwk) throw new Error("Agent keypair is missing.");
+    const payload: DocumentRequestPayload = { documentKind, reason: `Needed for ${active.purpose}.` };
+    return signMessage(
+      {
+        id: crypto.randomUUID(),
+        version: PROTOCOL_VERSION,
+        type: "document.request",
+        caseId: active.caseId,
+        fromAgentId: `org:${this.orgId}`,
+        toAgentId: `person:${active.personId}`,
+        payload,
+        sources: [],
+        approvedByHumanId: null,
+        idempotencyKey,
+        createdAt: new Date().toISOString(),
+      },
+      await importAgentPrivateKey(jwk),
+      publicKeyB64,
+    );
+  }
+
+  // A sent document's bytes for staff, asked of the person's agent on each
+  // read: its own records must also say this org may read it.
+  async readDocument(verifiedOrg: string, caseId: string, documentId: string): Promise<{ name: string; contentB64: string } | null> {
+    await this.assertOrg(verifiedOrg);
+    const active = this.activeCase(caseId);
+    if (!active) return null;
+    const row = this.db().exec("SELECT 1 FROM shared_documents WHERE case_id = ? AND document_id = ?", caseId, documentId).toArray();
+    if (row.length === 0) return null;
+    const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
+    const document = await person.readSharedDocument(`org:${this.orgId}`, caseId, documentId);
+    if (document) this.audit({ event: "case.document_read", caseHash: await auditDigest(caseId) });
+    return document;
+  }
+
+  private activeCase(caseId: string): SharedCase | null {
+    return this.activeCases().find((c) => c.caseId === caseId) ?? null;
   }
 
   private activeCases(): SharedCase[] {

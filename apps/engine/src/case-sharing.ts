@@ -1,0 +1,199 @@
+// Sharing a case, on the person's side: what they shared, with which
+// organization, what that organization asked for and what they sent back.
+// Rows are per organization and case, so stopping with one organization
+// says nothing about another. Stopping is final for that organization and
+// case; sharing again later opens a new case, so nothing old comes back.
+// The organization's own copy of these facts lives in its OrgAgent; both
+// sides refuse on their own.
+import { recipientName } from "@mano/protocol";
+
+interface SqlExec {
+  exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
+}
+
+// What an organization may ask for, by the words Mano texts. A closed list:
+// staff typing never reaches the person's phone, so a request can carry no
+// link or instruction.
+export const DOCUMENT_KINDS: Readonly<Record<string, string>> = {
+  "pay-stub": "pay stub",
+  "proof-of-address": "proof of address",
+  "photo-id": "photo ID",
+  "bank-statement": "bank statement",
+  "rent-receipt": "rent receipt",
+};
+
+export function documentKindLabel(kind: unknown): string | null {
+  return typeof kind === "string" && Object.hasOwn(DOCUMENT_KINDS, kind) ? DOCUMENT_KINDS[kind] : null;
+}
+
+// A reminder row delivers the text, so a request gets its retries and its
+// one send. Reminders the person set are listed without these.
+const REQUEST_REMINDER_PREFIX = "case-request:";
+
+export function isRequestReminder(id: string): boolean {
+  return id.startsWith(REQUEST_REMINDER_PREFIX);
+}
+
+export function requestReminderId(requestId: string): string {
+  return `${REQUEST_REMINDER_PREFIX}${requestId}`;
+}
+
+export function documentRequestText(recipient: string, purpose: string, label: string): string {
+  const name = recipientName(recipient);
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} asked for your ${label} for ${purpose}. Send a photo of it here and I will check with you before it goes to them.`;
+}
+
+export function ensureCaseSharingTables(sql: SqlExec): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, expires_at_ms INTEGER, PRIMARY KEY (recipient, case_id))`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS revoked_shares(recipient TEXT NOT NULL, case_id TEXT NOT NULL, revoked_at TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS document_requests(recipient TEXT NOT NULL, id TEXT NOT NULL, case_id TEXT NOT NULL, document_kind TEXT NOT NULL, status TEXT NOT NULL, requested_at TEXT NOT NULL, PRIMARY KEY (recipient, id))`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS shared_documents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, document_id TEXT NOT NULL, PRIMARY KEY (recipient, case_id, document_id))`);
+}
+
+// Revocations recorded before they were per organization name only the
+// case. The revoke's stored outbound message names the organization: the
+// message is stored before delivery, and the row is written after it.
+export function migrateRevokedCases(sql: SqlExec): void {
+  if (sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'revoked_cases'").toArray().length === 0) return;
+  const revoked = new Map(
+    (sql.exec("SELECT case_id, revoked_at FROM revoked_cases").toArray() as { case_id: string; revoked_at: string }[]).map((r) => [r.case_id, r.revoked_at]),
+  );
+  for (const row of sql.exec("SELECT message_json FROM outbound_consent").toArray() as { message_json: string }[]) {
+    let message: { type?: string; caseId?: string; toAgentId?: string };
+    try {
+      message = JSON.parse(row.message_json) as typeof message;
+    } catch {
+      continue;
+    }
+    const at = message.caseId ? revoked.get(message.caseId) : undefined;
+    if (message.type === "consent.revoke" && at && message.toAgentId) {
+      sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", message.toAgentId, message.caseId, at);
+    }
+  }
+  sql.exec("DROP TABLE revoked_cases");
+}
+
+export function shareRevoked(sql: SqlExec, recipient: string, caseId: string): boolean {
+  return sql.exec("SELECT 1 FROM revoked_shares WHERE recipient = ? AND case_id = ?", recipient, caseId).toArray().length > 0;
+}
+
+export function shareActive(sql: SqlExec, recipient: string, caseId: string, nowMs: number): boolean {
+  if (shareRevoked(sql, recipient, caseId)) return false;
+  return (
+    sql.exec(
+      "SELECT 1 FROM consents WHERE recipient = ? AND case_id = ? AND (expires_at_ms IS NULL OR expires_at_ms > ?)",
+      recipient, caseId, nowMs,
+    ).toArray().length > 0
+  );
+}
+
+export function documentShared(sql: SqlExec, recipient: string, caseId: string, documentId: string): boolean {
+  return (
+    sql.exec("SELECT 1 FROM shared_documents WHERE recipient = ? AND case_id = ? AND document_id = ?", recipient, caseId, documentId).toArray().length > 0
+  );
+}
+
+interface ShareRequest {
+  consent?: string;
+  caseId?: string;
+  expiresAt?: string;
+  requestId?: string;
+}
+
+// The approved action's effect on the person's records. Runs inside the
+// transaction that records the action's receipt, at most once per key: a
+// SQL error rolls the whole of it back.
+export function applyShareOutcome(
+  sql: SqlExec,
+  approval: { recipient: string; purpose: string; requestJson: string },
+  nowMs: number,
+  cancelRequestText: (requestId: string) => void,
+): void {
+  let stored: { payload?: ShareRequest; documentId?: string };
+  try {
+    stored = JSON.parse(approval.requestJson) as typeof stored;
+  } catch {
+    // Approval JSON is written by the gateway; an unreadable row has no effect to apply.
+    return;
+  }
+  const payload = stored.payload;
+  const caseId = payload?.caseId;
+  if (typeof caseId !== "string" || !caseId) return;
+  const { recipient } = approval;
+  if (payload?.consent === "grant") {
+    // A revocation already recorded wins: a grant whose response was lost
+    // and that reconciles after it never restores it.
+    if (shareRevoked(sql, recipient, caseId)) return;
+    // Parsed to epoch milliseconds at write time; an unreadable value
+    // fails closed as already expired.
+    const raw = payload.expiresAt;
+    const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
+      ? new Date(raw).getTime()
+      : raw === undefined
+        ? null
+        : 0;
+    sql.exec("INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)", recipient, caseId, approval.purpose, expiresAtMs);
+  } else if (payload?.consent === "revoke") {
+    sql.exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", recipient, caseId);
+    sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", recipient, caseId, new Date(nowMs).toISOString());
+    const open = sql.exec("SELECT id FROM document_requests WHERE recipient = ? AND case_id = ? AND status = 'open'", recipient, caseId).toArray() as { id: string }[];
+    sql.exec("UPDATE document_requests SET status = 'closed' WHERE recipient = ? AND case_id = ? AND status = 'open'", recipient, caseId);
+    for (const { id } of open) cancelRequestText(id);
+  } else if (payload?.consent === "provide" && typeof stored.documentId === "string") {
+    sql.exec("INSERT OR IGNORE INTO shared_documents VALUES (?, ?, ?)", recipient, caseId, stored.documentId);
+    sql.exec("UPDATE document_requests SET status = 'provided' WHERE recipient = ? AND id = ? AND status = 'open'", recipient, payload.requestId ?? "");
+  }
+}
+
+// One row per request: true only for the delivery that recorded it, so a
+// redelivered request texts nobody twice.
+export function recordDocumentRequest(
+  sql: SqlExec,
+  input: { recipient: string; id: string; caseId: string; documentKind: string; requestedAt: string },
+): boolean {
+  return (
+    sql.exec(
+      "INSERT OR IGNORE INTO document_requests(recipient, id, case_id, document_kind, status, requested_at) VALUES (?, ?, ?, ?, 'open', ?)",
+      input.recipient, input.id, input.caseId, input.documentKind, input.requestedAt,
+    ).rowsWritten > 0
+  );
+}
+
+export interface ShareList {
+  active: {
+    recipient: string;
+    caseId: string;
+    purpose: string;
+    openRequests: { id: string; documentKind: string; label: string; requestedAt: string }[];
+  }[];
+  revoked: { recipient: string; caseId: string }[];
+}
+
+export function listShares(sql: SqlExec, nowMs: number): ShareList {
+  const revoked = (sql.exec("SELECT recipient, case_id FROM revoked_shares").toArray() as { recipient: string; case_id: string }[]).map((r) => ({
+    recipient: r.recipient,
+    caseId: r.case_id,
+  }));
+  const consents = sql.exec(
+    "SELECT recipient, case_id, purpose FROM consents WHERE expires_at_ms IS NULL OR expires_at_ms > ? ORDER BY case_id",
+    nowMs,
+  ).toArray() as { recipient: string; case_id: string; purpose: string }[];
+  const requests = sql.exec("SELECT recipient, id, case_id, document_kind, requested_at FROM document_requests WHERE status = 'open' ORDER BY requested_at").toArray() as {
+    recipient: string;
+    id: string;
+    case_id: string;
+    document_kind: string;
+    requested_at: string;
+  }[];
+  return {
+    revoked,
+    active: consents.map((c) => ({
+      recipient: c.recipient,
+      caseId: c.case_id,
+      purpose: c.purpose,
+      openRequests: requests
+        .filter((r) => r.recipient === c.recipient && r.case_id === c.case_id)
+        .map((r) => ({ id: r.id, documentKind: r.document_kind, label: documentKindLabel(r.document_kind) ?? "document", requestedAt: r.requested_at })),
+    })),
+  };
+}
