@@ -636,6 +636,39 @@ describe("review of f808af6: a total she corrected does not come back", () => {
   });
 });
 
+describe("a member a document or note writes without a name", () => {
+  const own = (key: string, fields: Record<string, string | boolean>) => person().patchProfile({ idempotencyKey: key, source: "person", fields });
+  const fromDocument = (key: string, fields: Record<string, string>) => person().patchProfile({ idempotencyKey: key, source: "document", documentId: PHOTO, fields });
+  const later = () => new Promise((r) => setTimeout(r, 3));
+
+  beforeEach(() => engine.putDocument(PERSON, PHOTO, PNG));
+
+  describe.each([
+    ["relationship", "relationship", "son"],
+    ["birth date", "dateOfBirth", "2015-01-01"],
+  ])("%s only", (_what, field, value) => {
+    it("does not count when it arrives after she confirmed", async () => {
+      await own("roster-a", { "household.leo.name": "Leo", "person.householdConfirmed": true });
+      await later();
+      await fromDocument("doc-a", { [`household.x.${field}`]: value });
+      expect(await draftValue("householdSize")).toBe("2");
+    });
+
+    it("does not count when it was on file before she confirmed", async () => {
+      await fromDocument("doc-b", { [`household.x.${field}`]: value });
+      await later();
+      await own("roster-b", { "household.leo.name": "Leo", "person.householdConfirmed": true });
+      expect(await draftValue("householdSize")).toBe("2");
+    });
+
+    it("does not count when it comes from a note", async () => {
+      await own("roster-c", { "person.householdConfirmed": true });
+      await person().patchProfile({ idempotencyKey: "note-c", source: "agent", fields: { [`household.x.${field}`]: value } });
+      expect(await draftValue("householdSize")).toBe("1");
+    });
+  });
+});
+
 describe("a state written out in an address", () => {
   const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
 
