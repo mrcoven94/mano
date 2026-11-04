@@ -53,10 +53,12 @@ export function useTryRun() {
     return () => { alive.current = false; };
   }, []);
 
+  /* The poll and the read at a leg's end can ask for the same events. Each counts once. */
   const take = useCallback((fresh: TryLogged[]) => {
-    if (fresh.length === 0) return;
-    seq.current = fresh[fresh.length - 1]!.seq;
-    setEvents((all) => [...all, ...fresh]);
+    const unseen = fresh.filter((e) => e.seq > seq.current);
+    if (unseen.length === 0) return;
+    seq.current = unseen[unseen.length - 1]!.seq;
+    setEvents((all) => [...all, ...unseen]);
   }, []);
 
   /* The events arrive on their own clock while a leg runs, so the page shows each step as it happens. */
