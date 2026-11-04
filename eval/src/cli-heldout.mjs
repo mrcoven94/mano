@@ -15,12 +15,12 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { generateDevHouseholds, generateHeldoutHouseholds } from "./generator.mjs";
 import { photoTrackInput, sliceAnswers, toAnswers, toBaselineInputs } from "./inputs.mjs";
-import { modelRoute, preflight, routeLabel } from "./openrouter.mjs";
+import { modalSpendReport, modelRoute, preflight, routeLabel } from "./openrouter.mjs";
 import { photoFilesByLetter, photoHouseholdIds, renderHouseholdPhotos } from "./render.mjs";
 import { runTrack } from "./tracks.mjs";
 import { registerTemp } from "./cleanup.mjs";
 import { installedPackages } from "./build-mano.mjs";
-import { modalSpendReport, osSandboxAvailable, osSandboxGrants } from "./harness.mjs";
+import { osSandboxAvailable, osSandboxGrants } from "./harness.mjs";
 import { readRecord, verifyCode, verifyDev, verifyHeldout, verifyMano, verifyPhotos, verifySeedCommitment } from "./verify.mjs";
 
 function abort(message) {

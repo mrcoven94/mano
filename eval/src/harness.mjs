@@ -15,7 +15,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { registerChild, registerTemp } from "./cleanup.mjs";
-import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, MODAL_MODEL, modalChatBody, modalChatUrl, modalCostUsd, modalReserveUsd } from "./openrouter.mjs";
+import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, MODAL_MODEL, modalChatBody, modalChatUrl, admitModalCall, settleModalCall } from "./openrouter.mjs";
 
 // The harness refuses to run unless the runtime can deny network: a child
 // that cannot be kept offline invalidates every isolation claim. Checked
@@ -91,20 +91,6 @@ export function osSandboxProfile(runDir, readDirs = [], execPath = process.execP
 export function osSandboxAvailable() {
   if (process.platform !== "darwin") return false;
   return spawnSync(SANDBOX_EXEC, ["-p", "(version 1)(allow default)", "/usr/bin/true"]).status === 0;
-}
-
-// Every Modal call passes the broker, so this is where the ceiling is held. Each call
-// reserves its worst case before it goes; one with no usage back stays charged at that.
-const CEILING_USD = Number(process.env.MANO_EVAL_CEILING_USD) || null;
-const modalSpend = { calls: 0, promptTokens: 0, completionTokens: 0, spentUsd: 0, reservedUsd: 0, stopped: false };
-export function modalSpendReport() {
-  return { ...modalSpend, spentUsd: +modalSpend.spentUsd.toFixed(4), reservedUsd: +modalSpend.reservedUsd.toFixed(4), ceilingUsd: CEILING_USD };
-}
-function stopAtCeiling() {
-  if (modalSpend.stopped) return;
-  modalSpend.stopped = true;
-  console.error(`CEILING: stopping the run ${JSON.stringify(modalSpendReport())}`);
-  process.kill(process.pid, "SIGTERM");
 }
 
 function brokerRoute(url, method) {
@@ -255,7 +241,7 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           headers.authorization = `Bearer ${key}`;
         }
         let body = msg.body;
-        let reserve = 0;
+        let reserve = null;
         if (route.modal) {
           let parsed;
           try {
@@ -270,16 +256,13 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           }
           const sent = modalChatBody(parsed);
           body = JSON.stringify(sent);
-          reserve = modalReserveUsd(sent);
-          if (modalSpend.stopped || (CEILING_USD !== null && modalSpend.spentUsd + modalSpend.reservedUsd + reserve > CEILING_USD)) {
-            stopAtCeiling();
+          reserve = admitModalCall(sent);
+          if (reserve === null) {
             reply({ ok: false, error: "broker denied: spending ceiling" });
             return;
           }
-          modalSpend.calls++;
-          modalSpend.reservedUsd += reserve;
         }
-        let charge = reserve;
+        let settled = !route.modal;
         if (route.pinned) {
           // The model and the zero-retention pin are set here, last, so a
           // request from the child cannot change them.
@@ -311,13 +294,9 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
             json = null;
           }
           if (route.modal) {
-            if (res.status >= 400 && res.status < 500) charge = 0;
-            if (json?.usage) {
-              charge = modalCostUsd(json.usage);
-              modalSpend.promptTokens += json.usage.prompt_tokens ?? 0;
-              modalSpend.completionTokens += json.usage.completion_tokens ?? 0;
-              json.usage.cost = charge;
-            }
+            settled = true;
+            const cost = settleModalCall(reserve, res.status, json?.usage);
+            if (cost !== null) json.usage.cost = cost;
             if (res.ok && json?.model !== MODAL_MODEL) {
               reply({ ok: false, error: "broker denied: a different model answered" });
               return;
@@ -329,13 +308,8 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           }
           reply({ ok: true, statusOk: res.ok === true, status: res.status ?? 0, json });
         } catch (err) {
+          if (!settled) settleModalCall(reserve);
           reply({ ok: false, transport: true, error: "broker fetch failed" });
-        } finally {
-          if (route.modal) {
-            modalSpend.reservedUsd -= reserve;
-            modalSpend.spentUsd += charge;
-            if (CEILING_USD !== null && modalSpend.spentUsd >= CEILING_USD) stopAtCeiling();
-          }
         }
       })();
     });
