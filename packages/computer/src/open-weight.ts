@@ -10,9 +10,11 @@
  * reply is accepted whole or not at all: it must say it completed, hold only
  * items this path offers, and every call and action in it must parse.
  *
- * Nothing but the API key is an option here. The model, the zero-retention
- * pin and the endpoint are constants, so this client cannot send a screenshot
- * anywhere else. This path never raises a safety check: there is no hosted
+ * The model, the zero-retention pin and the OpenRouter endpoint are constants.
+ * The one other place this client can send a screenshot is a Modal Shared
+ * Endpoint serving the same model, named by modalUrl and held to Modal's domain.
+ * Rule 7 does not list that route, so it carries synthetic data only until
+ * David changes that rule. This path never raises a safety check: there is no hosted
  * tool to raise one. What holds instead is this parser, the loop's closed list
  * of keys and buttons, and the desktop, which binds no window manager keys and
  * reaches only the portal, whose browser pages save drafts and file nothing.
@@ -31,6 +33,21 @@ const OPEN_WEIGHT_BODY = Object.freeze({
   reasoning: Object.freeze({ effort: "low" }),
   max_output_tokens: 4096,
 });
+
+export const MODAL_MODEL_ID = "meta-models/Muse-Spark-Open-816B-A42B";
+
+// Modal has no per-request routing to pin: its security page says Shared
+// Endpoints keep no request or response payloads.
+const MODAL_BODY = Object.freeze({
+  reasoning: OPEN_WEIGHT_BODY.reasoning,
+  max_output_tokens: OPEN_WEIGHT_BODY.max_output_tokens,
+});
+
+function modalApiRoot(raw: string): string {
+  const url = new URL(raw);
+  if (url.protocol !== "https:" || !url.hostname.endsWith(".modal.direct")) throw new Error("this path reaches Modal only on its own endpoint domain");
+  return `${url.origin}/v1`;
+}
 
 const TOOL_NAME = "computer";
 // Both backends' default, and fills never change it.
@@ -192,6 +209,8 @@ function toOpenWeight(input: unknown[]): unknown[] {
 
 export interface OpenWeightModelOptions {
   apiKey: string;
+  /** A Modal Shared Endpoint's URL, with apiKey as its proxy token. Without one, OpenRouter. */
+  modalUrl?: string;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
   retryDelaysMs?: number[];
@@ -199,13 +218,17 @@ export interface OpenWeightModelOptions {
 
 export class OpenWeightModelClient implements ModelClient {
   private inner: FetchModelClient;
+  private modelId: string;
 
-  constructor(options: OpenWeightModelOptions) {
-    this.inner = new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
+  constructor({ modalUrl, ...options }: OpenWeightModelOptions) {
+    this.modelId = modalUrl ? MODAL_MODEL_ID : OPEN_WEIGHT_MODEL_ID;
+    this.inner = modalUrl
+      ? new FetchModelClient({ ...options, baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
+      : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
   }
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
-    if (request.model !== OPEN_WEIGHT_MODEL_ID) throw new Error("this path runs only Meta's open-weight model");
+    if (request.model !== this.modelId) throw new Error("this path runs only Meta's open-weight model");
     const response = await this.inner.createResponse({ ...request, tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
