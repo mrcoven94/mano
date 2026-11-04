@@ -14,12 +14,14 @@ import { engineFromEnv } from "../lib/engine.js";
 import { selectModelRoute } from "../lib/muse.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
 import { AgentMarks } from "../lib/timings.js";
+import { handleListen } from "../lib/listen.js";
 import { tryStepTrace } from "../lib/try-trace.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
 
 export const TURN_PATH = "/channels/mano/turn";
 export const DELETED_PATH = "/channels/mano/deleted";
 export const PRESENTED_PATH = "/channels/mano/presented";
+export const LISTEN_PATH = "/channels/mano/listen";
 // Channels' responder timeout sits above this, so a slow turn fails
 // over to the fallback answer instead of hanging the conversation.
 export const SETTLE_TIMEOUT_MS = 90_000;
@@ -87,6 +89,9 @@ export default defineChannel({
     ),
     POST(PRESENTED_PATH, async (request) =>
       handlePresented(request, { secret: process.env.MANO_AGENT_SECRET, engine: engineFromEnv() }),
+    ),
+    POST(LISTEN_PATH, async (request) =>
+      handleListen(request, { secret: process.env.MANO_AGENT_SECRET, engine: engineFromEnv(), env: process.env }),
     ),
     POST(DELETED_PATH, async (request, { from }) =>
       handleDeleted(request, {

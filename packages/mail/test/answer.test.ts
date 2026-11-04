@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ANSWER_WORDS, REPLY_LANGUAGES, answerReading, gateSentence, readMail } from "../src/index.js";
+import { ANSWER_WORDS, REPLY_LANGUAGES, RecordedModelClient, answerReading, gateSentence, readMail } from "../src/index.js";
 import {
   DOUBTFUL_PAGE,
   PLANTED_DEADLINE,
@@ -431,5 +431,73 @@ describe("the answer in the person's language", () => {
       expect(Object.keys(w.categories)).toHaveLength(8);
       expect(Object.keys(w.letterType)).toHaveLength(8);
     }
+  });
+});
+
+describe("one photo with several letters on it", () => {
+  const NO_DATE = "I did not find a date to meet in this one.";
+  const SCAM = pageJson({
+    full_text: `${RENEWAL_TEXT} Buy a prepaid card and send us the numbers to keep your benefits.`,
+    sender: { text: "Benefit Rescue Center", box_2d: [40, 60, 70, 400] },
+    reference_no: { text: "X-9", box_2d: [110, 220, 130, 350] },
+  });
+  const quiet = (over: Record<string, unknown> = {}) =>
+    pageJson({
+      full_text: "Sacramento County Human Services. Annual notice. CalFresh office hours are changing next spring.",
+      sender: { text: "Sacramento County Human Services", box_2d: [40, 60, 70, 400] },
+      program: { text: "CalFresh", box_2d: [80, 60, 100, 200] },
+      subject: { text: "Annual notice", box_2d: [110, 60, 130, 200] },
+      asked: [],
+      deadlines: [],
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+      ...over,
+    });
+
+  async function pile(pages: string[]) {
+    const tall = (i: number) => `{"box_2d":[20,${20 + i * 320},980,${320 + i * 320}],"label":"letter","score":0.9}`;
+    const usage = { inputTokens: 1, outputTokens: 1 };
+    const model = new RecordedModelClient([
+      { match: (req) => req.model === "sam-3.1", result: { text: `{"detections":[${pages.map((_, i) => tall(i)).join(",")}]}`, usage, raw: {} } },
+      ...pages.map((text) => ({ match: (req: { model: string }) => req.model !== "sam-3.1", consume: true, result: { text, usage, raw: {} } })),
+    ]);
+    return readMail([{ bytes: await letterPhoto(), mimeType: "image/jpeg", name: "pile.jpg" }], { personId: "p1", synthetic: true, model });
+  }
+
+  it("names all three: the renewal and its date, the scam, and the one with no date", async () => {
+    const { text, deadlines } = answerReading(await pile([RENEWAL_PAGE, SCAM, quiet()]));
+    const [first, second, third] = text.split("\n\n");
+    expect(first).toMatch(/^Letter 1\. This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
+    expect(second).toMatch(/^Letter 2\. This letter looks like a scam\./);
+    expect(third).toBe(`Letter 3. This is a CalFresh letter. ${NO_DATE} If you need to call the office, use the number on your state's official site, not one from a letter.`);
+    expect(deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+
+  it("never says a letter can wait", async () => {
+    expect(answerReading(await pile([RENEWAL_PAGE, SCAM, quiet()])).text).not.toMatch(/can wait/i);
+  });
+
+  it.each([
+    ["a date only in the transcription", quiet({ full_text: "Annual notice. CalFresh. Your benefits end November 20, 2026." })],
+    ["a numeric date", quiet({ full_text: "Annual notice. CalFresh. Effective 11/20/2026." })],
+    ["a missing page", quiet({ full_text: "Annual notice. CalFresh office hours. Page 1 of 2", page_marker: { text: "Page 1 of 2", box_2d: [960, 400, 980, 600] } })],
+    ["a field Mano could not verify", quiet({ reference_no: { text: "NOT-IN-TEXT", box_2d: [110, 220, 130, 350] } })],
+    ["an unreadable page", quiet({ readable: false, readability_note: "blurred" })],
+  ])("says nothing about dates for %s", async (_name, letter) => {
+    expect(answerReading(await pile([RENEWAL_PAGE, letter])).text).not.toContain(NO_DATE);
+  });
+
+  it("a letter alone keeps its plain answer", async () => {
+    expect(answerReading(await pile([quiet()])).text).not.toContain(NO_DATE);
+  });
+
+  it.each([
+    ["es", "No encontré una fecha que deba cumplir en esta."],
+    ["vi", "Tôi không thấy ngày nào cần kịp trong thư này."],
+    ["tl", "Wala akong nakitang petsang dapat habulin sa sulat na ito."],
+  ] as const)("says so in %s too", async (language, says) => {
+    expect(answerReading(await pile([RENEWAL_PAGE, SCAM, quiet()]), language).text).toContain(says);
   });
 });

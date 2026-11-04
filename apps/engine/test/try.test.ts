@@ -3,7 +3,7 @@
 // agent, which lives elsewhere, and the site's letter image are scripted.
 import { SELF, env as testEnv } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
-import { isTryHandle, type TryLogged } from "@mano/protocol";
+import { isTryHandle, mintHandleGrant, personIdForHandle, type TryLogged } from "@mano/protocol";
 
 import type { Env } from "../src/env.js";
 import { DAILY_RUN_CAP, GUARDIAN_PROBES_PER_RUN, GUARDIAN_WARM_WINDOW_MS, IP_RUNS_PER_HOUR, LEG_LEASE_MS, MAX_TURNS_PER_RUN, RUN_EXPIRES_MS, type TryLedger } from "../src/try/ledger.js";
@@ -14,7 +14,7 @@ const SECRET = "test-agent-secret-not-real";
 const env = { ...(testEnv as unknown as Env), MANO_TRY: "on", MANO_TRY_ORIGIN: ORIGIN, MANO_AGENT_URL: "https://agent.test", MANO_AGENT_SECRET: SECRET } as Env;
 const self = (request: Request) => SELF.fetch(request);
 
-type Script = (texts: string[], body: Record<string, unknown>) => Record<string, unknown>;
+type Script = (texts: string[], body: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 function fakeFetch(script: Script, seen: { turns: Record<string, unknown>[]; headers: Headers[] }): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -24,7 +24,7 @@ function fakeFetch(script: Script, seen: { turns: Record<string, unknown>[]; hea
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     seen.turns.push(body);
     seen.headers.push(new Headers(init?.headers));
-    return Response.json(script(body.texts as string[], body));
+    return Response.json(await script(body.texts as string[], body));
   }) as typeof fetch;
 }
 
@@ -340,6 +340,78 @@ describe("a run", () => {
     expect(seen.turns.length - before).toBeLessThanOrEqual(MAX_TURNS_PER_RUN - 6);
     expect(answers.at(-1)).toEqual({ next: "end" });
     expect(((await eventsOf(runId)).at(-1) as { text: string }).text).toMatch(/unverified/);
+  });
+
+  // The agent is scripted, and its proposal and approval go to the real routes,
+  // so the real gateway decides.
+  const agentOnEngine = (): Script => {
+    let approvalId = "";
+    const route = async (handleHash: string, method: string, path: string, body?: unknown) => {
+      const person = personIdForHandle(handleHash);
+      return SELF.fetch(`https://engine.test/api/persons/${encodeURIComponent(person)}${path}`, {
+        method,
+        headers: {
+          authorization: "Bearer test-agent-token-not-real",
+          "content-type": "application/json",
+          "x-mano-handle-grant": await mintHandleGrant(handleHash, "test-handle-grant-secret-not-real"),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    };
+    return async (texts, body) => {
+      const handleHash = String(body.handleHash);
+      if (texts[0]?.startsWith("Please fill")) {
+        const res = await route(handleHash, "POST", "/action", {
+          type: "submit",
+          recipient: "sandbox-agency-portal",
+          purpose: "Food benefits renewal",
+          payload: { fullName: "Maria Torres" },
+          documentId: "try1",
+          sources: [{ kind: "document", id: "try1" }],
+          idempotencyKey: `test-${crypto.randomUUID()}`,
+          actor: "foreground",
+          origin: "person",
+          generation: 0,
+        });
+        const out = (await res.json()) as { status: string; approval?: { id: string } };
+        expect(out.status).toBe("needs_approval");
+        approvalId = out.approval!.id;
+        return { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId };
+      }
+      if (texts[0] === "YES") {
+        const res = await route(handleHash, "POST", `/approvals/${approvalId}/approve`);
+        const out = (await res.json()) as { status: string };
+        return { status: "replied", text: out.status === "stale" ? "That changed after you saw it, so nothing was sent." : `Answer: ${out.status}` };
+      }
+      return { status: "replied", text: "Your renewal is due November 14." };
+    };
+  };
+
+  const toQuestion = async (scenario: string, script: Script) => {
+    const res = await start(scenario, uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const press = (body = "{}") => call(`/try/runs/${runId}/next`, { method: "POST", body }, script);
+    await press();
+    await press();
+    await press();
+    return { runId, press };
+  };
+
+  it("has the gateway refuse a yes when the document changed after the question", async () => {
+    const { runId, press } = await toQuestion("changed", agentOnEngine());
+    expect(await (await press(JSON.stringify({ press: "yes" }))).json()).toEqual({ next: "end" });
+    const events = await eventsOf(runId);
+    expect(events.some((e) => e.kind === "note" && e.text.includes("changed one byte"))).toBe(true);
+    expect(events.at(-1)).toMatchObject({ kind: "outcome", ok: true, text: expect.stringContaining("Nothing was filed") });
+    expect(events.some((e) => e.kind === "filed")).toBe(false);
+  });
+
+  it("leaves the document alone on an ordinary run", async () => {
+    const { runId, press } = await toQuestion("maria", agentOnEngine());
+    await press(JSON.stringify({ press: "yes" }));
+    const events = await eventsOf(runId);
+    expect(events.some((e) => e.kind === "note" && e.text.includes("changed one byte"))).toBe(false);
+    expect(events.at(-1)).not.toMatchObject({ text: expect.stringContaining("document changed") });
   });
 
   it("ends the run in plain words when Mano cannot answer", async () => {
