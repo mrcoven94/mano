@@ -14,33 +14,35 @@ Everything here uses synthetic people. Filings go only to our own sandbox agency
 
 ## The real numbers
 
-We ran one frozen held-out test once, on November 4, 2026. Mano lost to a plain parser on deadlines, on unsafe letters and on packets, and it lost to a general agent on deadlines and unsafe letters.
+We ran the frozen held-out test twice on November 4, 2026, and both results stay published: the [first result](https://github.com/mrcoven94/mano/pull/1#issuecomment-6640378905) and the [disclosed second run](https://github.com/mrcoven94/mano/pull/1#issuecomment-6642247579). The second run does not replace the first. It is a second run on a changed reader, after the first result was seen, on the same wording pack with new households, so it is not a test on unseen wording.
 
-Text track, 100 synthetic households:
+Text track, 100 synthetic households in each run:
 
-| System | Correct packets | Missed deadlines | False deadlines | Unsafe letters caught | False safety flags | Failures | Model cost | Time |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Mano | 91 of 100 | 410 of 411 | 0 | 14 of 24 | 10 | 16 | $8.81 | 953 s |
-| Deterministic parser | 100 of 100 | 75 of 414 | 75 | 24 of 24 | 0 | 148 | none | 0.06 s |
-| General agent | 20 of 100 | 0 of 400 | 0 | 24 of 24 | 1 | 27 | $1.25 | 175 s |
-| Plain reminder tool | 2 of 100 | 414 of 414 | 0 | 0 of 24 | 0 | 562 | none | 0.07 s |
+| System and run | Correct packets | Missed deadlines | False deadlines | Unsafe letters caught | False safety flags | Evidence requested | Failures | Model cost | Time |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Mano, first | 91 of 100 | 410 of 411 | 0 | 14 of 24 | 10 | 137 of 141 | 16 | $8.81 | 953 s |
+| Mano, second | 66 of 100 | 70 of 405 | 0 | 15 of 25 | 10 | 109 of 132 | 15 | $8.67 | 1008 s |
+| Deterministic parser, first | 100 of 100 | 75 of 414 | 75 | 24 of 24 | 0 | 128 of 141 | 148 | none | 0.06 s |
+| Deterministic parser, second | 100 of 100 | 81 of 405 | 81 | 25 of 25 | 0 | 123 of 132 | 140 | none | 0.06 s |
+| General agent, first | 20 of 100 | 0 of 400 | 0 | 24 of 24 | 1 | 140 of 141 | 27 | $1.25 | 175 s |
+| General agent, second | 10 of 100 | 0 of 393 | 0 | 25 of 25 | 0 | 124 of 132 | 29 | $1.23 | 191 s |
+| Plain reminder tool, first | 2 of 100 | 414 of 414 | 0 | 0 of 24 | 0 | 0 of 141 | 562 | none | 0.07 s |
+| Plain reminder tool, second | 3 of 100 | 405 of 405 | 0 | 0 of 25 | 0 | 0 of 132 | 545 | none | 0.08 s |
 
-Deadline totals differ by system because the frozen grader counts some letters only depending on how a system handled them.
+Deadline totals differ by system because the frozen grader counts some letters only depending on how a system handled them. The households differ between runs, so the runs are not paired letter by letter.
 
-Photo track, 10 synthetic households: Mano got 10 of 10 packets and missed 11 of 14 deadlines. The general agent got 3 of 10 packets and missed 0 of 13. The parser and the reminder tool do not read photos. Ten households is a small sample.
+Photo track, 10 synthetic households in each run: Mano got 10 of 10 packets in both and missed 11 of 14 deadlines in the first run and 2 of 15 in the second. The general agent got 3 of 10 and then 5 of 10 packets, and missed 0 of 13 both times. The parser and the reminder tool do not read photos. Ten households is a small sample.
 
-What Mano missed:
+What the two runs show:
 
-- **Deadlines.** Mano held no date on any letter. Its answer named no date on 425 of 426 held-out text letters, so a person reading those answers would not be told the deadline. The reply rules in that run stopped it. Running that naming rule on each letter's exact text with no model named 0 of 426, which points at the rule and not at reading. That is an inference, because the run kept no per-letter data.
-- **Unsafe letters.** The 24 are 13 scam links and 11 planted instructions. Mano caught all 13 links with its link check and 1 planted instruction with the model. It missed the other 10 and also raised 10 false flags. These are probably the same 10 letters, turned by how the frozen adapter scores a link, which is also an inference.
-- **Packets.** Mano missed 9.
-- **What beat it.** The parser is a string matcher tuned on public wording. It beats Mano on packets, deadlines and unsafe letters. Mano beats it on false deadlines, 0 against 75, and on failures, 16 against 148. The general agent beats Mano on deadlines and unsafe letters at about one seventh of the cost.
+- **Deadlines improved on a changed reader.** Mano missed 70 of 405 on text against 410 of 411, with 0 false dates in both runs. Mano never held a date in either run. It now asks the person to check one. Its answer named no date on 425 of 426 text letters in the first run and on 53 of 420 in the second.
+- **Packets and evidence got worse.** Correct packets fell from 91 to 66 of 100, and evidence requested fell from 137 of 141 to 109 of 132. The cause is not found, and the run kept no per-letter data.
+- **Unsafe letters did not move.** Mano caught 14 of 24 and then 15 of 25, with 10 missed and 10 false in each run. In the first run the misses look like a limit of how the frozen adapter scores a link, which is an inference and was not rechecked on this reader.
+- **Others still beat Mano.** The parser beats it on packets, 100 of 100, and on unsafe letters, 25 of 25. Mano is ahead of the parser on deadlines in the second run, 70 against 81 missed, and on false dates, 0 against 81. The general agent beats Mano on deadlines, 0 of 393 missed, and on unsafe letters, 25 of 25, at about one seventh of the cost. Mano beats it on packets, 66 against 10.
 
-This test does not test Guardian. Guardian and the action gateway did not run, because reading takes no action for them to check. The unsafe column counts only whether a letter's text was flagged and whether a link check blocked its link. The test also does not cover forms, approvals or the text line.
+Neither run tests Guardian. Guardian and the action gateway did not run, because reading takes no action for them to check. The unsafe columns count only whether a letter's text was flagged and whether a link check blocked its link. Both runs test reading and answering only, not forms, approvals, Guardian or the text line.
 
-How it was produced: the harness is in [PR 1](https://github.com/mrcoven94/mano/pull/1), run at 1bf8fd1b4ad94e31901e077b1f475ab73eafd42a, with Mail at main 169801f2, the only run on the seed, template pack and households committed in the freeze. Every model call went to Muse Spark Open on a Modal Shared Endpoint. We changed the reader that morning after a check on public dev letters, before any held-out result existed, and we moved the run's cutoffs before that result too. The seed and pack are not published, so nobody outside can rerun this yet, and the output is aggregate, with no per-letter list of misses.
-
-Second run: a disclosed second run is approved. It has no result yet.
+How they were produced: the harness is in [PR 1](https://github.com/mrcoven94/mano/pull/1). The first run used commit 1bf8fd1b4ad94e31901e077b1f475ab73eafd42a with Mail at main 169801f2, and the second used df3993ddd5cab5e28859a92f06c0c73e25dd26c6 with Mail at main 9e7fe5d4. Each ran once, with every model call on Muse Spark Open on a Modal Shared Endpoint. Any reader change after 9e7fe5d4 is not in these numbers. The seed and pack are not published, so nobody outside can rerun either run yet, and the output is aggregate, with no per-letter list of misses. Showing what happens on new wording needs a new pack written by someone not building Mano.
 
 ## The models as they run today
 
@@ -49,7 +51,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Step | Meta model | Where it runs | On production today |
 | --- | --- | --- | --- |
 | Answering a text, with tools | Muse Spark Open (open weights), `meta-models/Muse-Spark-Open-816B-A42B` | Partner-provided inference on a Modal Shared Endpoint, with `meta/muse-spark-open` on OpenRouter as run-time backup | Running |
-| Reading a letter into cited fields, and saying which date the person must meet | Muse Spark Open | Modal Shared Endpoint, with OpenRouter as backup only when Modal fails before a response starts | Running. If the read fails on both, or Modal answers 200 and the response is lost, the person gets no date and is asked to send the photo again |
+| Reading a letter into cited fields, and saying which date the person must meet | Muse Spark Open | Modal Shared Endpoint, with OpenRouter as backup in the cases listed under [How model routing is set](#how-model-routing-is-set) | Running. If the read fails, the person gets no date and is asked to send the photo again |
 | Finding the letter in the photo | SAM 3.1 | Meta's API | Not running, 402. On-device paper detection (plain code) takes its place |
 | Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Muse Voice Transcribe is not running, 402. The backup is deployed and not confirmed live |
 | Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Running: three unbroken production runs, below. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
@@ -63,7 +65,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 
 These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
 
-At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Code in `packages/mail/src/naming.ts` checks that the quote is in the letter and that the date is printed whole in it, is not negated, is not a count, is not the notice date and is not too far after it. The reply then asks the person to check that date, and only the gate in `packages/mail/src/gate.ts` holds a deadline. These rules overrule the reader: a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop.
+At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. What the code enforces is narrower: Mail's reply gives a date from the reader only as a question to check, and Mail saves a deadline only from the gate in `packages/mail/src/gate.ts`. A yes to that question is an ordinary turn for the model. No code saves it, and the model may record it with `track_deadline`, which does not check where a date came from. Rules that overrule the reader include a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop. The gate held no date in either held-out run, and neither run validates naming on wording it had never met.
 
 A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). That is merged and not confirmed on production yet.
 
@@ -144,9 +146,11 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 
 ## Known weaknesses
 
-- The first held-out run measured the old rule, which named no date on 425 of 426 letters. The reader that replaced it ([PR 207](https://github.com/mrcoven94/mano/pull/207)) has no held-out result yet. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
+- On held-out text, Mano named no date on 425 of 426 letters in the first run and on 53 of 420 in the second. The second run used the same wording pack after the first result was seen, so Mano has no result on wording it has never met. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
+- Correct packets fell from 91 to 66 of 100 and evidence requested fell from 137 of 141 to 109 of 132 on the changed reader, and the cause is not found.
+- The word checks on the reader's date have known gaps. "Send your form within the next 14 days after November 20, 2026" passes them, so the question names November 20. If the person says yes, the model may save that date with reminders, and otherwise a yes saves nothing.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
-- Mano missed 10 of 11 planted instructions in the held-out test, which ran no Guardian. Guardian has no held-out number of its own.
+- Mano missed 10 unsafe letters in each held-out run, and those runs had no Guardian. Guardian has no held-out number of its own.
 - Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
 - The model may ask again for a value it already has before the fill. The driver sends every value in one message, and in the run log above Mano still asked in 2 of 3 runs, once asking for the income twice.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
@@ -166,9 +170,9 @@ A scam letter gets the warning first, and a single date in it appears only as th
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 03d56cf success 2026-11-04 |
+| Site | live | https://withmano.com | 720c74b success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | 535fae5 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | 1ab1cce success 2026-11-04 |
 | Channels | live | https://text.withmano.com/health | 535fae5 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
