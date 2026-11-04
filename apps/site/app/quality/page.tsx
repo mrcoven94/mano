@@ -1,27 +1,15 @@
 import type { Metadata } from "next";
-import { timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
 import { stripModelNames } from "@mano/quality/site";
 import { loadQuality, type HistoryRow, type RunReport, type StaffCaseRow } from "@/lib/quality";
 import Chart, { SERIES_COLORS, type Series } from "./Chart";
-import TokenForm from "./TokenForm";
 import styles from "./quality.module.css";
 
 export const metadata: Metadata = {
   title: "Quality",
-  description: "Staff view of Mano's answer quality: the nightly run, trends, weakest answers and failed checks.",
-  robots: { index: false, follow: false },
+  description: "Mano's answer quality, open to anyone: the nightly run on synthetic cases, trends, weakest answers and failed checks.",
 };
 
 export const dynamic = "force-dynamic";
-
-function signedIn(stored: string | undefined): boolean {
-  const expected = process.env.QUALITY_STAFF_TOKEN ?? "";
-  if (!expected || !stored) return false;
-  const x = Buffer.from(stored);
-  const y = Buffer.from(expected);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
 
 const pct = (n: number) => `${(n * 100).toFixed(0)}%`;
 const pct1 = (n: number) => `${(n * 100).toFixed(1)}%`;
@@ -143,17 +131,6 @@ function CostQuality({ latest }: { latest: RunReport }) {
 }
 
 export default async function QualityPage() {
-  const jar = await cookies();
-  if (!signedIn(jar.get("mano_staff")?.value)) {
-    return (
-      <Shell>
-        <div style={{ marginTop: 24 }}>
-          {process.env.QUALITY_STAFF_TOKEN ? <TokenForm /> : <p>Staff sign-in for this page is not configured yet.</p>}
-        </div>
-      </Shell>
-    );
-  }
-
   const result = await loadQuality();
   if (result.state !== "ok") {
     const message = {

@@ -30,7 +30,6 @@ export default function Header() {
           ))}
         </nav>
         <div className="header-cta">
-          <Link className="quiet" href="/sign-in">Sign in</Link>
           <a className="quiet repo" href={REPO_URL}>Open source</a>
           <TextMano className="btn btn-primary btn-sm" align="end" />
           <details className="menu" ref={menu}>
@@ -41,7 +40,6 @@ export default function Header() {
                   {l.label} <small>{l.sub}</small>
                 </Link>
               ))}
-              <Link href="/sign-in" aria-current={path === "/sign-in" ? "page" : undefined}>Sign in <small>Your account</small></Link>
               <a href={REPO_URL}>Open source <small>GitHub</small></a>
               <TextMano align="end" />
             </nav>

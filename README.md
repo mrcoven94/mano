@@ -205,7 +205,7 @@ The site does not offer these pieces. This is what is true of each one today:
 | Waiting on hold | On `main` and off in production ([Engine's health page](https://engine.withmano.com/health) shows `calls: off`). It has only a fake provider, with no real provider code, and has placed no real call |
 | Faxes and mailed letters | On `main` and off in production (the same page shows `fax: off` and `mail: off`). Faxes go only to our own number and letters only through a provider's test mode. No fax has been sent, and nothing has been mailed |
 | Sharing a case with a caseworker | On `main`. It ran on production with a synthetic person and a played model, with no real text and no live model |
-| Mano on the web | Live at [app.withmano.com](https://app.withmano.com). Sign-in codes reach only verified addresses until email sending is on. It does not yet share memory with a person's texts |
+| Mano on the web | Built, but it needs an emailed sign-in code, so it is not part of the demo. Use [withmano.com/try](https://withmano.com/try) instead. It does not yet share memory with a person's texts |
 | iPhone app | The build is prepared and has not been made. It needs the maintainer's Apple account |
 
 ## How `pnpm judge` works
