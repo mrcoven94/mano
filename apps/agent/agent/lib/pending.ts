@@ -65,13 +65,46 @@ export function proposalsOf(approvals: EngineApproval[], generation: number): En
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+// Drafts this process could not close after the person corrected them in
+// the same turn: one draft by its ID, or every draft of a turn when Engine
+// could not even list them. Engine still holds them pending, so the turn's
+// reply must not show their question; never shown, they have no pointer,
+// and a YES approves none of them. Kept for the life of the process,
+// oldest dropped first, since the reply goes out within the same turn.
+const HELD_BACK = new Set<string>();
+const HELD_BACK_MAX = 1000;
+
+export function holdBack(target: { approvalId: string } | { turnId: string }): void {
+  HELD_BACK.add("approvalId" in target ? `a:${target.approvalId}` : `t:${target.turnId}`);
+  if (HELD_BACK.size > HELD_BACK_MAX) HELD_BACK.delete(HELD_BACK.values().next().value!);
+}
+
+export function heldBack(turnId: string, approvalId: string): boolean {
+  return HELD_BACK.has(`a:${approvalId}`) || HELD_BACK.has(`t:${turnId}`);
+}
+
+// The turn a drafted approval came from, read from its key (see proposalKey).
+function turnOf(idempotencyKey: string): string {
+  return idempotencyKey.replace(/^agent:g\d+:/, "").replace(/:d\d+$/, "");
+}
+
+// The one check before an approval question is shown or counted as shown:
+// the question to show, or null for a draft held back after a correction
+// or one the text line would not carry word for word.
+export function presentable(approval: Pick<EngineApproval, "id" | "idempotencyKey" | "purpose" | "recipient" | "requestJson">): string | null {
+  if (heldBack(turnOf(approval.idempotencyKey), approval.id)) return null;
+  const question = renderQuestion(approval);
+  return presentsExactly(question) ? question : null;
+}
+
+// The drafts one turn proposed that still wait, newest first.
+export function waitingFrom(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval[] {
+  return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));
+}
+
 // The approval this turn proposed and Engine still holds.
 export function proposedIn(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval | null {
-  return (
-    proposalsOf(approvals, generation).find(
-      (a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`),
-    ) ?? null
-  );
+  return waitingFrom(approvals, generation, turnId)[0] ?? null;
 }
 
 // Proposals of this conversation still waiting that are not the answerable one.
@@ -145,16 +178,18 @@ export function presentationHash(text: string): string {
 // this it would say a filed draft is still waiting.
 export function requestStatus(approvals: EngineApproval[], generation: number, answerableId: string | null): string | null {
   const answerable = answerableId ? approvals.find((a) => a.id === answerableId) : undefined;
-  if (answerable && answerable.status === "pending") {
-    return `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
+  const question = answerable && answerable.status === "pending" ? presentable(answerable) : null;
+  if (question) {
+    return `A yes-or-no approval question is waiting for this person:\n${question}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
   }
   const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;
-  const state =
-    latest.status === "approved"
-      ? latest.outcome?.attempt === "done"
-        ? "the person approved it and it was filed"
-        : "the person approved it and Mano is checking whether it went through"
+  // A receipt is read first, whatever the status: it was filed.
+  const receipt = latest.outcome?.receipt;
+  const state = receipt
+    ? `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
+    : latest.status === "approved"
+      ? "the person approved it and Mano is checking whether it went through"
       : latest.status === "rejected"
         ? "the person declined it, or it was closed; nothing was sent"
         : latest.status === "pending"

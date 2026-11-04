@@ -407,6 +407,13 @@ export class EngineDouble {
           await gateway.requestAction({ ...(split.request as object), personId }, new Date(this.now()), { generation, proposal }),
         );
       }
+      if (rest === "/approvals/fence" && method === "POST") {
+        if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        const order = typeof body.turnId === "string" ? proposalOrderFor(sql, body.turnId) : null;
+        if (!order || typeof body.recipient !== "string") return Response.json({ error: "Unknown turn." }, { status: 400 });
+        const out = await gateway.fenceProposals(body.recipient, order, body.generation);
+        return out ? Response.json(out) : Response.json(STALE, { status: 409 });
+      }
       if (rest === "/approvals/supersede" && method === "POST") {
         if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
         if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
@@ -431,9 +438,10 @@ export class EngineDouble {
         const token = await replayLinkToken({ sql, approvals: store, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now);
         return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
       }
-      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
       if (decision && method === "POST") {
         const id = decodeURIComponent(decision[1]);
+        if (decision[2] === "retire") return Response.json(await gateway.retireApproval(id, personId));
         return Response.json(decision[2] === "approve" ? await gateway.approveAndExecute(id, personId) : await gateway.rejectApproval(id, personId));
       }
       if (rest === "/reminders" && method === "POST") {

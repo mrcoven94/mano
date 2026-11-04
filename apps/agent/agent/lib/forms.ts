@@ -4,9 +4,10 @@
 // is checked. Only forms on our own sandbox portal are listed (hard rule
 // 2): a resident's real portal is never a target.
 //
-// Text goes on a form exactly as the person or their letter gave it, less
-// any spaces around it; a date or an amount is only written the way the
-// form's field stores it. Nothing is invented, defaulted, shortened or
+// Text goes on a form exactly as the person or their letter gave it, with
+// the spaces around it dropped and each run of spaces inside it made one
+// space, so the person approves exactly what is filed; a date or an amount
+// is only written the way the form's field stores it. Nothing is invented, defaulted, shortened or
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
 
@@ -44,11 +45,17 @@ export interface FormSpec {
   proof: { label: string; question: string; fromProfile(profile: Profile): string | null };
 }
 
-// One line of text, kept exactly as given inside the spaces around it.
+// The text line shows a run of spaces as one, so a value is taken that way
+// before it is checked: what the question shows is what is filed.
+function taken(answer: string): string {
+  return answer.trim().replace(/\s+/g, " ");
+}
+
+// One line of text of at most max characters.
 function trimmed(max: number) {
   return (answer: string) => {
-    const v = answer.trim();
-    return v && v.length <= max && !/[\r\n]/.test(v) ? v : null;
+    const v = taken(answer);
+    return v && v.length <= max ? v : null;
   };
 }
 
@@ -67,7 +74,7 @@ function isoDate(answer: string): string | null {
 }
 
 function phone(answer: string): string | null {
-  const v = answer.trim();
+  const v = taken(answer);
   const digits = v.replace(/\D/g, "");
   return digits.length === 10 || (digits.length === 11 && digits.startsWith("1")) ? v : null;
 }
