@@ -10,6 +10,8 @@ export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
 export const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" });
 export const MODAL_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
 const MODAL_USD_PER_TOKEN = { prompt: 1.25e-6, cached: 0.15e-6, completion: 4.25e-6 };
+const MODAL_DEFAULT_MAX_TOKENS = 8000;
+const BODY_BYTES_PER_TOKEN = 2;
 const META_RESPONSES_URL = "https://api.meta.ai/v1/responses";
 const PREFLIGHT_TIMEOUT_MS = 60000;
 const MAX_RETRIES = 2;
@@ -65,9 +67,11 @@ export function pinnedChatBody(body) {
 
 // Mail's Modal request: the listed fields with this model, and none of
 // OpenRouter's own. Both live systems run at the endpoint's default effort.
+// max_tokens is always a real limit, so a call's reservation bounds what it can cost.
 export function modalChatBody(body) {
   const { reasoning: _reasoning, ...fields } = picked(body, CHAT_FIELDS);
-  return { ...fields, model: MODAL_MODEL };
+  const asked = Number(fields.max_tokens);
+  return { ...fields, model: MODAL_MODEL, max_tokens: Number.isInteger(asked) && asked > 0 ? asked : MODAL_DEFAULT_MAX_TOKENS };
 }
 
 // Modal reports tokens and no price, so the parent prices them at its published rates.
@@ -78,9 +82,65 @@ export function modalCostUsd(usage) {
   return (prompt - cached) * MODAL_USD_PER_TOKEN.prompt + cached * MODAL_USD_PER_TOKEN.cached + completion * MODAL_USD_PER_TOKEN.completion;
 }
 
-// The most one request could cost: a large prompt and every token it allows.
+// The most one request could cost: every token it allows, and a prompt estimated
+// from the body's size. Two bytes per token is more than text or an encoded image takes.
 export function modalReserveUsd(body) {
-  return 20000 * MODAL_USD_PER_TOKEN.prompt + (body.max_tokens ?? 8000) * MODAL_USD_PER_TOKEN.completion;
+  const promptTokens = Math.ceil(Buffer.byteLength(JSON.stringify(body)) / BODY_BYTES_PER_TOKEN);
+  return promptTokens * MODAL_USD_PER_TOKEN.prompt + body.max_tokens * MODAL_USD_PER_TOKEN.completion;
+}
+
+// The ceiling, or null unless it is a positive number. Null refuses every Modal
+// call: a missing, zero or invalid ceiling never means unlimited.
+export function modalCeilingUsd(env = process.env) {
+  const raw = env.MANO_EVAL_CEILING_USD;
+  const usd = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  return Number.isFinite(usd) && usd > 0 ? usd : null;
+}
+
+// Every Modal call in the parent, the preflight included, passes this meter. Each
+// call reserves its worst case before it goes; one with no usage back stays charged at that.
+const modalSpend = { calls: 0, promptTokens: 0, completionTokens: 0, spentUsd: 0, reservedUsd: 0, stopped: false };
+
+export function modalSpendReport(env = process.env) {
+  return { ...modalSpend, spentUsd: +modalSpend.spentUsd.toFixed(4), reservedUsd: +modalSpend.reservedUsd.toFixed(4), ceilingUsd: modalCeilingUsd(env) };
+}
+
+function stopAtCeiling(env) {
+  if (modalSpend.stopped) return;
+  modalSpend.stopped = true;
+  console.error(`CEILING: stopping the run ${JSON.stringify(modalSpendReport(env))}`);
+  process.kill(process.pid, "SIGTERM");
+}
+
+// The call's reservation, or null when it must not go.
+export function admitModalCall(body, env = process.env) {
+  const ceiling = modalCeilingUsd(env);
+  if (ceiling === null) return null;
+  const reserve = modalReserveUsd(body);
+  if (modalSpend.stopped || modalSpend.spentUsd + modalSpend.reservedUsd + reserve > ceiling) {
+    stopAtCeiling(env);
+    return null;
+  }
+  modalSpend.calls++;
+  modalSpend.reservedUsd += reserve;
+  return reserve;
+}
+
+// Settles one admitted call and returns its price, or null when usage did not say.
+// No status means the call failed in transport, and it may still be billed.
+export function settleModalCall(reserve, status, usage, env = process.env) {
+  let charge = status >= 400 && status < 500 ? 0 : reserve;
+  let cost = null;
+  if (usage) {
+    cost = modalCostUsd(usage);
+    charge = cost;
+    modalSpend.promptTokens += usage.prompt_tokens ?? 0;
+    modalSpend.completionTokens += usage.completion_tokens ?? 0;
+  }
+  modalSpend.reservedUsd -= reserve;
+  modalSpend.spentUsd += charge;
+  if (modalSpend.spentUsd >= modalCeilingUsd(env)) stopAtCeiling(env);
+  return cost;
 }
 
 function chatPart(part) {
@@ -184,6 +244,14 @@ export async function preflight(route, { env = process.env, fetchImpl = fetch, t
         key: env.META_MODEL_API_KEY,
         body: { model: "muse-spark-1.3-contributor", store: false, input: "Reply with the word ok.", max_output_tokens: 2000 },
       };
+  const reserve = modal ? admitModalCall(call.body, env) : null;
+  if (modal && reserve === null) return { ok: false, status: null };
+  let settled = !modal;
+  const settle = (status, usage) => {
+    if (settled) return;
+    settled = true;
+    settleModalCall(reserve, status, usage, env);
+  };
   try {
     const res = await fetchImpl(call.url, {
       method: "POST",
@@ -191,11 +259,16 @@ export async function preflight(route, { env = process.env, fetchImpl = fetch, t
       body: JSON.stringify(call.body),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { ok: false, status: res.status };
+    if (!res.ok) {
+      settle(res.status);
+      return { ok: false, status: res.status };
+    }
     const data = await res.json();
+    settle(res.status, data?.usage);
     const usable = openRouter || modal ? chatText(data).length > 0 : Boolean(data?.output_text || data?.output?.length);
     return { ok: usable, status: res.status };
   } catch {
+    settle();
     return { ok: false, status: null };
   }
 }

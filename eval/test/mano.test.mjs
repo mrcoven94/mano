@@ -15,7 +15,7 @@ import { buildMano, manoBundleHash } from "../src/build-mano.mjs";
 import { gradeAll } from "../src/grader.mjs";
 import { osSandboxAvailable, osSandboxProfile, runSystem } from "../src/harness.mjs";
 import { readRecord, verifyMano } from "../src/verify.mjs";
-import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION, MODAL_MODEL } from "../src/openrouter.mjs";
+import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION, MODAL_MODEL, modalCeilingUsd, modalChatBody, modalReserveUsd, modalSpendReport } from "../src/openrouter.mjs";
 
 // The adapter imports @mano/mail, which is TypeScript, so it loads the way the
 // run loads it: bundled.
@@ -364,6 +364,93 @@ await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, bad
   }
 });
 
+const MODAL_ENV = { MODAL_ENDPOINT_URL: "https://ep-test.us-west.modal.direct", MODAL_PROXY_TOKEN: "x", MANO_EVAL_CEILING_USD: "100" };
+const modalAnswer = () => jsonResponse({ model: MODAL_MODEL, choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
+
+test("a Modal ceiling that is missing, zero or invalid refuses instead of meaning unlimited", async () => {
+  assert.equal(modalCeilingUsd({ MANO_EVAL_CEILING_USD: "45" }), 45);
+  for (const bad of [undefined, "", " ", "0", "-1", "abc", "Infinity", "NaN"]) {
+    assert.equal(modalCeilingUsd({ MANO_EVAL_CEILING_USD: bad }), null, String(bad));
+    let called = 0;
+    const r = await preflight("modal", { env: { ...MODAL_ENV, MANO_EVAL_CEILING_USD: bad }, fetchImpl: async () => { called++; return modalAnswer(); } });
+    assert.equal(r.ok, false, String(bad));
+    assert.equal(called, 0, "nothing reaches the network");
+  }
+});
+
+test("the Modal preflight goes through the meter", async () => {
+  const before = modalSpendReport(MODAL_ENV);
+  const r = await preflight("modal", { env: MODAL_ENV, fetchImpl: async () => modalAnswer() });
+  assert.equal(r.ok, true);
+  const after = modalSpendReport(MODAL_ENV);
+  assert.equal(after.calls, before.calls + 1);
+  assert.equal(after.promptTokens, before.promptTokens + 10);
+  assert.ok(after.spentUsd >= before.spentUsd);
+  assert.equal(after.reservedUsd, 0);
+  await preflight("modal", { env: MODAL_ENV, fetchImpl: async () => { throw new Error("down"); } });
+  assert.ok(modalSpendReport(MODAL_ENV).spentUsd > after.spentUsd, "a call that failed in transport stays charged");
+  assert.equal(modalSpendReport(MODAL_ENV).reservedUsd, 0);
+});
+
+test("a Modal reservation grows with the request and always has a token limit", () => {
+  const small = modalChatBody({ messages: [{ role: "user", content: "hi" }], max_tokens: 100 });
+  const large = modalChatBody({ messages: [{ role: "user", content: "x".repeat(120000) }], max_tokens: 100 });
+  assert.ok(modalReserveUsd(large) >= 30000 * 1.25e-6, "covers 30k prompt tokens");
+  assert.ok(modalReserveUsd(small) < modalReserveUsd(large));
+  for (const bad of [undefined, "8000", 0, -5, 1.5, null]) {
+    const body = modalChatBody({ messages: [], max_tokens: bad });
+    assert.equal(body.max_tokens, 8000, String(bad));
+    assert.ok(Number.isFinite(modalReserveUsd(body)));
+  }
+});
+
+test("a call over the Modal ceiling never reaches the network and stops the run", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-ceiling-"));
+  const script = join(dir, "over.mjs");
+  await writeFile(script, `import { admitModalCall, modalChatBody } from ${JSON.stringify(new URL("../src/openrouter.mjs", import.meta.url).href)};
+const big = modalChatBody({ messages: [{ role: "user", content: "x".repeat(120000) }], max_tokens: 100 });
+process.on("exit", () => console.log("exiting"));
+const reserve = admitModalCall(big);
+console.log("admitted " + (reserve !== null));
+setTimeout(() => {}, 5000);
+`);
+  try {
+    const run = spawnSync(process.execPath, [script], { env: { PATH: process.env.PATH, MANO_EVAL_CEILING_USD: "0.03" }, encoding: "utf8", timeout: 20000 });
+    assert.match(run.stderr, /CEILING: stopping the run/);
+    assert.equal(run.signal, "SIGTERM", "the process stops itself");
+    assert.doesNotMatch(run.stdout, /admitted true/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the broker refuses Modal calls under a zero ceiling", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-zero-"));
+  const probe = join(dir, "probe.mjs");
+  await writeFile(probe, `import { writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const out = args[args.indexOf("--out") + 1];
+const on = async (m) => {
+  if (m && m.id === 1) await writeFile(out, JSON.stringify([{ householdId: "hh-900", ok: m.ok, why: m.error }]));
+  if (m && m.id === 1) process.disconnect();
+};
+process.on("message", on);
+process.send({ channel: "mano-eval-broker", id: 1, url: "https://ep-test.us-west.modal.direct/v1/chat/completions", method: "POST", headers: {}, body: JSON.stringify({ messages: [] }) });
+`);
+  const saved = { ...process.env };
+  Object.assign(process.env, MODAL_ENV, { MANO_MODEL_PROVIDER: "modal", MANO_EVAL_CEILING_USD: "0" });
+  let called = 0;
+  try {
+    const { outputs } = await runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl: async () => { called++; return modalAnswer(); } });
+    assert.equal(outputs[0].ok, false);
+    assert.match(outputs[0].why, /spending ceiling/);
+    assert.equal(called, 0);
+  } finally {
+    process.env = saved;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("the broker sends Modal calls with its token and model, and prices them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mano-eval-modal-"));
   const probe = join(dir, "probe.mjs");
@@ -384,7 +471,7 @@ await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, cos
 `);
   const seen = [];
   const saved = { ...process.env };
-  Object.assign(process.env, { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://ep-test.us-west.modal.direct", MODAL_PROXY_TOKEN: "test-modal-token" });
+  Object.assign(process.env, { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://ep-test.us-west.modal.direct", MODAL_PROXY_TOKEN: "test-modal-token", MANO_EVAL_CEILING_USD: "100" });
   try {
     let n = 0;
     const { outputs } = await runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl: async (u, o) => {
