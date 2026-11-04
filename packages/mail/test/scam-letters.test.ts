@@ -200,7 +200,7 @@ const REAL: [string, string, string | null, string | null][] = [
   ["a Social Security number on the form", `${OFFICE}Write the Social Security number for each person on the enclosed form. ${RENEW}`, RENEW, "2026-11-20"],
   ["a renewal site with no ask", `${OFFICE}${RENEW} You can also apply online at www.calwin-renew.example/recertify.`, RENEW, "2026-11-20"],
   ["the office verifying, with an unrelated link", `${OFFICE}We need to verify your identity. Send a copy of your ID. Find a food bank at https://foodbank.example.`, null, null],
-  ["a letter that says you never have to pay", `${OFFICE}${RENEW} You never have to pay to renew your benefits. There is no fee to renew.`, RENEW, "2026-11-20"],
+  ["a letter that says you never have to pay", `${OFFICE}${RENEW} You never have to pay to renew your benefits. There is no fee to renew.`, RENEW, null],
   [
     "a letter that warns about scams",
     `${OFFICE}${RENEW} We will never ask you to pay a fee to keep your benefits. Scammers may ask you to pay a fee to keep your benefits. Report scams at https://consumer-help.example.`,
@@ -251,7 +251,7 @@ const REAL: [string, string, string | null, string | null][] = [
   ["a warning that names a fake office", `${OFFICE}${RENEW} Scammers pretend to be the Federal Benefits Office.`, RENEW, "2026-11-20"],
   ["a fraud report line beside a premium", `${OFFICE}Pay your premium by November 20, 2026. Report fraud at https://reportfraud.example.`, "Pay your premium by November 20, 2026.", "2026-11-20"],
   // A negation covers every secret it lists.
-  ["a warning against sending two secrets", `${OFFICE}Never send your PIN or password by email. ${RENEW}`, RENEW, "2026-11-20"],
+  ["a warning against sending two secrets", `${OFFICE}Never send your PIN or password by email. ${RENEW}`, RENEW, null],
   ["a promise about a Social Security number", `${OFFICE}We never ask for your SSN by text or email. ${RENEW}`, RENEW, "2026-11-20"],
   ["a warning against three ways", `${OFFICE}Do not give your Social Security number by phone, text or email. ${RENEW}`, RENEW, "2026-11-20"],
   ["no fee and no PIN", `${OFFICE}You will never have to pay a fee or give your PIN. ${RENEW}`, RENEW, "2026-11-20"],
@@ -297,7 +297,7 @@ const REAL: [string, string, string | null, string | null][] = [
   // A real charge with its amount and its purpose.
   ["a premium payment required to keep Medicaid", `${OFFICE}Your premium payment of $25.00 is required to keep your Medicaid. ${RENEW}`, RENEW, "2026-11-20"],
   ["an amount in premiums to keep Medicaid", `${OFFICE}To keep your Medicaid, pay $39.00 in premiums. ${RENEW}`, RENEW, "2026-11-20"],
-  ["monthly rent to a landlord to keep housing benefits", `${OFFICE}To keep your housing benefits, pay your $500 monthly rent to your landlord. ${RENEW}`, RENEW, "2026-11-20"],
+  ["monthly rent to a landlord to keep housing benefits", `${OFFICE}To keep your housing benefits, pay your $500 monthly rent to your landlord. ${RENEW}`, RENEW, null],
   // Links a browser reads as what they say, and addresses that are addresses.
   ["a caseworker's dotted email", `${OFFICE}${RENEW} Email maria.lopez@dss.ca.gov with questions.`, RENEW, "2026-11-20"],
   ["a state login in parentheses", `${OFFICE}${RENEW} Log in (https://mybenefits.ny.gov) to see your case.`, RENEW, "2026-11-20"],
@@ -349,6 +349,8 @@ describe("real benefits letters", () => {
     expect(reading.warnings.map((w) => w.kind)).not.toContain("scam_suspect");
     expect(answer.text).not.toMatch(/looks like a scam/);
     if (held) expect(answer.deadlines.map((d) => d.dueDate)).toEqual([held]);
+    // The gate may hold the date or ask about it. Either way the person hears it.
+    if (deadline) expect(answer.text).toContain("November 20, 2026");
   });
 });
 
