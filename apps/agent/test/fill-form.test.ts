@@ -4,7 +4,7 @@ import { FakeModelClient, type Computer, type ComputerAction } from "@mano/compu
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
-import { engineFrom, type Profile } from "../agent/lib/engine.js";
+import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
 import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
@@ -399,6 +399,27 @@ describe("fill_form", () => {
     engine.profile = p;
     const out = await run("turn_fill0005", { form: "food-renewal" });
     expect(out).toMatchObject({ status: "needs_answer", field: "proof" });
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it("with no proof in the profile but a document on file, hands the renewal to start_form_draft without touching the computer", async () => {
+    const p = profile();
+    p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
+    engine.profile = p;
+    engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
+    const out = await run("turn_fill0031", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(model.requests).toHaveLength(0);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
+    engine.profile = profile();
+    model = { createResponse: async () => { throw new Error("model request failed with status 402"); } } as never;
+    const out = await run("turn_fill0032", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
     expect(engine.approvals()).toHaveLength(0);
   });
 
