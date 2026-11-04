@@ -22,7 +22,7 @@
 // retention for this endpoint type (no request carries a pin; see the November
 // 4 entry in docs/decisions.md). Chosen with a setting missing or a URL off
 // Modal's domain, it calls no model and never falls back to another
-// route. Filling a form is unavailable on it.
+// route. Filling a form follows it, on a client of its own.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,

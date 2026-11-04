@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
+import { FakeModelClient, OpenWeightModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
@@ -718,7 +718,12 @@ describe("the computer and portal a deployment fills with", () => {
 
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
     const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
-    expect(fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test" })).toEqual({ unavailable: "no computer on this model route" });
+    const onModal = fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test", MANO_COMPUTER_MODEL: "not-meta/other-model" });
+    if ("unavailable" in onModal) throw new Error("expected a fill on the Modal route");
+    expect(onModal.model).toBeInstanceOf(OpenWeightModelClient);
+    expect(onModal.modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    await onModal.model.createResponse({ ...request, model: onModal.modelId });
+    expect(urls.at(-1)).toBe("https://example--ep-test-server.us-west.modal.direct/v1/responses");
     expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });

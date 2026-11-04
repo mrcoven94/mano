@@ -72,9 +72,6 @@ const REJECTED_PREFIX = /^REJECTED:\s*/i;
 export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = process.env): FillDeps | { unavailable: string } {
   const route = selectModelRoute({}, env);
   if (!route.apiKey) return { unavailable: "no model key" };
-  // The Meta path's hosted computer tool does not exist on Modal, and the
-  // open-weight client below is OpenRouter's.
-  if (route.name === "modal") return { unavailable: "no computer on this model route" };
   if (!env.SANDBOX_PORTAL_DRAFT_TOKEN) return { unavailable: "no draft token" };
   if (!env.MODAL_COMPUTER_URL && env.COMPUTER_BACKEND !== "playwright") return { unavailable: "no computer configured" };
   const computer = computerFromEnv({
@@ -84,8 +81,11 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
     COMPUTER_PERSON_ID: personId,
     COMPUTER_PROFILE_DIR: env.COMPUTER_PROFILE_DIR,
   });
-  const openWeight = route.name === "openrouter";
-  const model = openWeight ? new OpenWeightModelClient({ apiKey: route.apiKey }) : new FetchModelClient({ baseUrl: route.baseURL, apiKey: route.apiKey });
+  // The hosted computer tool exists only on the Meta path.
+  const openWeight = route.name === "openrouter" || route.name === "modal";
+  const model = openWeight
+    ? new OpenWeightModelClient({ apiKey: route.apiKey, modalUrl: route.name === "modal" ? env.MODAL_ENDPOINT_URL : undefined })
+    : new FetchModelClient({ baseUrl: route.baseURL, apiKey: route.apiKey });
   const deadline = Number(env.MANO_FILL_DEADLINE_MS);
   return {
     computer,
