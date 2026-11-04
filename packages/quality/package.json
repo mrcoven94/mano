@@ -18,6 +18,7 @@
     "rescore": "node --import ./src/register.ts src/bin/rescore.ts",
     "calibrate": "node --import ./src/register.ts src/bin/calibrate.ts",
     "compare": "node --import ./src/register.ts src/bin/compare.ts",
+    "speed": "node --import ./src/register.ts src/bin/speed.ts",
     "judge": "tsx src/bin/judge.ts"
   },
   "devDependencies": {

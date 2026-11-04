@@ -3,9 +3,12 @@
 // pipeline) on a Meta model whenever META_MODEL_API_KEY and
 // MANO_MODEL_BENCH_ID are set. Letters and photos go through the mail reader
 // (packages/mail qualityAnswerPath: readMail and the reply the text line sends)
-// whenever META_MODEL_API_KEY is set. Without a key every case falls back to
-// the reference stand-in. Every report names the path of every case.
+// whenever META_MODEL_API_KEY is set, or from their transcript stage under
+// MANO_MODEL_PROVIDER=openrouter (mail-transcript.ts). Without a key every case
+// falls back to the reference stand-in. Every report names the path of every
+// case.
 
+import { OPEN_WEIGHT_MODEL_ID, openRouterKey } from "./models.ts";
 import type { BenchCase } from "./suites/types.ts";
 
 export interface BenchAction {
@@ -98,6 +101,13 @@ export function needsMailReader(c: BenchCase): boolean {
 }
 
 async function mailPath(env: NodeJS.ProcessEnv): Promise<LoadedPath> {
+  const openRouter = openRouterKey(env);
+  if (openRouter) {
+    // Not a typed import, so the site's type check, which reaches this file
+    // through the report types, stays out of packages/mail.
+    const mod = (await import("./mail-transcript.ts" as string)) as { transcriptMailPath(key: string): AnswerPath; TRANSCRIPT_STAGE_DETAIL: string };
+    return { path: mod.transcriptMailPath(openRouter), standin: false, detail: mod.TRANSCRIPT_STAGE_DETAIL };
+  }
   if (!env.META_MODEL_API_KEY) {
     return { path: new ReferencePath(), standin: true, detail: "no META_MODEL_API_KEY; reference stand-in" };
   }
@@ -134,5 +144,5 @@ export async function loadPaths(env: NodeJS.ProcessEnv = process.env, broken = f
   const text: LoadedPath = line
     ? { path: new TextLinePath(line), standin: false, detail: "the text line: the production responder, persona voice and send pipeline" }
     : { path: new ReferencePath(), standin: true, detail: "no META_MODEL_API_KEY or MANO_MODEL_BENCH_ID; reference stand-in" };
-  return { forCase: (c) => (needsMailReader(c) ? mail : text), textLineModel: line?.model ?? null };
+  return { forCase: (c) => (needsMailReader(c) ? mail : text), textLineModel: line?.model ?? (openRouterKey(env) ? OPEN_WEIGHT_MODEL_ID : null) };
 }
