@@ -264,6 +264,7 @@ const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = 
     ["GET", /^\/documents$/],
     ["GET", /^\/documents\/[^/]+$/],
     ["PATCH", /^\/documents\/[^/]+$/],
+    ["GET", /^\/shares$/],
     ["GET", /^\/deadlines$/],
     ["POST", /^\/deadlines$/],
     ["PATCH", /^\/deadlines\/[^/]+$/],

@@ -5,6 +5,7 @@
 
 const RECIPIENT_NAMES: Record<string, string> = {
   "sandbox-agency-portal": "the State Benefits Renewal Office test portal",
+  "org:sandbox-county": "the Sandbox County Human Services test office",
 };
 
 export const UNNAMED_RECIPIENT = "an office Mano has no name for";
