@@ -63,8 +63,9 @@ export class TranscriptDeadlineReader implements DeadlineReader {
 export async function loadDeadlineReader(env: NodeJS.ProcessEnv = process.env): Promise<{ reader: DeadlineReader; detail: string }> {
   const openRouter = openRouterKey(env);
   if (openRouter) {
-    const { TranscriptDeadlineModelReader, TRANSCRIPT_STAGE_DETAIL } = await import("./mail-transcript.ts");
-    return { reader: new TranscriptDeadlineModelReader(openRouter), detail: TRANSCRIPT_STAGE_DETAIL };
+    // Not a typed import, as in paths.ts mailPath.
+    const mod = (await import("./mail-transcript.ts" as string)) as { transcriptDeadlineReader(key: string): DeadlineReader; TRANSCRIPT_STAGE_DETAIL: string };
+    return { reader: mod.transcriptDeadlineReader(openRouter), detail: mod.TRANSCRIPT_STAGE_DETAIL };
   }
   if (!env.META_MODEL_API_KEY) return { reader: new TranscriptDeadlineReader(), detail: "stand-in: no META_MODEL_API_KEY" };
   try {

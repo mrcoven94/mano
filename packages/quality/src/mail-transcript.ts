@@ -101,3 +101,6 @@ export class TranscriptDeadlineModelReader implements DeadlineReader {
     return new Date(Date.UTC(y!, m! - 1, d!)).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
   }
 }
+
+export const transcriptMailPath = (apiKey: string): AnswerPath => new TranscriptMailPath(apiKey);
+export const transcriptDeadlineReader = (apiKey: string): DeadlineReader => new TranscriptDeadlineModelReader(apiKey);

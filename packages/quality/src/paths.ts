@@ -103,8 +103,10 @@ export function needsMailReader(c: BenchCase): boolean {
 async function mailPath(env: NodeJS.ProcessEnv): Promise<LoadedPath> {
   const openRouter = openRouterKey(env);
   if (openRouter) {
-    const { TranscriptMailPath, TRANSCRIPT_STAGE_DETAIL } = await import("./mail-transcript.ts");
-    return { path: new TranscriptMailPath(openRouter), standin: false, detail: TRANSCRIPT_STAGE_DETAIL };
+    // Not a typed import, so the site's type check, which reaches this file
+    // through the report types, stays out of packages/mail.
+    const mod = (await import("./mail-transcript.ts" as string)) as { transcriptMailPath(key: string): AnswerPath; TRANSCRIPT_STAGE_DETAIL: string };
+    return { path: mod.transcriptMailPath(openRouter), standin: false, detail: mod.TRANSCRIPT_STAGE_DETAIL };
   }
   if (!env.META_MODEL_API_KEY) {
     return { path: new ReferencePath(), standin: true, detail: "no META_MODEL_API_KEY; reference stand-in" };
