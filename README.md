@@ -146,6 +146,8 @@ EXPO_PUBLIC_DEMO_MODE=true pnpm --filter @mano/app start
 
 Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
 
+The sandbox portal also serves the renewal under other layouts (`/layouts`): five fixed ones and one generated from any seed at `/scramble/<seed>/apply`. `MEASURE_PORTAL_URL=<portal> SANDBOX_PORTAL_DRAFT_TOKEN=... MEASURE_MODEL=standin pnpm --filter @mano/computer probe:live layouts` runs a fill on each and prints correct fields, wall time, steps and model per layout, read back from what the portal saved. The stand-in needs no key and measures no model; `MEASURE_MODEL=meta`, `open` or `route` spends credit (see `packages/computer/probe/layouts.probe.ts`).
+
 ## Held-out test
 
 Not run yet. The Results session will publish the headline here after the final run: correct packets, missed deadlines, blocked unsafe actions, failures, cost and time.
