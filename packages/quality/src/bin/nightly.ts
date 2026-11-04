@@ -7,8 +7,8 @@
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
 // When the model provider answers a check call with HTTP 402 (billing),
-// nothing runs or is recorded, and the job ends green with the outage named
-// in the job summary and a warning (provider.ts).
+// nothing runs or is recorded, and the job goes red with the outage named in
+// the job summary (provider.ts): a night with no suites run is not a pass.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -54,9 +54,9 @@ const provider = await checkProvider(process.env);
 if (provider?.state === "unavailable") {
   const summary = unavailableSummary("nightly", provider);
   console.log(summary);
-  console.log(`::warning title=Model provider unavailable::${unavailableReason(provider)}`);
+  console.log(`::error title=Model provider unavailable::${unavailableReason(provider)}`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
-  process.exit(0);
+  process.exit(1);
 }
 if (provider?.state === "error") console.error(`note: the provider check call failed (${provider.detail}); running the suites anyway`);
 
