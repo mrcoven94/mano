@@ -78,6 +78,7 @@ const SCENARIOS: Record<TryScenario, { letter: string; legs: Leg[]; words: strin
   bill: { letter: "bill", legs: ["photo", "summary"], words: [], needsGuardian: false },
   blurry: { letter: "blurry", legs: ["photo", "summary"], words: [], needsGuardian: false },
   wrong: { letter: "bill", legs: ["photo", "summary"], words: [WRONG_KIND_WORDS], needsGuardian: false },
+  datecheck: { letter: "datecheck", legs: ["photo", "summary"], words: [], needsGuardian: false },
 };
 
 const AGENT_WAIT_MS = 100_000;

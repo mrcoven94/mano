@@ -7,7 +7,7 @@ export const TRY_HANDLE_PREFIX = "7e57da7a";
 export const isTryHandle = (handleHash: string): boolean => handleHash.startsWith(TRY_HANDLE_PREFIX);
 export const isTryPerson = (personId: string): boolean => personId.startsWith(`handle-${TRY_HANDLE_PREFIX}`);
 
-export const TRY_SCENARIOS = ["maria", "scam", "planted", "changed", "scramble", "stub", "bill", "blurry", "wrong"] as const;
+export const TRY_SCENARIOS = ["maria", "scam", "planted", "changed", "scramble", "stub", "bill", "blurry", "wrong", "datecheck"] as const;
 export type TryScenario = (typeof TRY_SCENARIOS)[number];
 
 // live: a request went to that model. skipped: the path has no such call, so
