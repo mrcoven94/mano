@@ -3,9 +3,10 @@
 // spends model credit and files on the sandbox portal.
 // Usage: pnpm spine:live [--runs N] [--lang en|es] [--yes <word>] [--json]
 // Needs MANO_AGENT_URL, MANO_ENGINE_URL, MANO_PORTAL_URL, MANO_AGENT_SECRET,
-// MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN, MANO_ENGINE_AGENT_TOKEN
-// and SANDBOX_PORTAL_TOKEN from the environment; with MANO_GUARDIAN_URL and
-// its keys set it also waits for Guardian to come up before the fill.
+// MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN, MANO_ENGINE_AGENT_TOKEN,
+// SANDBOX_PORTAL_TOKEN, MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN,
+// MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET from the environment. It
+// waits for the deployed Guardian to come up before the fill.
 // --runs stops at the first failure. --json prints one object and nothing else.
 // Exits 0 only when every run passed every step, 1 when a step failed, 2 on bad
 // usage or missing settings.
@@ -39,7 +40,12 @@ const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
 if (missing.length > 0) usage(`Missing from the environment: ${missing.join(", ")}`);
 
 const env = (name: (typeof REQUIRED_ENV)[number]): string => process.env[name]!;
-const guardian = process.env.MANO_GUARDIAN_URL ? glimmerCheckerFromEnv(process.env) : null;
+const guardian = glimmerCheckerFromEnv({
+  MANO_GUARDIAN_URL: env("MANO_GUARDIAN_URL"),
+  MANO_GUARDIAN_TOKEN: env("MANO_GUARDIAN_TOKEN"),
+  MANO_GUARDIAN_KEY_ID: env("MANO_GUARDIAN_KEY_ID"),
+  MANO_GUARDIAN_KEY_SECRET: env("MANO_GUARDIAN_KEY_SECRET"),
+});
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
 
 const print = (step: StepReport): void => {
@@ -58,7 +64,7 @@ const config: LiveConfig = {
   portalToken: env("SANDBOX_PORTAL_TOKEN"),
   lang: args.lang as Lang,
   ...(args.yes ? { yesWord: args.yes } : {}),
-  ...(guardian?.warm ? { warmGuardian: async () => String(await guardian.warm!()) } : {}),
+  warmGuardian: () => guardian.warm!(),
   ...(args.json ? {} : { onStep: print }),
 };
 

@@ -52,9 +52,9 @@ export interface LiveConfig {
   lang: Lang;
   yesWord?: string;
   fetchImpl?: typeof fetch;
-  // Starts Guardian and says whether it is up. Without one, the run relies
-  // on the warm-up the first turn starts.
-  warmGuardian?: () => Promise<string>;
+  // Asks the deployed Guardian whether its model is loaded. Only "ready"
+  // passes: Engine's /health says Guardian is set, not that it can answer.
+  warmGuardian: () => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
   onStep?: (step: StepReport) => void;
 }
@@ -69,6 +69,10 @@ export const REQUIRED_ENV = [
   "MANO_ENGINE_CHANNELS_TOKEN",
   "MANO_ENGINE_AGENT_TOKEN",
   "SANDBOX_PORTAL_TOKEN",
+  "MANO_GUARDIAN_URL",
+  "MANO_GUARDIAN_TOKEN",
+  "MANO_GUARDIAN_KEY_ID",
+  "MANO_GUARDIAN_KEY_SECRET",
 ] as const;
 
 // What spine-letter.jpg says.
@@ -86,6 +90,26 @@ const MARIA = {
   address: "418 Alder St Apt 3, Springfield, IL 62701",
   phone: "(555) 010-0187",
 };
+
+// What the portal must hold, by the label on its caseworker page. Punctuation
+// and case may differ, as in an address written with or without its comma; an
+// amount is compared as a number.
+const same = (a: string, b: string): boolean => a.toLowerCase().replace(/[^a-z0-9]/g, "") === b.toLowerCase().replace(/[^a-z0-9]/g, "");
+const FILED: { label: string; expected: string; matches(value: string): boolean }[] = [
+  { label: "Case number", expected: MARIA.caseNumber, matches: (v) => same(v, MARIA.caseNumber) },
+  { label: "Applicant", expected: MARIA.fullName, matches: (v) => same(v, MARIA.fullName) },
+  { label: "Date of birth", expected: MARIA.dateOfBirth, matches: (v) => same(v, MARIA.dateOfBirth) },
+  { label: "Address", expected: MARIA.address, matches: (v) => same(v, MARIA.address) },
+  { label: "Phone", expected: MARIA.phone, matches: (v) => same(v, MARIA.phone) },
+  { label: "Household size", expected: MARIA.householdSize, matches: (v) => v.trim() === MARIA.householdSize },
+  { label: "Monthly income", expected: `$${MARIA.monthlyIncome}`, matches: (v) => Number(v.replace(/[$,\s]/g, "")) === Number(MARIA.monthlyIncome) },
+  { label: "Declaration", expected: "made by the applicant", matches: (v) => v.startsWith("Made by the applicant") },
+];
+
+// The label and value rows of the portal's caseworker page.
+export function filedRows(page: string): Map<string, string> {
+  return new Map([...page.matchAll(/<td class="label">([^<]*)<\/td><td>(.*?)<\/td>/g)].map((m) => [m[1]!, m[2]!.replace(/<[^>]*>/g, "")]));
+}
 
 const WORDS: Record<Lang, { opening: string; fill: string; yes: string; answers: [RegExp, string][] }> = {
   en: {
@@ -287,7 +311,6 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
   const started = Date.now();
   let approvalId = "";
   let confirmation: string | null = null;
-  let turnModel = "not reported by this build";
 
   const steps: Record<StepName, () => Promise<StepResult>> = {
     async health() {
@@ -301,13 +324,11 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
     },
     async text() {
       const turn = answered(await person.turn([words.opening]), "the first text got no answer");
-      turnModel = reported(turn);
       const reply = withoutLinks(turn.text);
       if (cfg.lang === "es" && !looksSpanish(turn.text)) throw new StepFailure("a text in Spanish was answered in English", turn.http, reply);
-      return { model: turnModel, http: turn.http, detail: turn.status, reply };
+      return { model: reported(turn), http: turn.http, detail: turn.status, reply };
     },
     async guardian() {
-      if (!cfg.warmGuardian) return { model: DEFAULT_GUARDIAN_MODEL, http: null, detail: "no Guardian credentials here: relies on the warm-up the first turn started" };
       let state = "";
       for (let attempt = 1; attempt <= GUARDIAN_POLLS; attempt++) {
         state = await cfg.warmGuardian();
@@ -388,9 +409,14 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
         headers: { authorization: `Bearer ${cfg.portalToken}` },
       });
-      const page = await res.text();
-      if (res.status !== 200 || !page.includes(confirmation!)) throw new StepFailure(`the portal has no ${confirmation}: HTTP ${res.status}`, res.status);
-      return { model: null, http: res.status, detail: `the portal holds ${confirmation}` };
+      const rows = filedRows(await res.text());
+      if (res.status !== 200 || rows.get("Confirmation") !== confirmation) throw new StepFailure(`the portal has no ${confirmation}: HTTP ${res.status}`, res.status);
+      const wrong = FILED.filter((f) => !f.matches(rows.get(f.label) ?? ""));
+      if (wrong.length > 0) {
+        throw new StepFailure(`the filing is wrong: ${wrong.map((f) => `${f.label} is ${rows.get(f.label) ?? "missing"}, expected ${f.expected}`).join("; ")}`, res.status);
+      }
+      if (!rows.has("File 1")) throw new StepFailure("the filing has no document attached", res.status);
+      return { model: null, http: res.status, detail: `the portal holds ${confirmation} with every field as Maria gave it and the document attached` };
     },
   };
 

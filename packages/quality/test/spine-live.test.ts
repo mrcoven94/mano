@@ -5,6 +5,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { glimmerCheckerFromEnv } from "@mano/guardian";
+import { renderReplayPage } from "../../../apps/engine/src/fill-replay.ts";
+import { caseworkerDetailPage } from "../../../apps/sandbox-portal/src/pages.ts";
+import type { Submission } from "../../../apps/sandbox-portal/src/store.ts";
 import { looksSpanish, runLive, type LiveConfig, type StepName } from "../src/spine-live.ts";
 
 const QUESTION = "File your renewal?";
@@ -25,6 +29,26 @@ interface Scene {
   checker?: string;
   executor?: string;
   turnModel?: string;
+  filed?: Record<string, string>;
+  attached?: boolean;
+  portalPage?: string;
+}
+
+const FILED_PAGE: Record<string, string> = {
+  Confirmation: `<span class="conf">${CONFIRMATION}</span>`,
+  "Case number": "R-1042",
+  Applicant: "Maria Torres",
+  "Date of birth": "1988-04-12",
+  Address: "418 Alder St Apt 3, Springfield, IL 62701",
+  Phone: "(555) 010-0187",
+  "Household size": "2",
+  "Monthly income": "$1940",
+  Declaration: "Made by the applicant: I declare under penalty of perjury.",
+};
+
+function caseworkerPage(scene: Scene): string {
+  const rows = { ...FILED_PAGE, ...(scene.attached === false ? {} : { "File 1": `<a href="/caseworker/x/file/0">letter.jpeg</a>` }), ...scene.filed };
+  return `<table>${Object.entries(rows).map(([label, value]) => `<tr><td class="label">${label}</td><td>${value}</td></tr>`).join("\n")}</table>`;
 }
 
 function deployment(scene: Scene = {}): typeof fetch {
@@ -51,7 +75,7 @@ function deployment(scene: Scene = {}): typeof fetch {
     if (url.pathname.endsWith("/approvals")) {
       return Response.json({ approvals: [{ id: "ap-1", outcome: { receipt: scene.receipt ?? { externalId: CONFIRMATION, simulated: false } } }] });
     }
-    if (url.pathname.startsWith("/caseworker/")) return new Response(`<h1>${CONFIRMATION}</h1>`, { status: scene.portalStatus ?? 200 });
+    if (url.pathname.startsWith("/caseworker/")) return new Response(scene.portalPage ?? caseworkerPage(scene), { status: scene.portalStatus ?? 200 });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
 }
@@ -68,6 +92,7 @@ function config(scene?: Scene, extra: Partial<LiveConfig> = {}): LiveConfig {
     portalToken: "portal-token-value",
     lang: "en",
     fetchImpl: deployment(scene),
+    warmGuardian: async () => "ready",
     sleep: async () => undefined,
     ...extra,
   };
@@ -164,6 +189,63 @@ test("a number the portal does not hold fails", async () => {
   assert.equal(await failedAt({ portalStatus: 404 }), "portal");
 });
 
+test("the pages the portal and Engine really render pass", async () => {
+  const replayPage = renderReplayPage({
+    state: "current",
+    purpose: "Food benefits renewal",
+    recipient: "Sandbox County Human Services",
+    steps: [{ caption: "Mano opened the form.", width: 1280, height: 800, focus: null, png: new Uint8Array([1, 2, 3]) }],
+    fields: [{ label: "Case number", value: "R-1042" }],
+    attached: true,
+  });
+  const portalPage = caseworkerDetailPage({
+    key: "k",
+    scope: "api-x",
+    confirmationNumber: CONFIRMATION,
+    household: {
+      caseNumber: "R-1042",
+      fullName: "Maria Torres",
+      dateOfBirth: "1988-04-12",
+      address: "418 Alder St Apt 3, Springfield, IL 62701",
+      phone: "(555) 010-0187",
+      householdSize: "2",
+      monthlyIncome: "1940",
+    },
+    declaration: { statement: "I declare under penalty of perjury." },
+    files: [{ name: "letter.jpeg", type: "image/jpeg", size: 10, r2key: "r" }],
+    digest: "d",
+    status: "received",
+    receivedAt: 0,
+    slowMs: 0,
+  } as unknown as Submission);
+  const run = await runLive(config({ replayPage, portalPage }));
+  assert.equal(run.failedStep, null, run.steps.at(-1)?.detail);
+});
+
+test("a filing with any field other than Maria's fails, and says which", async () => {
+  const run = await runLive(config({ filed: { "Monthly income": "$194" } }));
+  assert.equal(run.failedStep, "portal");
+  assert.match(run.steps.at(-1)!.detail, /Monthly income is \$194, expected \$1940/);
+  const wrong: Record<string, string>[] = [{ Applicant: "Mario Torres" }, { "Date of birth": "1988-04-21" }, { "Household size": "3" }, { Phone: "(555) 010-0188" }, { Address: "418 Alder St Apt 4, Springfield, IL 62701" }, { "Case number": "R-1043" }, { Declaration: "Not recorded" }];
+  for (const filed of wrong) {
+    assert.equal(await failedAt({ filed }), "portal", JSON.stringify(filed));
+  }
+});
+
+test("punctuation and a written-out amount still match", async () => {
+  assert.equal(await failedAt({ filed: { Address: "418 Alder St Apt 3 Springfield IL 62701", "Monthly income": "$1,940.00" } }), null);
+});
+
+test("a filing with no document fails", async () => {
+  assert.equal(await failedAt({ attached: false }), "portal");
+});
+
+test("a model column shows whatever the deployment reports, including the Modal route", async () => {
+  const model = "meta-models/Muse-Spark-Open-816B-A42B";
+  const run = await runLive(config({ turnModel: model }));
+  assert.deepEqual(run.steps.filter((s) => ["text", "photo", "fill"].includes(s.step)).map((s) => s.model), [model, model, model]);
+});
+
 test("YES is sent again while Guardian starts, as Mano asks a person to", async () => {
   const run = await runLive(config({ yesTexts: ["The safety check is taking a moment, so nothing was sent yet.", `Done. Confirmation ${CONFIRMATION}.`] }));
   assert.equal(run.ok, true);
@@ -175,9 +257,11 @@ test("an Engine without Guardian or the sandbox portal fails before any turn", a
   assert.equal(await failedAt({ executor: "simulated" }), "health");
 });
 
-test("Guardian that never comes up fails the run", async () => {
-  const run = await runLive(config(undefined, { warmGuardian: async () => "starting" }));
+test("a deployed Guardian answering 503 fails the run", async () => {
+  const guardian = glimmerCheckerFromEnv({ MANO_GUARDIAN_URL: "https://guardian.test/check", MANO_GUARDIAN_TOKEN: "t" }, (async () => new Response("", { status: 503 })) as typeof fetch);
+  const run = await runLive(config(undefined, { warmGuardian: () => guardian.warm!() }));
   assert.equal(run.failedStep, "guardian");
+  assert.match(run.steps.at(-1)!.detail, /did not come up: starting/);
 });
 
 test("a Spanish run fails on an English answer", async () => {
@@ -199,4 +283,5 @@ test("the command exits 2 and names what is missing, with no values", () => {
   });
   assert.equal(out.status, 2);
   assert.match(out.stderr, /MANO_AGENT_URL/);
+  assert.match(out.stderr, /MANO_GUARDIAN_URL/);
 });
