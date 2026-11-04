@@ -10,7 +10,7 @@ import type { Env } from "../env.js";
 // paused and plays a recording. A filing run costs a few model calls, a fill
 // and Guardian checks, and Meta does not stop calls at a spend amount.
 export const DAILY_RUN_CAP = 60;
-export const IP_RUNS_PER_HOUR = 8;
+export const IP_RUNS_PER_HOUR = 20;
 export const MAX_ACTIVE_RUNS = 4;
 // A filing's turns plus some YES presses while Guardian wakes. Each leg reserves
 // the turns it may use when it claims the run, so no timing can pass this.
