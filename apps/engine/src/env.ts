@@ -21,6 +21,9 @@ export interface Env {
   // Local time of day deadline nudges go out, "HH:MM" between 09:00 and
   // 20:00. Default 10:00.
   MANO_NUDGE_TIME?: string;
+  // "on" lets the daily check text people (src/always-on.ts). Anything else, or
+  // unset: it runs and sends nothing.
+  MANO_DAILY_CHECK_SENDS?: string;
   // Guardian's check endpoint, its bearer token and the Modal proxy key
   // pair. With none of the four set the gateway runs local rules only.
   MANO_GUARDIAN_URL?: string;

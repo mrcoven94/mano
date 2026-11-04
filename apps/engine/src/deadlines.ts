@@ -182,7 +182,7 @@ function isIsoDate(value: unknown): value is string {
   return new Date(dateMs(value)).toISOString().slice(0, 10) === value;
 }
 
-function addDays(date: string, days: number): string {
+export function addDays(date: string, days: number): string {
   return new Date(dateMs(date) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
@@ -211,6 +211,10 @@ function wall(ms: number, timeZone: string): { date: string; asUtcMs: number } {
   for (const part of format.formatToParts(new Date(ms))) if (part.type !== "literal") p[part.type] = Number(part.value);
   const asUtcMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
   return { date: new Date(Date.UTC(p.year, p.month - 1, p.day)).toISOString().slice(0, 10), asUtcMs };
+}
+
+export function localDate(ms: number, timeZone: string): string {
+  return wall(ms, timeZone).date;
 }
 
 // The instant a wall time on a date happens in a zone. Two passes settle
@@ -717,6 +721,17 @@ export function removeDeadlines(sql: SqlExec, nowMs = Date.now()): number {
   return n;
 }
 
+// Puts a claimed reminder back to wait until atMs, without spending an
+// attempt. One already handed off stays sending.
+export function deferReminder(sql: SqlExec, reminderId: string, token: string, atMs: number): void {
+  sql.exec(
+    "UPDATE reminders SET status = CASE WHEN handoffs = 0 THEN 'scheduled' ELSE status END, next_at_ms = ?," +
+      " claim_token = NULL, claimed_at_ms = NULL, attempts = MAX(attempts - 1, 0)" +
+      " WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
+    atMs, reminderId, token,
+  );
+}
+
 // The check a delivery run makes on each claimed reminder right before
 // its handoff, first sends and retries alike, in the same synchronous
 // step as the handoff. null: not a nudge, or a current one inside its
@@ -746,12 +761,7 @@ export function gateNudge(sql: SqlExec, reminderId: string, token: string, nowMs
   }
   if (nowMs >= Number(w.window_start_ms) && nowMs < Number(w.window_end_ms)) return null;
   if (nowMs < Number(w.window_start_ms)) {
-    sql.exec(
-      "UPDATE reminders SET status = CASE WHEN handoffs = 0 THEN 'scheduled' ELSE status END, next_at_ms = ?," +
-        " claim_token = NULL, claimed_at_ms = NULL, attempts = MAX(attempts - 1, 0)" +
-        " WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
-      Number(w.window_start_ms), reminderId, token,
-    );
+    deferReminder(sql, reminderId, token, Number(w.window_start_ms));
     return "deferred";
   }
   settle("dropped");
