@@ -1530,6 +1530,42 @@ describe("a date question and an approval question at once", () => {
     expect(filed()).toHaveLength(0);
   });
 
+  it("a report that arrives after the date question does not bring the approval back", async () => {
+    const ask = await send(turn("turn_clash_00061", "Please file my renewal"), deps(), { present: false });
+    expect(ask.body.status).toBe("waiting_approval");
+    await photo("turn_clash_00062", ONE_DATE);
+    const late = await handlePresented(
+      signedAt("/channels/mano/presented", { handleHash: HANDLE, approvalId: ask.body.approvalId, textHash: presentationHash(ask.body.approval!), generation: 0, grant: grants.get(HANDLE) }),
+      { secret: SECRET, engine: engineClient() },
+    );
+    expect(late.status).toBe(409);
+    const yes = await send(turn("turn_clash_00063", "YES"));
+    expect(yes.body.text).toMatch(/^I saved November 15, 2026/);
+    expect(filed()).toHaveLength(0);
+    // Shown again, its report counts, and only a yes to it files it.
+    expect(yes.body.status).toBe("waiting_approval");
+    expect((await send(turn("turn_clash_00064", "YES"))).body.text).toMatch(/^Done/);
+    expect(filed()).toHaveLength(1);
+  });
+
+  it("a report that lands between the later question's mark and its read is undone", async () => {
+    const ask = await send(turn("turn_clash_00071", "Please file my renewal"), deps(), { present: false });
+    const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
+    const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await engine.fetch(input, init);
+      // The later question marks the approval right after this report's write.
+      if (init?.method === "PUT" && /pending-approval$/.test(String(input))) await person.addMemory(`unhooked-approval:${ask.body.approvalId}`);
+      return res;
+    }) as typeof fetch;
+    const res = await handlePresented(
+      signedAt("/channels/mano/presented", { handleHash: HANDLE, approvalId: ask.body.approvalId, textHash: presentationHash(ask.body.approval!), generation: 0, grant: grants.get(HANDLE) }),
+      { secret: SECRET, engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: racing }) },
+    );
+    expect(res.status).toBe(409);
+    expect((await person.getPending()).pointer).toBeNull();
+    expect((await send(turn("turn_clash_00072", "YES"))).body.text).not.toMatch(/^Done/);
+  });
+
   it("when the question cannot be unhooked from the approval, the photo's reply asks nothing", async () => {
     await send(turn("turn_clash_00041", "Please file my renewal"));
     const refusing = (async (input: RequestInfo | URL, init?: RequestInit) =>

@@ -57,6 +57,10 @@ export interface MailAnswer {
   outcome: "read" | "unread";
   text: string;
   deadlines: HeldDeadline[];
+  // The one date the reply's closing question names, for the caller to hold on
+  // a plain yes. Absent unless the reply ends on that question and it is the
+  // only one asked. Nothing here is held until the person says so.
+  asked?: HeldDeadline;
 }
 
 function listOf(items: string[], and: string): string {
@@ -204,17 +208,50 @@ function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: Answer
   }
 }
 
-function heldBackQuestion(question: Question, planted: boolean, w: AnswerWords, today: string | undefined): string | null {
+// The question for a date the gate held back, and the date when it names
+// exactly one. Any other question leaves nothing a yes could mean.
+function heldBackQuestion(question: Question, planted: boolean, w: AnswerWords, today: string | undefined): { text: string; date: NamedDate | null } | null {
   const isPast = (iso: string): boolean => today !== undefined && iso < today;
   const named = question.named;
-  if (named?.kind === "not-theirs") return w.notYours;
+  if (named?.kind === "not-theirs") return { text: w.notYours, date: null };
   const date = soleDate(question);
   // A letter that tries to instruct Mano can write a date to get it repeated.
-  if (planted || named?.kind === "unsure") return !date ? null : date === "unclear" ? w.severalDates : w.askAnyDate;
-  if (named) return namedQuestion(named, w, isPast);
+  if (planted || named?.kind === "unsure") return !date ? null : { text: date === "unclear" ? w.severalDates : w.askAnyDate, date: null };
+  if (named) return { text: namedQuestion(named, w, isPast), date: oneDutyDate(named, isPast) };
   if (!date) return null;
-  if (date === "unclear") return w.severalDates;
-  return isPast(date) ? w.passed(w.date(date)) : w.askDate(w.date(date));
+  if (date === "unclear") return { text: w.severalDates, date: null };
+  return isPast(date) ? { text: w.passed(w.date(date)), date: null } : { text: w.askDate(w.date(date)), date: { iso: date, purpose: "deadline" } };
+}
+
+function oneDutyDate(named: Exclude<NamedDates, { kind: "unsure" }>, isPast: (iso: string) => boolean): NamedDate | null {
+  if (named.kind !== "duty") return null;
+  const live = named.dates.filter((d) => !isPast(d.iso));
+  const interview = named.interview && !isPast(named.interview);
+  return live.length === 1 && !interview ? live[0]! : null;
+}
+
+const PURPOSE_KINDS: Record<NamedDate["purpose"], DeadlineKind | null> = { renewal: "renewal", documents: "documents", payment: "payment", deadline: null };
+
+// The deadline a yes to that question would hold, built as a held one is. The
+// sentence is the letter's own that gives this date, else none is cited.
+function askedDeadline(letter: Letter, question: Question, date: NamedDate): HeldDeadline | null {
+  const proposal = question.proposal?.dueDate === date.iso ? question.proposal : null;
+  const candidate = question.candidates?.find((c) => c.dates.includes(date.iso)) ?? question.proposal?.others.find((c) => c.dates.includes(date.iso));
+  const sentence = proposal?.quote ?? candidate?.sentence;
+  const file = proposal?.citation.file ?? candidate?.citation?.file ?? letter.pages[0]?.file;
+  if (!sentence || !file) return null;
+  const program = programOf(letter.fields);
+  const kind = PURPOSE_KINDS[date.purpose] ?? kindOf(sentence, proposal?.obligation ?? "other");
+  return {
+    letterId: letter.id,
+    file,
+    title: [program?.name, kind].filter(Boolean).join(" ") || "Letter deadline",
+    kind,
+    dueDate: date.iso,
+    program: program?.name ?? null,
+    federalProgram: program?.federal ?? null,
+    sentence,
+  };
 }
 
 // The date stays the letter's claim: it is said, never held, since the
@@ -273,7 +310,7 @@ function trustedKind(reading: MailReading, letter: Letter): DocumentKind | undef
   return doubted || programOf(letter.fields) ? "unknown" : kind;
 }
 
-function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean, today: string | undefined): { lines: string[]; held: HeldDeadline | null } {
+function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean, today: string | undefined): { lines: string[]; held: HeldDeadline | null; asks?: boolean; asked?: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
   if (scam) return { lines: scamLines(scam, w), held: null };
@@ -292,6 +329,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
   const proposal = question?.proposal;
   let held: HeldDeadline | null = null;
   let ask: string | null = null;
+  let asked: HeldDeadline | null = null;
   if (proposal?.confidence === "high") {
     const kind = kindOf(proposal.sentence, proposal.obligation);
     held = {
@@ -308,7 +346,9 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
     const next = NEXT_RENEWAL.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
     lines.push(next ? w.nextDue(kind, w.date(proposal.dueDate)) : w.due(w.date(proposal.dueDate)));
   } else if (question) {
-    ask = heldBackQuestion(question, warnings.some((warning) => warning.kind === "instruction_in_content"), w, today);
+    const held = heldBackQuestion(question, warnings.some((warning) => warning.kind === "instruction_in_content"), w, today);
+    ask = held?.text ?? null;
+    asked = held?.date ? askedDeadline(letter, question, held.date) : null;
   }
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
@@ -317,7 +357,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
   if (!otherKind) lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.
   if (ask) lines.push(ask);
-  return { lines, held };
+  return { lines, held, asks: ask !== null, asked };
 }
 
 // A letter with nothing read from it: every page failed or was unreadable.
@@ -342,9 +382,14 @@ export function answerReading(reading: MailReading, language: ReplyLanguage = "e
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `${w.letterNumber(i + 1)} ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
   if (missed) paragraphs.push(w.missedPart);
+  const deadlines = answers.flatMap((a) => (a.held ? [a.held] : []));
+  // Only a reply that ends on this one question can have a yes mean this date.
+  const last = answers.at(-1);
+  const asked = !missed && deadlines.length === 0 && answers.filter((a) => a.asks).length === 1 && last?.asked ? last.asked : undefined;
   return {
     outcome: "read",
     text: paragraphs.join("\n\n"),
-    deadlines: answers.flatMap((a) => (a.held ? [a.held] : [])),
+    deadlines,
+    ...(asked ? { asked } : {}),
   };
 }

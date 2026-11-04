@@ -26,7 +26,7 @@ import { profileDataBlock, readProfileView } from "./profile.js";
 import { decisionLanguage, parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine, type ProfileView } from "./engine.js";
 import { detectLanguage, keepLanguage, languageFromProfile, shouldKeep } from "./language.js";
-import { LETTER_RULES, confirmOffer, documentsContext, keepOffer, letterBlock, offerBefore, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
+import { LETTER_RULES, confirmOffer, documentsContext, isUnhooked, keepOffer, letterBlock, offerBefore, readTextedPhotos, rehookApproval, unhookApproval, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
 import { answerRequestWithPhoto } from "./sharing.js";
 import type { HoldResult } from "./propose.js";
@@ -384,19 +384,6 @@ async function decideTurn(
   return unshown;
 }
 
-// Makes the approval question shown earlier unanswerable until it is shown
-// again. The draft still waits. False when that could not be confirmed.
-async function unhookApproval(engine: PersonEngine): Promise<boolean> {
-  try {
-    const { pointer } = await engine.getPending();
-    if (pointer) await engine.clearPointer(pointer.approvalId);
-    return true;
-  } catch (err) {
-    console.warn(JSON.stringify({ type: "mano_unhook_failed", status: err instanceof EngineError ? err.status : null }));
-    return false;
-  }
-}
-
 // The reply to a saved date, followed by the approval question still waiting,
 // which is then the last thing asked and answerable once Channels reports it.
 async function withWaitingQuestion(engine: PersonEngine, line: string, language: ReplyLanguage): Promise<TurnResponse> {
@@ -404,7 +391,10 @@ async function withWaitingQuestion(engine: PersonEngine, line: string, language:
     const { latest } = await engine.getPending();
     const approval = latest ? (await engine.listApprovals()).find((a) => a.id === latest.approvalId && a.status === "pending") : undefined;
     const question = approval ? (presentable(approval, language) ?? presentable(approval)) : null;
-    if (approval && question) return { httpStatus: 200, body: { status: "waiting_approval", text: `${line}\n\n${question}`, approval: question, approvalId: approval.id } };
+    if (approval && question) {
+      await rehookApproval(engine, approval.id);
+      return { httpStatus: 200, body: { status: "waiting_approval", text: `${line}\n\n${question}`, approval: question, approvalId: approval.id } };
+    }
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_reshow_failed", status: err instanceof EngineError ? err.status : null }));
   }
@@ -694,7 +684,19 @@ export async function handlePresented(request: Request, deps: { secret: string |
     await engine.reject(approval.id).catch(() => console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 })));
     return Response.json({ ok: true, superseded: true });
   }
+  // A later question took the next yes from this one: a late report of it must
+  // not make it answerable. Read again after the write, in case that question
+  // came between them, and undo it.
+  const refused = () => {
+    console.warn(JSON.stringify({ type: "mano_presented_after_later_question", handle: handleHash }));
+    return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  };
+  if (await isUnhooked(engine, approvalId)) return refused();
   const set = await engine.setPointer(approvalId);
+  if (set?.pointer && (await isUnhooked(engine, approvalId))) {
+    await engine.clearPointer(approvalId);
+    return refused();
+  }
   if (!set) return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
   if (set.superseded) {
     // Not Engine's latest proposal: the report changes nothing and Engine

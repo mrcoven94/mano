@@ -189,6 +189,31 @@ describe("a yes to the one date Mano asked about", () => {
     expect((await person().listMemory()).filter((r) => r.content.startsWith("date-offer:"))).toHaveLength(0);
   });
 
+  it("through the real read and reply, a date the reader named is held on a yes, in one line", async () => {
+    const sentence = "Your assistance runs out unless we hear from you on or before Nov. 14, 2026.";
+    const page = pageJson({
+      full_text: `SNAP renewal notice\n\n${sentence}`,
+      sender: { text: null, box_2d: null },
+      program: { text: null, box_2d: null },
+      subject: { text: "SNAP renewal notice", box_2d: [40, 60, 70, 400] },
+      asked: [],
+      deadlines: [{ text: sentence, box_2d: [300, 60, 340, 900] }],
+      dates_to_meet: [{ for: "renewal", date: "Nov. 14, 2026", sentence }],
+      other_dates: [],
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+    });
+    const text = await asked(page);
+    expect(text).toMatch(/It looks like your renewal is due November 14, 2026\. Please check that against your letter\. Is that the date you need to meet\?$/);
+    expect(engine.deadlineCalls).toHaveLength(0);
+    const { body } = await send(textTurn("turn_date_real01", "yes"), deps([]));
+    expect(body.text).toBe("I saved November 14, 2026 to your deadlines.");
+    expect(calls).toHaveLength(0);
+    expect(engine.deadlineCalls[0]!.body).toMatchObject({ title: "SNAP renewal", kind: "renewal", dueDate: "2026-11-14", program: "SNAP", source: { kind: "letter", sentence } });
+  });
+
   it.each(["YES", "ok", "sí", "si", "có", "opo"])("%j holds it", async (word) => {
     await asked();
     await send(textTurn("turn_date_yes002", word), deps([]));

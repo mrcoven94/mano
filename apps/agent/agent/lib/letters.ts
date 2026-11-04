@@ -13,7 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
-import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords, type DeadlineProposal, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
+import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
@@ -32,19 +32,16 @@ export interface LetterReply {
   text: string;
   // Whether a letter was read (false: unread, failed, or not stored).
   read: boolean;
-  // The one date this reply asks the person to confirm, when it asks.
-  offer?: DateOffer;
+  // The one date this reply's closing question names, as Mail said it.
+  offer?: HeldDeadline;
 }
 
-// A date Mano named and asked about, kept with the turn that asked: the
-// deadline to hold on a yes, built by Mail as it builds one it trusts, and
-// the sentence that asked. Kept as a memory note on the person's own record,
-// so a deletion takes it, under a prefix that never reaches the model.
-export interface DateOffer {
-  ask: string;
-  held: HeldDeadline;
-}
+// A date Mano named and asked about is kept with the turn that asked, as a
+// memory note on the person's own record, so a deletion takes it, under a
+// prefix that never reaches the model.
 const OFFER_NOTE = "date-offer:";
+// Marks an approval a later question took the next yes from (unhookApproval).
+const UNHOOKED_NOTE = "unhooked-approval:";
 // A yes this much later is not an answer to that text.
 const OFFER_TTL_MS = 24 * 60 * 60_000;
 
@@ -248,7 +245,7 @@ export async function readTextedPhotos(
   const deadline = deadlineAt - HOLD_RESERVE_MS;
   let text: string;
   let read = false;
-  let offer: DateOffer | null = null;
+  let offer: HeldDeadline | null = null;
   try {
     const files = [];
     for (const photo of photos) {
@@ -271,7 +268,8 @@ export async function readTextedPhotos(
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt), rememberPayStubs(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");
-    offer = dateOffer(reading, language(), dayBehind(receivedAt), text);
+    // A line about another letter's date would follow the question.
+    offer = held.length === 0 ? (answer.asked ?? null) : null;
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
@@ -286,41 +284,40 @@ export async function readTextedPhotos(
   return { text, read, ...(offer ? { offer } : {}) };
 }
 
-// The offer in a reply, or null: exactly one date question, on a date only,
-// and the reply ends on it, so a yes can only answer that. A scam or link
-// warning never says this sentence, so it never gets here. Mail builds the
-// deadline by reading the letter again as if that one date were confirmed.
-function dateOffer(reading: MailReading, language: ReplyLanguage, today: string | undefined, text: string): DateOffer | null {
-  const w = ANSWER_WORDS[language];
-  const named = reading.questions.flatMap((question) => {
-    if (question.kind !== "confirm_deadline") return [];
-    const dates = new Set([...(question.proposal ? [question.proposal.dueDate] : []), ...(question.candidates ?? []).flatMap((c) => c.dates)]);
-    if (dates.size !== 1) return [];
-    const date = [...dates][0]!;
-    const ask = w.askDate(w.date(date));
-    return text.includes(ask) ? [{ question, date, ask }] : [];
-  });
-  if (named.length !== 1 || !text.endsWith(named[0]!.ask)) return null;
-  const { question, date, ask } = named[0]!;
-  const citation = question.proposal?.citation ?? question.candidates?.find((c) => c.citation)?.citation ?? null;
-  const sentence = question.proposal?.quote ?? question.candidates?.[0]?.sentence;
-  if (!citation || !sentence || !question.letterId) return null;
-  const proposal: DeadlineProposal = question.proposal
-    ? { ...question.proposal, confidence: "high" }
-    : { letterId: question.letterId, sentence, quote: sentence, citation, dueDate: date, obligation: "other", confidence: "high", count: null, reasons: [], others: [] };
-  const confirmed = { ...reading, questions: reading.questions.map((q) => (q === question ? { ...q, proposal } : q)) };
-  const held = answerReading(confirmed, language, today).deadlines.find((d) => d.letterId === question.letterId && d.dueDate === date);
-  return held ? { ask, held } : null;
-}
-
 // Replaces any earlier offer. A failed write only means a yes asks again.
-export async function keepOffer(engine: PersonEngine, offer: DateOffer, askedAt: string): Promise<void> {
+export async function keepOffer(engine: PersonEngine, held: HeldDeadline, askedAt: string): Promise<void> {
   try {
     await dropOffers(engine);
-    await engine.addMemory(`${OFFER_NOTE}${JSON.stringify({ held: offer.held, askedAt })}`);
+    await engine.addMemory(`${OFFER_NOTE}${JSON.stringify({ held, askedAt })}`);
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_date_offer_failed", status: err instanceof EngineError ? err.status : null }));
   }
+}
+
+// Takes the next yes from the approval question shown earlier, delivered or
+// still being reported: the mark stops a late report restoring the pointer. It
+// goes first, so a report either sees it or has its pointer cleared here. False
+// when that could not be confirmed.
+export async function unhookApproval(engine: PersonEngine): Promise<boolean> {
+  try {
+    const { pointer, latest } = await engine.getPending();
+    const id = latest?.approvalId ?? pointer?.approvalId;
+    if (id && !(await isUnhooked(engine, id))) await engine.addMemory(`${UNHOOKED_NOTE}${id}`);
+    if (pointer) await engine.clearPointer(pointer.approvalId);
+    return true;
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_unhook_failed", status: err instanceof EngineError ? err.status : null }));
+    return false;
+  }
+}
+
+export async function isUnhooked(engine: PersonEngine, approvalId: string): Promise<boolean> {
+  return (await engine.listMemory()).some((r) => r.content === `${UNHOOKED_NOTE}${approvalId}`);
+}
+
+// Lets the question count again, because this reply shows it again.
+export async function rehookApproval(engine: PersonEngine, approvalId: string): Promise<void> {
+  for (const row of await engine.listMemory()) if (row.content === `${UNHOOKED_NOTE}${approvalId}`) await engine.deleteMemory(row.id);
 }
 
 function isOfferNote(content: string): boolean {
