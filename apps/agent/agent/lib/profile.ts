@@ -223,10 +223,17 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     if (path.startsWith("household.")) delete fields["person.householdConfirmed"];
   }
 
-  // Any other change to their income ends a total they gave for a form. It
-  // goes silently: this is not something they asked to forget.
+  // A real change to what another entry pays, or forgetting one, ends a total
+  // they gave for a form. Saying the same thing again, or renaming a job, does
+  // not. It goes silently: this is not something they asked to forget.
   const total = `income.${STATED_TOTAL}`;
-  const incomeChanged = Object.keys(fields).some((path) => path.startsWith("income.") && !path.startsWith(total));
+  const incomeChanged = Object.keys(fields).some((path) => {
+    if (!path.startsWith("income.") || path.startsWith(total)) return false;
+    if (fields[path] === null) return true;
+    const [, id, field] = path.split(".");
+    if (field !== "amount" && field !== "frequency") return false;
+    return current.income.find((e) => e.id === id)?.[field]?.value !== fields[path];
+  });
   if (incomeChanged && current.income.some((e) => e.id === STATED_TOTAL)) {
     fields[total] = null;
     labels[total] = "";
@@ -260,8 +267,18 @@ function money(amount: number): string {
   return `$${amount.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
 
+export const ENDS_IN_ZIP = /\b\d{5}(-\d{4})?$/;
+
+// An address the person gave in one line that could not be split: kept whole
+// on its first line, with no city or ZIP of their own beside it. A first line
+// that only ends in digits, such as a PO box, has their city and ZIP beside it.
+export function addressIsWhole(a: Profile["person"]["address"]): boolean {
+  return a.line1?.source === "person" && ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person";
+}
+
 function addressOf(profile: Profile): string | null {
   const a = profile.person.address;
+  if (addressIsWhole(a)) return a.line1!.value;
   const street = [a.line1?.value, a.line2?.value].filter(Boolean).join(" ");
   const cityLine = [a.city?.value, [a.state?.value, a.zip?.value].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   // An address kept whole on its first line already names its state.
