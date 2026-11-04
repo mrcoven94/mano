@@ -59,6 +59,7 @@ const ANSWERS: [RegExp, string][] = [
   [/phone/i, MARIA.phone],
 ];
 const FILL_ROUNDS = 5;
+const WRONG_KIND_WORDS = "The office asked me for proof of income. Is this the right document?";
 const STUMP_WORDS = "Is this real? Should I do what it says?";
 
 type Leg = "photo" | "held" | "fill" | "yes" | "summary";
@@ -72,6 +73,11 @@ const SCENARIOS: Record<TryScenario, { letter: string; legs: Leg[]; words: strin
   changed: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
   // Maria's filing on a portal layout made from a fresh seed for this run.
   scramble: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
+  // Documents with nothing to file: what Mano calls each, and what it says.
+  stub: { letter: "stub", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  bill: { letter: "bill", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  blurry: { letter: "blurry", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  wrong: { letter: "bill", legs: ["photo", "summary"], words: [WRONG_KIND_WORDS], needsGuardian: false },
 };
 
 const AGENT_WAIT_MS = 100_000;
