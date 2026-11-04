@@ -20,6 +20,8 @@ export interface AnswerWords {
   asksToSend(list: string): string;
   askDate(date: string): string;
   severalDates: string;
+  // In a pile, for a letter with no date in its text and no open question.
+  noDateFound: string;
   letterNumber(n: number): string;
   scam: string;
   suspectLink: string;
@@ -85,6 +87,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     asksToSend: (list) => `It asks you to send: ${list}.`,
     askDate: (date) => `It looks like the letter gives a deadline of ${date}. Is that the date you need to meet?`,
     severalDates: "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?",
+    noDateFound: "I did not find a date to meet in this one.",
     letterNumber: (n) => `Letter ${n}.`,
     scam: "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.",
     suspectLink: "This letter has a link I do not trust. Do not open it, pay through it, or type anything into it.",
@@ -134,6 +137,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     asksToSend: (list) => `Pide que envíe: ${list}.`,
     askDate: (date) => `Parece que la carta da como fecha límite el ${date}. ¿Es esa la fecha que debe cumplir?`,
     severalDates: "Su carta menciona más de una fecha y no quiero equivocarme. ¿Qué fecha dice que debe cumplir?",
+    noDateFound: "No encontré una fecha que deba cumplir en esta.",
     letterNumber: (n) => `Carta ${n}.`,
     scam: "Esta carta parece una estafa. No pague, no llame ni abra nada de lo que indica. Si tiene dudas, llame a su oficina a un número en el que ya confíe.",
     suspectLink: "Esta carta tiene un enlace en el que no confío. No lo abra, no pague por ahí ni escriba nada ahí.",
@@ -186,6 +190,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     asksToSend: (list) => `Thư yêu cầu bạn gửi: ${list}.`,
     askDate: (date) => `Có vẻ thư cho hạn chót là ${date}. Đó có phải là ngày bạn cần kịp không?`,
     severalDates: "Thư của bạn nhắc đến nhiều ngày, và tôi không muốn đoán sai. Thư nói bạn cần kịp ngày nào?",
+    noDateFound: "Tôi không thấy ngày nào cần kịp trong thư này.",
     letterNumber: (n) => `Thư ${n}.`,
     scam: "Thư này có vẻ là lừa đảo. Đừng trả tiền, gọi điện hoặc mở bất cứ thứ gì trong thư. Nếu không chắc, hãy gọi văn phòng của bạn theo số bạn đã tin tưởng.",
     suspectLink: "Thư này có một đường link tôi không tin tưởng. Đừng mở, đừng trả tiền qua đó và đừng nhập gì vào đó.",
@@ -235,6 +240,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     asksToSend: (list) => `Hinihingi nitong ipadala mo: ${list}.`,
     askDate: (date) => `Mukhang ${date} ang huling araw na ibinibigay ng sulat. Iyon ba ang petsang dapat mong habulin?`,
     severalDates: "Mahigit isang petsa ang nasa sulat mo, at ayokong magkamali. Aling petsa ang sinasabi nitong dapat mong habulin?",
+    noDateFound: "Wala akong nakitang petsang dapat habulin sa sulat na ito.",
     letterNumber: (n) => `Sulat ${n}.`,
     scam: "Mukhang scam ang sulat na ito. Huwag magbayad, tumawag, o magbukas ng anumang nakasaad dito. Kung hindi ka sigurado, tawagan ang iyong opisina sa numerong pinagkakatiwalaan mo na.",
     suspectLink: "May link ang sulat na ito na hindi ko pinagkakatiwalaan. Huwag itong buksan, huwag magbayad dito, at huwag mag-type ng kahit ano rito.",
