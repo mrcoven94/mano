@@ -6,7 +6,7 @@ import type { Computer, ModelClient as ComputerModel } from "@mano/computer";
 import { BudgetExceeded, SEGMENT_MODEL, SegmentationSkipped, type ModelClient as MailModel } from "@mano/mail";
 import { isTryHandle, isTryPerson } from "@mano/protocol";
 
-import { OPEN_WEIGHT_MODEL_ID, selectModelRoute } from "./muse.js";
+import { BACKUP_ANSWERED, OPEN_WEIGHT_MODEL_ID, selectModelRoute } from "./muse.js";
 import type { FillDeps } from "./computer-fill.js";
 
 const REPORT_MS = 3_000;
@@ -75,7 +75,9 @@ export function tryStepTrace(handleHash: string, marks: Marks): Marks & { flush(
         lastOutput = at;
       } else if (started !== null && (event.type === "step.completed" || event.type === "step.failed")) {
         const failed = event.type === "step.failed" && lastOutput === null;
-        const identity = identityOf(modelId || "not named");
+        // The step started under Modal's name; the backup marks what it answered.
+        const answeredBy = (event as { data?: { providerMetadata?: { gateway?: { generationId?: unknown } } } }).data?.providerMetadata?.gateway?.generationId;
+        const identity = identityOf(answeredBy === BACKUP_ANSWERED ? OPEN_WEIGHT_MODEL_ID : modelId || "not named");
         sent.push(reportCall(handleHash, { ...identity, purpose: "Mano's turn", ms: (lastOutput ?? at) - started, status: failed ? "failed" : "ok" }));
         started = null;
       }
