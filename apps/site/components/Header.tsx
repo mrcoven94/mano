@@ -9,6 +9,7 @@ import TextMano from "./TextMano";
 const links = [
   { href: "/how-it-works", label: "How Mano works", sub: "From a photo to a filing" },
   { href: "/renewals", label: "Renewals", sub: "Your letter came" },
+  { href: "/try", label: "Live demo", sub: "For judges, no login" },
 ];
 
 export default function Header() {

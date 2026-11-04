@@ -4,7 +4,7 @@ import Mascot from "@/components/Mascot";
 import { REPO_URL } from "@/lib/site";
 import { NeedIcon } from "./NeedIcons";
 
-/* Open source, shown rather than told: the consent record, the action log and the three commands to run it.
+/* Open source, shown rather than told: the consent record and the action log.
    Taking consent back rewrites the record live. Every value is made up. */
 
 type Tok = [cls: "k" | "s" | "n" | "p", text: string];
@@ -34,15 +34,8 @@ function consent(revoked: boolean): Line[] {
 const LOG: Line[] = [
   { t: [n("09:55"), p("  "), s("decide"), p("   approve renewal, case R-1042")] },
   { t: [n("09:55"), p("  "), s("log"), p("      recipient, purpose, copy 7f3a")] },
-  { t: [n("09:56"), p("  "), s("act"), p("      submit to Springfield County")] },
+  { t: [n("09:56"), p("  "), s("act"), p("      submit to the practice portal")] },
   { t: [n("09:56"), p("  "), s("check"), p("    received once, matches")], hot: true },
-];
-
-const RUN: Line[] = [
-  { t: [n("$"), p(` git clone ${REPO_URL}`)] },
-  { t: [n("$"), p(" cd mano && pnpm install")] },
-  { t: [n("$"), p(" pnpm check")] },
-  { t: [s("Every package checked. Stand-ins used for 3 services.")], hot: true },
 ];
 
 const FACTS: [icon: string, title: string, text: string][] = [
@@ -51,13 +44,13 @@ const FACTS: [icon: string, title: string, text: string][] = [
   ["code", "Runs without our accounts.", "pnpm judge runs the renewal on your machine with no key, login or account."],
 ];
 
-const TABS = [["consent", "Consent"], ["log", "Action log"], ["run", "Run it"]] as const;
+const TABS = [["consent", "Consent"], ["log", "Action log"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 export default function OpenSource() {
   const [tab, setTab] = useState<Tab>("consent");
   const [revoked, setRevoked] = useState(false);
-  const lines = tab === "consent" ? consent(revoked) : tab === "log" ? LOG : RUN;
+  const lines = tab === "consent" ? consent(revoked) : LOG;
 
   return (
     <div className="wrap open-grid">
