@@ -15,6 +15,7 @@ import {
   letterPhoto,
   recordedReader,
 } from "../../../packages/mail/test/letter-fixture.js";
+import { MetaModelClient } from "../../../packages/mail/src/model.js";
 import { renderDeadlines } from "../agent/lib/deadlines.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -220,6 +221,26 @@ describe("a texted letter", () => {
       expect(body.text).toContain("I could not read the letter in your photo.");
       const line = log.mock.calls.map(([m]) => String(m)).find((m) => m.includes("mano_letters_read"));
       expect(JSON.parse(line!)).toMatchObject({ letters: 0, asked: ["unreadable_page"] });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("logs why a reading failed as a fixed kind, never the provider's words", async () => {
+    const provider = "Billing failed for Maria Santos on key mk-synthetic-7f3a91.";
+    const mailModel = new MetaModelClient({
+      apiKey: "k",
+      maxRetries: 0,
+      fetchFn: (async () => Response.json({ error: { message: provider } }, { status: 402 })) as typeof fetch,
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const { body } = await send(photoTurn("turn_letter0091"), deps([], { mailModel }));
+      expect(body.text).toContain("I could not finish reading your photo");
+      const line = log.mock.calls.map(([m]) => String(m)).find((m) => m.includes("mano_letters_read"))!;
+      expect(JSON.parse(line)).toMatchObject({ asked: ["read_failed"], failed: ["billing"] });
+      expect(line).not.toContain("Maria Santos");
+      expect(line).not.toContain("mk-synthetic");
     } finally {
       log.mockRestore();
     }

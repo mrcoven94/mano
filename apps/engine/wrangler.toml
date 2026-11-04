@@ -29,6 +29,11 @@ bucket_name = "mano-files"
 [vars]
 SANDBOX_MAX_FIELD_LENGTH = "500"
 SANDBOX_MAX_UPLOAD_BYTES = "5242880"
+# The daily check for new help texts people only when this is "on". It stays off
+# until Engine and Channels both run the code that makes its text no replay. To
+# stop it later, change this line to "off" and merge: the check keeps running,
+# sends nothing, and a text already waiting holds.
+MANO_DAILY_CHECK_SENDS = "off"
 
 # Secrets (never commit values):
 #   wrangler secret put META_MODEL_API_KEY  (reads from stdin)

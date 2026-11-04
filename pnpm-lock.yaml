@@ -196,6 +196,9 @@ importers:
       '@mano/guardian':
         specifier: workspace:*
         version: link:../../packages/guardian
+      '@mano/programs':
+        specifier: workspace:*
+        version: link:../../packages/programs
       '@mano/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

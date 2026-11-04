@@ -20,4 +20,4 @@ export * from "./types.js";
 export { CATALOG, CATALOG_VERSION } from "./catalog.js";
 export { isOfficialUrl, validateCatalog, REQUIRED_FIELDS } from "./validate.js";
 export { listPrograms, lookupProgram, parseProgram, parseState, type LookedUp } from "./lookup.js";
-export { limitAt, screenIncome, type Household, type Screen } from "./screen.js";
+export { confirmedByPerson, householdSizeOf, limitAt, screenIncome, type Household, type HouseholdOnFile, type Screen } from "./screen.js";
