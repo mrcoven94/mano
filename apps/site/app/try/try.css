@@ -135,7 +135,7 @@
   .try-head{grid-template-columns:1fr}
   .try-start{grid-column:1;grid-row:auto;flex-direction:row;align-items:center;margin-top:20px;gap:20px}
   .try-grid{grid-template-columns:1fr}
-  .try-stage-view{height:auto;max-height:420px;padding:18px}
+  .try-stage-view{height:auto;padding:18px}
   .try-paper{height:auto;max-height:380px}
   .try-paper img{height:auto;max-height:380px}
   .try-thread{height:460px}

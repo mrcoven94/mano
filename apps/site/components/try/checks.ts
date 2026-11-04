@@ -128,8 +128,8 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
       continue;
     }
     for (const key of plan) {
-      // A failed reading call can still be followed by a reply that shows Mano read it.
-      if (done.has(key) && !(key === "read" && done.get(key)!.state === "stop")) continue;
+      // Only another reading call can clear a failed one; a reply after it may be Mano saying it could not read.
+      if (done.has(key) && !(key === "read" && done.get(key)!.state === "stop" && e.kind === "model")) continue;
       const result = settle(key, e, done, scenario);
       if (!result) continue;
       done.set(key, { ...result, seq: e.seq });
