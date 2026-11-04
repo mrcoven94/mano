@@ -155,7 +155,8 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     type: "submit",
     recipient: form.recipient,
     purpose: form.purpose,
-    payload: { ...fill.saved, [DECLARATION]: form.declaration, ...(onFile ? { [ATTACHMENT]: onFile.label } : {}) },
+    payload: { ...fill.saved, [DECLARATION]: form.declaration, ...(onFile ? { [ATTACHMENT]: onFile.document.id } : {}) },
+    ...(onFile ? { attachmentLabel: onFile.label } : {}),
     // The safety check holds a document with no cited source against the draft.
     ...(documentId ? { documentId, sources: [{ kind: "document" as const, id: documentId }] } : {}),
   };

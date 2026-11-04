@@ -4,7 +4,7 @@
 import { useCallback, useState } from "react";
 import { Modal, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import { Body, Btn, Card, DemoBanner, EmptyView, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../components/ui";
+import { Body, Btn, Card, DemoBanner, EmptyView, ErrorView, GhostBtn, LiveRegion, LoadingView, Muted, Screen, Title } from "../components/ui";
 import { formatDate } from "../lib/dates";
 import type { Grant, RevokeResult } from "../lib/api/types";
 import { AuthError, EngineGapError } from "../lib/api/types";
@@ -129,11 +129,11 @@ export default function Access() {
         )}
       </View>
 
-      {notice ? (
+      <LiveRegion message={notice ? s.revoked : null}>
         <Card>
           <Body>{s.revoked}</Body>
         </Card>
-      ) : null}
+      </LiveRegion>
 
       <Modal visible={confirming !== null} transparent animationType="fade" onRequestClose={closeSheet}>
         <View style={styles.sheet}>
@@ -141,8 +141,10 @@ export default function Access() {
             {revokeResult ? (
               <View>
                 <Text style={[type.cardTitle, styles.org]}>{s.revokeTitle}</Text>
-                <Body>{revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked}</Body>
-                {revokeResult.reason ? <Muted>{revokeResult.reason}</Muted> : null}
+                <LiveRegion message={[revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked, revokeResult.reason].filter(Boolean).join(" ")}>
+                  <Body>{revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked}</Body>
+                  {revokeResult.reason ? <Muted>{revokeResult.reason}</Muted> : null}
+                </LiveRegion>
                 <View style={styles.sheetBtns}>
                   <GhostBtn title={s.close} onPress={closeSheet} />
                 </View>
