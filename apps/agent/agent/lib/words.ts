@@ -24,6 +24,8 @@ export interface QuestionWords {
   recipients: Record<string, string>;
   yourDocument: string;
   sentDocument(noun: DocumentNoun, month: number, day: number): string;
+  // Follows a document that goes without proof of income.
+  noProof: string;
 }
 
 export type DocumentNoun = "letter" | "photo" | "PDF" | "file";
@@ -56,13 +58,14 @@ const MONTHS_TL = "Enero Pebrero Marso Abril Mayo Hunyo Hulyo Agosto Setyembre O
 
 // How Engine names a document ("the letter you sent on November 4"), in the
 // person's language. Any other words stay as they are.
-const SENT_LABEL = /^the (letter|photo|PDF|file) you sent on ([A-Z][a-z]+) (\d{1,2})$/;
+const SENT_LABEL = /^the (letter|photo|PDF|file) you sent on ([A-Z][a-z]+) (\d{1,2})(, and no proof of income)?$/;
 
 export function attachmentIn(language: ReplyLanguage, label: string): string {
   const words = QUESTION_WORDS[language];
   const sent = SENT_LABEL.exec(label);
   const month = sent ? MONTHS_EN.indexOf(sent[2]!) + 1 : 0;
-  return sent && month > 0 ? words.sentDocument(sent[1] as DocumentNoun, month, Number(sent[3])) : label;
+  if (!sent || month === 0) return label;
+  return `${words.sentDocument(sent[1] as DocumentNoun, month, Number(sent[3]))}${sent[4] ? words.noProof : ""}`;
 }
 
 // A form's name in the person's language, or its exact English.
@@ -84,6 +87,7 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     recipients: {},
     yourDocument: "your document",
     sentDocument: (noun, month, day) => `the ${noun} you sent on ${MONTHS_EN[month - 1]} ${day}`,
+    noProof: ", and no proof of income",
   },
   es: {
     ready: (purpose, office) => `Listo para enviar: ${purpose} (para ${office}).`,
@@ -112,6 +116,7 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     },
     yourDocument: "su documento",
     sentDocument: (noun, month, day) => `${{ letter: "la carta", photo: "la foto", PDF: "el PDF", file: "el archivo" }[noun]} que envió el ${day} de ${MONTHS_ES[month - 1]}`,
+    noProof: ", y ningún comprobante de ingresos",
   },
   vi: {
     ready: (purpose, office) => `Sẵn sàng gửi: ${purpose} (đến ${office}).`,
@@ -140,6 +145,7 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     },
     yourDocument: "giấy tờ của bạn",
     sentDocument: (noun, month, day) => `${{ letter: "thư", photo: "ảnh", PDF: "tệp PDF", file: "tệp" }[noun]} bạn gửi ngày ${day} tháng ${month}`,
+    noProof: ", và không có giấy tờ chứng minh thu nhập",
   },
   tl: {
     ready: (purpose, office) => `Handa nang ipadala: ${purpose} (sa ${office}).`,
@@ -168,6 +174,7 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     },
     yourDocument: "ang iyong dokumento",
     sentDocument: (noun, month, day) => `ang ${{ letter: "sulat", photo: "larawan", PDF: "PDF", file: "file" }[noun]} na ipinadala mo noong ${MONTHS_TL[month - 1]} ${day}`,
+    noProof: ", at walang katibayan ng kita",
   },
 };
 
