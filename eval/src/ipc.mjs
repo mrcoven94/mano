@@ -6,14 +6,16 @@
 //
 // Protocol for third-party system entries (no import needed):
 // - Parent to child once, when the broker is enabled:
-//   { channel: "mano-eval-broker-hello", keyAvailable: bool }
+//   { channel: "mano-eval-broker-hello", keyAvailable: bool, route: "openrouter" | "meta" | null }
 // - Child to parent per fetch:
 //   { channel: "mano-eval-broker", id, url, method, headers, body? }
 // - Parent to child per fetch:
 //   { channel: "mano-eval-broker", id, ok: true, statusOk, status, json }
 //   or { channel: "mano-eval-broker", id, ok: false, error }
-// The parent allows only POST https://api.meta.ai/v1/responses (key
-// injected server-side) and GET https://security.cloudflare-dns.com/dns-query.
+// The parent allows only POST https://api.meta.ai/v1/responses and POST
+// https://openrouter.ai/api/v1/chat/completions (key injected server-side, and
+// on OpenRouter the model and zero-retention pin too) and GET
+// https://security.cloudflare-dns.com/dns-query.
 const CHANNEL = "mano-eval-broker";
 const HELLO = "mano-eval-broker-hello";
 
@@ -34,7 +36,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
     if (msg.channel === HELLO && helloResolve) {
       const r = helloResolve;
       helloResolve = null;
-      r({ keyAvailable: msg.keyAvailable === true });
+      r({ keyAvailable: msg.keyAvailable === true, route: msg.route ?? null });
       return;
     }
     if (msg.channel !== CHANNEL || !pending.has(msg.id)) return;
@@ -77,7 +79,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
     setTimeout(() => {
       if (helloResolve) {
         helloResolve = null;
-        resolve({ keyAvailable: true });
+        resolve({ keyAvailable: true, route: "meta" });
       }
     }, helloTimeoutMs);
   });

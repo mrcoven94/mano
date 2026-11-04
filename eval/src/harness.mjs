@@ -10,9 +10,10 @@
 // allow-listed keys, argv names only the run dir files, and held-out
 // answers are never written to disk while a system runs.
 import { fork, spawnSync } from "node:child_process";
-import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, realpath, stat } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, realpath, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
+import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody } from "./openrouter.mjs";
 
 // The harness refuses to run unless the runtime can deny network: a child
 // that cannot be kept offline invalidates every isolation claim. Checked
@@ -39,8 +40,9 @@ const HELLO = "mano-eval-broker-hello";
 // and link-check DNS lookups. The key is injected here; the child never
 // sees it.
 const BROKER_RULES = [
-  { host: "api.meta.ai", pathPrefix: "/v1/responses", methods: ["POST"], auth: true },
-  { host: "security.cloudflare-dns.com", pathPrefix: "/dns-query", methods: ["GET"], auth: false },
+  { host: "api.meta.ai", pathPrefix: "/v1/responses", methods: ["POST"], keyEnv: "META_MODEL_API_KEY" },
+  { host: "openrouter.ai", pathPrefix: "/api/v1/chat/completions", methods: ["POST"], keyEnv: "OPENROUTER_API_KEY", pinned: true },
+  { host: "security.cloudflare-dns.com", pathPrefix: "/dns-query", methods: ["GET"] },
 ];
 
 function brokerRoute(url, method) {
@@ -78,7 +80,9 @@ function scrubbedEnv(allow) {
 // forwards-compatibility but is ignored: pass nothing). With broker: true
 // the parent answers IPC fetch requests per BROKER_RULES. Returns
 // { outputs, runs }.
-export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [], timeoutMs = 1500000, broker = false, fetchImpl = fetch } = {}) {
+// sandbox widens the child's reach only for a system that needs a native
+// module: { allowAddons, allowFsRead: [dirs], links: { package: dir } }.
+export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [], timeoutMs = 1500000, broker = false, fetchImpl = fetch, sandbox = {} } = {}) {
   void netAllow;
   assertNetDenyCapable();
   return withRunDir(async (dir) => {
@@ -88,7 +92,11 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
     const stagedEntry = join(sysDir, basename(entryFile));
     await copyFile(entryFile, stagedEntry);
     const srcDir = dirname(dirname(entryFile));
-    for (const f of ["baselines.mjs", "tools.mjs", "ipc.mjs"]) {
+    for (const [name, target] of Object.entries(sandbox.links ?? {})) {
+      await mkdir(join(dir, "sys", "node_modules"), { recursive: true });
+      await symlink(target, join(dir, "sys", "node_modules", name));
+    }
+    for (const f of ["baselines.mjs", "tools.mjs", "ipc.mjs", "openrouter.mjs", "pool.mjs"]) {
       try {
         await copyFile(join(srcDir, f), join(dir, "sys", f));
       } catch { /* probe entries travel without the package */ }
@@ -130,6 +138,8 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           "--permission",
           `--allow-fs-read=${dir}`,
           `--allow-fs-write=${dir}`,
+          ...(sandbox.allowFsRead ?? []).map((p) => `--allow-fs-read=${p}`),
+          ...(sandbox.allowAddons ? ["--allow-addons"] : []),
           // No --allow-net: the child is offline; the broker fetches for it.
         ],
       }
@@ -152,18 +162,35 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           return;
         }
         const headers = { ...(msg.headers && typeof msg.headers === "object" ? msg.headers : {}) };
-        if (route.auth) {
-          const key = process.env.META_MODEL_API_KEY;
+        if (route.keyEnv) {
+          const key = process.env[route.keyEnv];
           if (!key) {
             reply({ ok: false, error: "broker has no key" });
             return;
           }
           headers.authorization = `Bearer ${key}`;
         }
+        let body = msg.body;
+        if (route.pinned) {
+          // The model and the zero-retention pin are set here, last, so a
+          // request from the child cannot change them.
+          let parsed;
+          try {
+            parsed = JSON.parse(msg.body);
+          } catch {
+            reply({ ok: false, error: "broker denied: body is not JSON" });
+            return;
+          }
+          if (parsed.model !== undefined && parsed.model !== OPEN_WEIGHT_MODEL) {
+            reply({ ok: false, error: "broker denied: not the open-weight model" });
+            return;
+          }
+          body = JSON.stringify(pinnedChatBody(parsed));
+        }
         try {
           // Never follow redirects: a 302 off the allowlist must fail
           // closed, not fetch a second, unchecked URL.
-          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body: msg.body, redirect: "error" });
+          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body, redirect: "error" });
           let json = null;
           try {
             json = await res.json();
@@ -178,7 +205,8 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
     });
     if (broker) {
       try {
-        child.send({ channel: HELLO, keyAvailable: Boolean(process.env.META_MODEL_API_KEY) });
+        const route = modelRoute();
+        child.send({ channel: HELLO, keyAvailable: route !== null, route });
       } catch { /* child went away */ }
     }
     let stdout = "";

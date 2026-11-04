@@ -6,22 +6,27 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { generalAgentBaseline } from "../baselines.mjs";
 import { childBroker } from "../ipc.mjs";
+import { mapPool } from "../pool.mjs";
+
+const CONCURRENT_HOUSEHOLDS = 8;
 
 const args = process.argv.slice(2);
 const inputPath = args[args.indexOf("--input") + 1];
 const outPath = args[args.indexOf("--out") + 1];
 const inputs = JSON.parse(await readFile(inputPath, "utf8"));
-const brokerFetch = childBroker();
+const brokerFetch = childBroker({ timeoutMs: 180000 });
 let brokered = false;
+let route = null;
 if (brokerFetch) {
-  brokered = (await brokerFetch.hello()).keyAvailable === true;
+  const hello = await brokerFetch.hello();
+  brokered = hello.keyAvailable === true;
+  route = hello.route;
 }
-const outputs = [];
-for (const h of inputs) {
+const outputs = await mapPool(inputs, CONCURRENT_HOUSEHOLDS, async (h) => {
   try {
-    outputs.push(await generalAgentBaseline(h, brokered ? { fetchImpl: brokerFetch, brokered: true } : {}));
+    return await generalAgentBaseline(h, brokered ? { fetchImpl: brokerFetch, brokered: true, route: route ?? "meta" } : {});
   } catch (err) {
-    outputs.push({
+    return {
       householdId: h.householdId,
       baseline: "general-agent",
       status: "error",
@@ -35,7 +40,7 @@ for (const h of inputs) {
       toolCalls: [],
       costUsd: 0,
       elapsedMs: 0,
-    });
+    };
   }
-}
+});
 await writeFile(outPath, JSON.stringify(outputs));

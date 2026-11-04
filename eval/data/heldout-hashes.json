@@ -1,38 +1,44 @@
 {
   "note": "Freeze record for the Mano held-out eval. Hashes only; the seed is secret and scenarios generate at run time. Verify with: pnpm --filter ./eval run verify",
-  "frozen": "2026-10-29",
-  "interim": "frozen against the in-repo fake test pack; refreeze with the architect's private pack before merge",
+  "frozen": "2026-11-04",
   "seedCommitment": "cf9e9896e9a2cd0661cffbd7871b073c3dcacf5e96ea6779035e571436c8ce74",
-  "privatePack": "710194a67983cfaf5a5389ef8fe490314c152ee0e548d67831c91cabd676516d",
+  "privatePack": "b7012bb22345cd480142f4e33ddd500618742d9484322a063ab47c78a2c01ce2",
   "households": {
     "heldout": 100,
     "dev": 20
   },
-  "manifest": "5700d01cf125bfc3eedc483d6a8e5aed2de17b70bdde0e6137e6b8f3054f7323",
+  "manifest": "bf56c4c32d4f966302276b09fbe58bd18a59eada90d8a21fe92ccc36bd912a40",
   "dev": {
     "inputs": "fc5a32b8e0e44079c8961768354b3981ace85cb9fd469e0864cf5175c835aa36",
     "answers": "b7a3f305aeec004a17567a29b761dd1bd25d0ef97d8b3b528f544579326b7328"
   },
   "code": {
-    "eval/package.json": "00912353028c92f7879f696995f96d68ce4fe1be7ea4cf09d0789a37ae9156bb",
+    "eval/package.json": "bdfd17b56780bc05e792b4be13ea69e309f7297844b4bff0ac0d70b69ce784b8",
     "eval/src/generator.mjs": "e754cfd7e522b467a028ef850178014303933c5f69829d031695cb0b22df6b82",
     "eval/src/rng.mjs": "a37227e9a4006a3e6cbf5b50dedd9d69b12625027e928bcea6f967dabe955e90",
     "eval/src/inputs.mjs": "e1fa1daea0ce7581f341da3b0b901122892b640e7da7dbb73b5e91409972bdf4",
     "eval/src/render.mjs": "ba0493b34fa7858c2ab8d139ae220772c6c6470489bac6fa55e7b36e07cbfe79",
     "eval/src/tools.mjs": "5ca5092c732461841cbe88722ad7546fb1f468559f12c95cff476d04934fcb64",
-    "eval/src/ipc.mjs": "8e529771c600271846c4da4f4611d2f59737cdaad5c402ab543e823772bd0204",
-    "eval/src/baselines.mjs": "013db0f55ab10b327b85f2e73011ada1fa451805a10b564c49490dda85d063dc",
-    "eval/src/harness.mjs": "048872df0110c5af35370e560293561f031ca22f61c79da1289376035933303c",
+    "eval/src/ipc.mjs": "645955ff90a459f6ce235cb9ff61df3677b5102671eeb09e3e2f0240188b4a81",
+    "eval/src/openrouter.mjs": "4ee58ed2edc75ea98bb7e204a4cb7315e84e44f6765b951f20c173dab123dc10",
+    "eval/src/pool.mjs": "31ef9b272246d88f0f6ec9e2cc4a34f91e10f38509208309640d2c20b4e56fd5",
+    "eval/src/mano-adapter.mjs": "484b707c3488b3712c4727c0b517d5f517d97d159536becbc9b838771947f387",
+    "eval/src/build-mano.mjs": "5a862803af530c5b588a63ec13401832293e145c4a7b76a1ef959b2567c00266",
+    "eval/src/tracks.mjs": "e227dbf7ba034bb0e4735eeafeba30b0d374fa09f4b70537368e3d282a7ff5bf",
+    "eval/src/baselines.mjs": "d0760a1630750b9955ed030b4958ffc01496fce016d21f6e007c78575b67cfbe",
+    "eval/src/harness.mjs": "0bf5294c628580570d964de1d7d8cbb8f6fde732db0501a6074186dd92eab780",
     "eval/src/grader.mjs": "f164cf01bb1f544dcd6ca15e8de32a0df65ccdf43c1424bb374f02d82b822503",
-    "eval/src/verify.mjs": "66fade2e1d94ba991ce65eecc2ddac83c212edd501eec924c89a37bc4dcb27cc",
+    "eval/src/verify.mjs": "1330c4729d07dabc21990621b1a548d0f796d9737a061732397177561b78a4d1",
     "eval/src/cli-generate.mjs": "a6da2dc2e2f496999e9c8743e6b20134f91d467ba45047f4c809f5d48ee982d3",
-    "eval/src/cli-baselines.mjs": "e89d19b160bf855a3585e9462cd83db28c4d8a6febe7225e0937f23c21af196b",
+    "eval/src/cli-baselines.mjs": "45903538dd15bea9f8801b31d4e7a7ada5c8be46ac281637916491b97cfaa9a3",
     "eval/src/cli-freeze.mjs": "670ab99d1789bf763bed82f7bb0f47572fac0315a106063b9648626637cf9e64",
     "eval/src/cli-verify.mjs": "4dbc6ca79a11fc94d03214479d6f2499cac58fa4131d0bd899da2bbc0e949186",
+    "eval/src/cli-heldout.mjs": "649c6c08f81ac7c4f42b64908bd3e486577a7c9f1de6bb887162bdb6971a8d5e",
     "eval/src/pack-public.json": "49fdf401b1b66888d93619f9268f37cf188a9d93839746ba3222908f2b51d2d6",
     "eval/src/systems/reminder.mjs": "d17e1978dba4bea8486f8596e1d017836a00041058a7691db5e1e5ed0d404a90",
     "eval/src/systems/parser.mjs": "20178934d62966a091401810fe5bff4f2cae4efffb7f4a713f8f287b9bd16da7",
-    "eval/src/systems/general-agent.mjs": "2b43b6f321cfbe042b384f85bb1fefe264f3c20f07b6abda7d8bb89046ac233d"
+    "eval/src/systems/general-agent.mjs": "6435970d304c921f9f2da1cfc14b19a45c1e07db0159b859b95f7053a05d7a33",
+    "eval/src/systems/mano.mjs": "cfaafb055cb6442200b60f318b8a67bfec17b0dd8b2802c2e6a19a4ff356e27d"
   },
   "photos": {
     "hh-001-L1.jpg": "170c0720fc670021fddc9dcb058cbc61954b89c5599d3efb65e0997907bb5198",
@@ -140,403 +146,403 @@
   "heldout": [
     {
       "householdId": "hh-021",
-      "sha256": "7771f1a3634db90b52db31a0c323abbce653bc66e6aef5be2156c4c781fde566"
+      "sha256": "1d6a5788475c082349ce2d07d1e4581034ccaa1dc7558f61160049fb87e7ce47"
     },
     {
       "householdId": "hh-022",
-      "sha256": "8956f46454c35c545dcbe01955dc8c6ae1d7d13b9199d4ae13941ca15de27d76"
+      "sha256": "33270fd3172eebdf37711885e0a4a140df777fdf70992ee574e5e84f60346f4a"
     },
     {
       "householdId": "hh-023",
-      "sha256": "02c72c0fff940554b16398f2c89ee0631b8ab84625dac60cfbfb2732764e42ac"
+      "sha256": "856e0df089c3d9d4102a1282a7aad810f98694fb82fa1757e199e5fac7d1fa92"
     },
     {
       "householdId": "hh-024",
-      "sha256": "e13c1ba8f5634d5abe1e32b92004a31bc560941b92337f633d9cb6774f068e01"
+      "sha256": "df3a82088acb335bc240a12b949af1474633a5cc178cb185fb9c455b7820ca8b"
     },
     {
       "householdId": "hh-025",
-      "sha256": "5c20247f77cf0ffe816b27abe545d61bc8f8db672c10d57ffc2ecd9de2c7a9bd"
+      "sha256": "7240c771fb9e78e657bd8ea8ab7099aed5c72f021adecdda659467e70c5f1c56"
     },
     {
       "householdId": "hh-026",
-      "sha256": "3f8285715bd689b7f49ddc0352f3aa9201387d45d98ec417148895bbb81851d1"
+      "sha256": "9d445c5fc8ef5d04efe08f38fd9744546ed48f48b23139fe4e0c364e54b5d6aa"
     },
     {
       "householdId": "hh-027",
-      "sha256": "076e295126bc1785623e2e61be1b79212900bc54249987d99d72e681c5f02f4f"
+      "sha256": "efb67534e32ec01d329c1fd00e08480694ebbe9a73bde8fd6cf02a1458ad4e96"
     },
     {
       "householdId": "hh-028",
-      "sha256": "414ee3958891091b830d49f39084bd5e424240f783251a5858295ed39cc48cc7"
+      "sha256": "158962c366c3860b639d90c092d92112c0511f2baebd62c125eb1eb5c83cedc8"
     },
     {
       "householdId": "hh-029",
-      "sha256": "2d4174477183a16a0e3ad11d9ddfdcdf9bae3c73b696499da89e6f517405b785"
+      "sha256": "82bf048b92af5805d424828c1590dc3445ef7320401c0b4ed5384cef02d893d8"
     },
     {
       "householdId": "hh-030",
-      "sha256": "eb9a75a5e785c46475766351eab8e4583bf619ac07d75e6f1afff7345b3a6b93"
+      "sha256": "1e3db236eb359abc008c6d37e4fd9c0ebee6fe50fe8c757a686c3cfcace88112"
     },
     {
       "householdId": "hh-031",
-      "sha256": "d6d3a69f7c249dafd18562cafcfe5b94c8e70a843464ea357ad89ac594219b7f"
+      "sha256": "9806a670c454b10b48fe9d3c50bf300a8062fd674d6021bb72c9685df0ff547d"
     },
     {
       "householdId": "hh-032",
-      "sha256": "6033b69b810a9467e2d295661ad9f2771d61b2ba7170fea0b6f8ce0f1ef06d37"
+      "sha256": "4bdbe2c82ee565dd4f393f355b772377f503e0154c29daf672ea34310743b652"
     },
     {
       "householdId": "hh-033",
-      "sha256": "ac5dcc2817f340a912e8614c9c47fd51ef387091a10d761a7546138344e9a9ab"
+      "sha256": "20c92805a96ffef783457841878de148b85b9f5cab0dc1efb88a9f817a6e4a81"
     },
     {
       "householdId": "hh-034",
-      "sha256": "57f10a2b2375d0c5a2b6dd47cf9f5f2ea4e20d01c5e3dffa282d9b09cb7a180f"
+      "sha256": "850033961541377a72e46acdda2ba6ccc0b808d80b680bba12c264e0c5f6c6f9"
     },
     {
       "householdId": "hh-035",
-      "sha256": "f76faf2b802493a28197f09f82012797c43324b4b972cfb4513c0ea3fcb03db0"
+      "sha256": "ed4eb70926e7fa2e44f7ac03a707e464918f42b409553b991330d9d457df21f7"
     },
     {
       "householdId": "hh-036",
-      "sha256": "612492cd75571f5b3ec623661f56979eccb1bbf95139c5ee3f29548bdd9c6ec1"
+      "sha256": "02a700030ca80e0cffc3fb1e648e3f4deae0e2e692e9eba32b1a0a3a27c06c26"
     },
     {
       "householdId": "hh-037",
-      "sha256": "af8f29622c01a669a3524c6fea31b7ee0abf9b70cdb680a20c74a2c1e4c2448c"
+      "sha256": "5c0f12e8ee6f5db9c6c5ad50136d69c1c8e87f21e00dfd45a7418e6014882594"
     },
     {
       "householdId": "hh-038",
-      "sha256": "a6b76537dec676fef767f66f886170b74647e062f793a3acf1f9cdd18195504d"
+      "sha256": "20c6d9038bb8e1e536b5c8fc7dd4a356cd89927797a11a0c28c13bb58510ffcc"
     },
     {
       "householdId": "hh-039",
-      "sha256": "5ac8d2996c9ceb6fad988ce02d6f6bcbc2b85a2750689ca9060a470275ad735a"
+      "sha256": "99140671b983e8e93a337c7a7f03b4f5ba0099438e4a8e26dfc5a62881c3e411"
     },
     {
       "householdId": "hh-040",
-      "sha256": "f141bac3fe4d673d4b08c93703824a31457286a6e6c7b89e131d172fc1610df4"
+      "sha256": "c110548bff3d9cf89fd3d67d6a179b76c88b65d734fd3307f73cdd04cc633ff4"
     },
     {
       "householdId": "hh-041",
-      "sha256": "d2c9777a6957192a80bae7c4f1e5cf16a265210b9c48e06805b956a4a18eef85"
+      "sha256": "1ece81a0c49f8bab2e414ef6206a9b5a440f7d0e1d04d17d00543bf1acb87627"
     },
     {
       "householdId": "hh-042",
-      "sha256": "2cb199de618ab198122ad29e116c6d5e122c646fea3f25a5b3600244024ad8ed"
+      "sha256": "bce73799b3d7fec5849ff4563dabdf2598beaa7254ef10c8f4fbb60f54f799f5"
     },
     {
       "householdId": "hh-043",
-      "sha256": "b726d5db0454d7b182e55640b5e00198ceb65b94e2f41434e06fadbd831d85d0"
+      "sha256": "16e86243d933c6000b93a1397ccd01cd5a247f1a5786f3a0560cfb755f6e601d"
     },
     {
       "householdId": "hh-044",
-      "sha256": "2c2cb9fc7ddf2f53170b6bd24fef23cdbb92f3ce02eb758467543891f643c3b2"
+      "sha256": "407f668b548455cbfa2367e420b9ff33e22c314007419870373e8bcbf53d1a43"
     },
     {
       "householdId": "hh-045",
-      "sha256": "0b4644a2e59f4206b5641fb7a6602243cacbf10f5853fb5e32c885f4ba3dc05d"
+      "sha256": "0fb0a859e6e6602b17d275d8f5c2b2c64a1d11f35e3f492ba01f96db93ce3ecb"
     },
     {
       "householdId": "hh-046",
-      "sha256": "8cc4bd1496f70025d574c512fdc594edfade8552dd4f08aac74b78d78f54cfe6"
+      "sha256": "0eb803b62d54b9130f46dd0ca3eadfd70073cd34d5a8817dd2602d197653a532"
     },
     {
       "householdId": "hh-047",
-      "sha256": "798617258825a7cc26e2c64317e484eabcbc9c5fe0e5f357c4a776dfc69b1051"
+      "sha256": "2d69ebffddabd849f6f9ee8e17bb1874aa9127666582023c7bb8e7075a7c3510"
     },
     {
       "householdId": "hh-048",
-      "sha256": "7740a726214b6668a6714cf3290c3cbe29c41f1f8728438da28ee792cce7ac1e"
+      "sha256": "0641a1e6363c9d421c2b71124d2ef2394f92b5c907911688f5b66c29ba9ad379"
     },
     {
       "householdId": "hh-049",
-      "sha256": "2e96293fe49977d9eadd154a065ced2429612e8301664d68dc8248bbe8e9ce03"
+      "sha256": "37ba16f6287695bdfd700b528e75aece8b233585f54a740da55e21444bf3f193"
     },
     {
       "householdId": "hh-050",
-      "sha256": "0e1460a7a9e8475ff3515cec1c1bcb1353bacfdb04d71c3ee23afbf6d4bce31e"
+      "sha256": "3431021f13452a366258708718a86edc0ba437a8005128c3cbb767fcc6096729"
     },
     {
       "householdId": "hh-051",
-      "sha256": "3f4135020270d414ec958a234680e6aab9fa3ebb0668eafb4e561520b0545a85"
+      "sha256": "742a87aea060131bd40dcd91935462b9565a07ef7c107b77ea0e4bd3cf38b9cf"
     },
     {
       "householdId": "hh-052",
-      "sha256": "cb7d56b5bd51541b7e4e9219744a64c47885191d655e9b28c08f300bb48d8364"
+      "sha256": "096381d72417efc28be5df002a7edec936f3a0a20542d56c6c8a2f4cf74b7ff1"
     },
     {
       "householdId": "hh-053",
-      "sha256": "91f921ff556b67f7fbc59d8a37d38731e87ef23b9b1e9cb54a6420d5ceb1a933"
+      "sha256": "8f1209f65669b074c9814c82450006193a9a0307a7d675aff57b584eab88424c"
     },
     {
       "householdId": "hh-054",
-      "sha256": "e1dfda6160b20a01ffac07dbb3238aecb32013053bb5d15ae198bf8467d5a8af"
+      "sha256": "2290f2132fc309ab2f07f8e9c18475eb3df1cfdb46c2770fd814b7baf9be9b19"
     },
     {
       "householdId": "hh-055",
-      "sha256": "adbaeef07ad51c19bf57fb34c4eef62fe97159086183d11525110896f013d36c"
+      "sha256": "114d8afb1c70f4311e92f3484323a939bf9636438963cc65fb2706f6164c8f2c"
     },
     {
       "householdId": "hh-056",
-      "sha256": "5c5fc6efe99f807f885b855558e76c17b4a44b7c2ec8d77ae6c1b735929c490c"
+      "sha256": "4a0987565bc5e823c6b8023e64fab558de4fd52d1d688c9ce726cbb13e683c2f"
     },
     {
       "householdId": "hh-057",
-      "sha256": "ec06e49ab9a6f58248894b7012cc5565d1ca6922f39f2ed2b287b6f728454889"
+      "sha256": "8c03aa3cf0bba3c9d8b990c1919425c82b3b23bf0938478435c2c304ec8c3815"
     },
     {
       "householdId": "hh-058",
-      "sha256": "d7226967f270f9d857cf4965595352569e4914f9b6677481e570a480b1ffc545"
+      "sha256": "cfe040b9a9650b9584d7d74b086528051c29c3e9d0e259af378a3c9eb151d911"
     },
     {
       "householdId": "hh-059",
-      "sha256": "fd2562e43cd8c3c506bc83551468007e580671371afd577096896bfb75ba18ae"
+      "sha256": "757001d09092e911200cbf3988fd97c21ac5ecc4a8c18584d510cdf59b67b345"
     },
     {
       "householdId": "hh-060",
-      "sha256": "e9101ca4543c6f0561c4989da0efd9c26d334e537877df86a0b45b659bb0c380"
+      "sha256": "2d5a2589ced278cb380d4e28c16719cd4be296154b35672fa9307a9811ff92ea"
     },
     {
       "householdId": "hh-061",
-      "sha256": "3ca6c8f9df71d7d63fdeb0b1c7a88a800208dba396d45dff968f10fddd7c0c6c"
+      "sha256": "b624e74e62146e8f2e5ab00125c4480effa99cb162176865ed500fca1917abfb"
     },
     {
       "householdId": "hh-062",
-      "sha256": "ff9ee82858d04fef99b3d2b1632c6909fede833301754e08acae16097553110f"
+      "sha256": "bb992667b34b10a9b2d66efa464210f38cda808348d1874f76869377232a1ffc"
     },
     {
       "householdId": "hh-063",
-      "sha256": "b32ae56b313201a21ef49ffcc53a02acaccba43228dc94d4362a5772b9916bdb"
+      "sha256": "4ae8cbfeb9db3ad5fa94fc5b5b1abb035f4815ca172208f0197c7ac90a3a2467"
     },
     {
       "householdId": "hh-064",
-      "sha256": "137f86cf2b56e91f113abc11b905af40ce25de26a899a4fa9de86bf39f882a9f"
+      "sha256": "8f2d3b0307d56f32de374af32326199d72775ca2c2ee657abd949abdf6768b56"
     },
     {
       "householdId": "hh-065",
-      "sha256": "aedfd884643307206976776d817bed36a8e34742f0c6d6fbf02c25bd823e4950"
+      "sha256": "078658bc3e249cd226e0bd2af6630701c3f6444b754e46e2bea959d7a152439f"
     },
     {
       "householdId": "hh-066",
-      "sha256": "d44bbac98da7d02db3fedf3a98ae556182ddf10f07cef17500c48c8bcbacf12a"
+      "sha256": "b2c976476a8281349f4695ac28dca9dc7f85c7fa0bc2a51211b92bad9c9e6f53"
     },
     {
       "householdId": "hh-067",
-      "sha256": "57d74d2c26cd4ccdc665e9db54e3de11d832a046a279108bb4ff05b63a7cfe07"
+      "sha256": "656ce5d07b813e096c31d05dc1e73cb26728d79929e6cfbc06ccaf93d62773c3"
     },
     {
       "householdId": "hh-068",
-      "sha256": "13cba3da5e6d70eb083c4ba6165857161f989c0bdd73ff25317893e3c6214c10"
+      "sha256": "cc32ed277ca5250d45f79caf0454a3232fd89f4f25fe8f084fe6c43f200060a1"
     },
     {
       "householdId": "hh-069",
-      "sha256": "d159069d6a8755ecf6f37ce74d1680269f577f5644eaa7ef2b0ea10e7b5c34b0"
+      "sha256": "e741cfd807fbd7da8e842fdc8ff9b735f8a71f2e75bc8a0f9c28bc0987b1dedb"
     },
     {
       "householdId": "hh-070",
-      "sha256": "b285dc69913a58499a84dcd2d4f7bbfc6e9862df08e6c93ddc9926a1a0748435"
+      "sha256": "d5a5768240b41a9d2536185f0fd2ef7df93084e0b55881fb0a4a95a99de6139f"
     },
     {
       "householdId": "hh-071",
-      "sha256": "14817ee6b85fe3de95d36bc445c4cd356a15e8cd1cfb048af8fc07c44b288d28"
+      "sha256": "5f35b67209b2e53d4b0daafe440e4a4fe5797c6270388065f2f7c756ca7b7456"
     },
     {
       "householdId": "hh-072",
-      "sha256": "62ca9415c222a94ca43efcd518a56505d8e07a2a98833cac698f95711278edca"
+      "sha256": "f601044066201bb659e2dc57485133401432987af0b24c13c3b126a560af2e35"
     },
     {
       "householdId": "hh-073",
-      "sha256": "bf5fd4c5f10c6d31cfdd9a04a7d158e003b4e3c1a89efc3edb83ebf4b4046209"
+      "sha256": "922ccff2470293f08344cc4e40ca327f0e0cf90f559d44a8f30d9f6c63620ac2"
     },
     {
       "householdId": "hh-074",
-      "sha256": "73486e5836a993b4c7ff58964b9b2c2db8b63116c003b4e3a6ea941122db0dc1"
+      "sha256": "39d941bbc2614b77677d5b48b8d2e781f25364090fae0824196f5b320092b9e3"
     },
     {
       "householdId": "hh-075",
-      "sha256": "e8603d587dae136c857a2463d789e43dc129dde9c6ef60f3a67581f77f9f10d7"
+      "sha256": "6dd4574614d946344942d1166b91f1ac4a1eed60931066c04e85b603727d5b0f"
     },
     {
       "householdId": "hh-076",
-      "sha256": "23337a35bc1d5fdd15d56976c22fd7adbd47deb1e35033201bcd2f3255d5ae38"
+      "sha256": "096b5347b85b40d46966bdde54d87cbf2e8f977bac9a7162a1cc53e688033082"
     },
     {
       "householdId": "hh-077",
-      "sha256": "462723e01536298f3d385350379180f077474584c7cbf859b20c9a3faca86931"
+      "sha256": "19f9a3c7d087f9ead89a05dd63d9942559de087643747ed688b0991fc8070fa3"
     },
     {
       "householdId": "hh-078",
-      "sha256": "51186621991c8bde30096bea5d92f158f3cd4e8fe717408a3d790f0fd63ad1cc"
+      "sha256": "29389d6bb772b2679cfef2a56fa881a2ec8a8dc77e1c3191172282d5da436ebf"
     },
     {
       "householdId": "hh-079",
-      "sha256": "a9e92e7468b378ad979ea7a62f020b2a722c563c099c101fb0eaee7845bf0d11"
+      "sha256": "be6d605858d1cfcc96095e0501457aceb9df97f5cc322bc6f170e0969f675346"
     },
     {
       "householdId": "hh-080",
-      "sha256": "1466ccefb4aa87f5495b824ad2c7a0938e795d79df3ce97acd41cf9f0102f56e"
+      "sha256": "024a3dff7b18d049fca56f5cb0115d09a4b198905c7cb0fa4be42f81dd0a4f72"
     },
     {
       "householdId": "hh-081",
-      "sha256": "62a14cd3f809e5677fa39e89fbd0404eec0db34a97d52cb6e3feec5d04e03a3c"
+      "sha256": "b06b7db8244d0758237cd809e6989204921979e9f4c91cba1c16b9a39d45f873"
     },
     {
       "householdId": "hh-082",
-      "sha256": "f252019686c4ab8b449b527beb829f349fc4a541671b74d2787e0074c6f46569"
+      "sha256": "10a51ce794c049d2e0de7bc295eeb6ca5950838723a9d8496efe319ddacfa16b"
     },
     {
       "householdId": "hh-083",
-      "sha256": "0b8e86c2ba7cc65f54047bb75a0214b4317175cf73d616dff99df2b601a6c61b"
+      "sha256": "98265b7ce2a69bef2b24cea0305c0d863eba6304fa39ed96b728ee9c17e5fef4"
     },
     {
       "householdId": "hh-084",
-      "sha256": "6d7c1e3e472aac53962b7c070554df6327861693eda873340cba3a684b3f1860"
+      "sha256": "1e79ad024abddef2a73c57fed9082dc94c951489aa1e28dbd3bcfb1dffbfe6f7"
     },
     {
       "householdId": "hh-085",
-      "sha256": "48f35f9cea80b2cbe2f227bb6cf33bd8de44187f166b5b47c9a8cd13463de6c5"
+      "sha256": "92c00805479188f860c01ba4f0f7937f293fa25c09e6c81677992c352176adce"
     },
     {
       "householdId": "hh-086",
-      "sha256": "58f719ddfe63cb36c882b7b147abaae1f2fb4b8cd4454618fe950d67de67696d"
+      "sha256": "7fe075522dd94a84a5044f47f09d56bd3d69ef285e1e885e28e23535e1233d35"
     },
     {
       "householdId": "hh-087",
-      "sha256": "6fef17ea094ece5affb6d165632366305709476c80c3a871430274f6ef69d984"
+      "sha256": "5fe96ac11a1f4dd7629093be096b804bec4c18c6df9a8c6c25238fdf28ddaf59"
     },
     {
       "householdId": "hh-088",
-      "sha256": "d732597ef1900bdfb1dd439a58b5ef821d3c3abee6e3f604772407e6d1aa2527"
+      "sha256": "21ed64fe52c42ff14009f46dc31fe0ad80d8a072a51fae182995b5d5af6ab6c9"
     },
     {
       "householdId": "hh-089",
-      "sha256": "ba37cb158396994e6fedd3da03f4e2743bcfaadf2801e01277ef72eacbeb8eaa"
+      "sha256": "1dfc6e7f114c787345ad7cbdf583a05a76bc2ec719bcbf949e7d19de5ffad35c"
     },
     {
       "householdId": "hh-090",
-      "sha256": "a1fbcdeffc2b790354f1bd9bc873503ed21fdec9521651ef911a2cc578713c24"
+      "sha256": "49158e68474a46a90df2336c0af10cb830cd2ad99e0fa457bd73ad856c9a77b2"
     },
     {
       "householdId": "hh-091",
-      "sha256": "fed3b438fc2da938e24310f2308773653afb0f1f534eda15fa48f9d5f85bbeab"
+      "sha256": "c74d697c049675ab371ee3f7827566c50ea94a1a08611bbbd533e8d44bbed1e4"
     },
     {
       "householdId": "hh-092",
-      "sha256": "f78c4ea6e4ff1a0ae31762101d0b386b799e0a123fd2dba6ab24a7c900ccfe82"
+      "sha256": "1caa745e7cccbef26b82f423881f3a3961c22fa5c5d3762e622e4b7fb2934df2"
     },
     {
       "householdId": "hh-093",
-      "sha256": "b86cdb2941bc0d2db79425b98243083ae45ed68bf52bfe01a68b22512c9c6b75"
+      "sha256": "85c1c0025dbc6c57bb6b185ea7ac34b33b0b1cc5611d56f31204fc5ce5e2552e"
     },
     {
       "householdId": "hh-094",
-      "sha256": "e3b3852e893d36fcacaaa66a62c981283b1b2902242c1ec4b133d32c39c83abd"
+      "sha256": "d706a9145144349a5e4770bc1d74ee2176528f1480b6b7832d706eda2a568c12"
     },
     {
       "householdId": "hh-095",
-      "sha256": "a52c17a7ef42138638d68cfdae90bc88b0a97fb3d4b1f8232088db9bef0f1104"
+      "sha256": "a70bdf7456cf78e52d08e9e0911cf7604dc0133bb262a3bdccfd7f5ddf726e39"
     },
     {
       "householdId": "hh-096",
-      "sha256": "49818450df40bb5069a116b978a424db45109539e53bdd7a436489d060f8a355"
+      "sha256": "48024ea881c8051b3fb6ba2c5b2f6c197ae5e5dae8bd67cfd37353e086987f33"
     },
     {
       "householdId": "hh-097",
-      "sha256": "6c55e7d527c6b8295fed3a71c4c8e4dc6f57081fd5ee15b8113e2f0f4f4fa96c"
+      "sha256": "245e6e7fddaba700cbddc453d77f0c8d993168e58297d72d15b9a022dd1c45d0"
     },
     {
       "householdId": "hh-098",
-      "sha256": "ac23aba8a6a52f7f8ed00bbaaee8ee67c371b2781bded898ffad4b3e22af7214"
+      "sha256": "54a8e70589fbd8bb0267b93c1d0ace4518cae9daecc2476bb0c1d5558be313b1"
     },
     {
       "householdId": "hh-099",
-      "sha256": "6d42ede5beee1923fede259c2363daa0d9f592ef092f8c576f9dcc724c920da4"
+      "sha256": "fff038c09bb890b92ccb871d8610272597775e789b19d0f6238debe90ee9af16"
     },
     {
       "householdId": "hh-100",
-      "sha256": "893092d774cd4936d35d85046437014a165ea8a5b87b79c7dcd864c63fd0a14f"
+      "sha256": "c2ac8362d8639e616ef226690af0575d9eabb3183360a06ad5e33714c8371989"
     },
     {
       "householdId": "hh-101",
-      "sha256": "1b65516b08fa743141d86e3bed75bcb321377f8d844bef9ba2cf1a8ca2370e43"
+      "sha256": "ce2e29a890378b635d6f8baba2ec8c22d85a12489ab4374e1e36379fb1b72331"
     },
     {
       "householdId": "hh-102",
-      "sha256": "281042e334d24958eb03613b690b9f3ae039c6ce3134266fd587c689b9943d04"
+      "sha256": "28c79fee7a0aaf8a77dc1d1c12ecd827598890092af08e3ed0c8c4f1afb2a428"
     },
     {
       "householdId": "hh-103",
-      "sha256": "d19bfb877c0e020a3bc76d31e6cf14aec482ad259000c90a388de8df2bd9ca22"
+      "sha256": "171e04d005c5f0b526b5a22fa042f6d9ade6d240723b696ef8b3b34de25bf245"
     },
     {
       "householdId": "hh-104",
-      "sha256": "9bd53c5c02e9681afb76962bba1144ecbd224ecc73241086f94bea667db5fdba"
+      "sha256": "eafa412a85cf08f07d9fb39998f42a39801aad3e989b194c338e911029d0e31b"
     },
     {
       "householdId": "hh-105",
-      "sha256": "475b385d3884b23d5c0efc844ac9f298ad9dd5fe1f044970b132435579dcabb8"
+      "sha256": "4fc502961416659f120c3eb458e82e3fc0d833aee43520958c7d47b9a4072e34"
     },
     {
       "householdId": "hh-106",
-      "sha256": "fbbb8908f133b5f5333096e0c8078c5b06e6e1462b33b8605d637f7368e82695"
+      "sha256": "c26021b447f964e2ad3b49f8cb020890fd091a6129c42d86cd3ce7361a5fdd12"
     },
     {
       "householdId": "hh-107",
-      "sha256": "97867e7d2a243b703d33963ac22108fa5f062ea6c73688ddf5510d52ff73819d"
+      "sha256": "a244541c7bc3ba519b8a0b2891e7cb21a95407a20e89f1640b8f3fd7c562fc5d"
     },
     {
       "householdId": "hh-108",
-      "sha256": "0dafc953784906f89d39afb74312b5f4b989ba83c7383d5d4180599cbf3368f3"
+      "sha256": "ee04d4fa4011485d116ce4dbb7770e04be329a5f8134365d86771f132f53c9df"
     },
     {
       "householdId": "hh-109",
-      "sha256": "ca068084ac124cbf2dd1dd305cd2caf76019c7f9ccfa56d1706a066461b762eb"
+      "sha256": "0a0bbaabe8679e6bcb90f5c9061f2a163033edaeeecdd0bc42ab8b260228c7b3"
     },
     {
       "householdId": "hh-110",
-      "sha256": "d5eeb6e0cd0494ddb4362bfcf8de30e7dba494eeb3a3de3cb4558d38cf4d3af4"
+      "sha256": "e58efdd7a55b9a7ed91f74abb46330f910670cca9937af9c7f3c5da32b8f2fb8"
     },
     {
       "householdId": "hh-111",
-      "sha256": "9339138fe9ec70f330c37a6d4e4f956d3f538088b2b352d41d476d532e2b425d"
+      "sha256": "924216e24da0dcb0f36b06c3206bfc85c20fb9dce8705c7637744a81bf5922c0"
     },
     {
       "householdId": "hh-112",
-      "sha256": "a721cc0cfdadda31b854b35ab1c0c0d4fe8febe31c463cd47593a05f01ae2f38"
+      "sha256": "58700055b5c3e5f8c67e17183514a6d3b5547fb2df6bc45794a4bd988557727c"
     },
     {
       "householdId": "hh-113",
-      "sha256": "aca569f79f5327a4b71bd1e69801be20ffa99c17fa4c59771afd503bfbd9c1d8"
+      "sha256": "5a859727d700fc3f5bb77b321f29c9a74e82d76a69de8e6734f37c69c3b443f5"
     },
     {
       "householdId": "hh-114",
-      "sha256": "f97ff9ebc605cfa11f3c4c15fbeeab6c8849c521494465ceb273bc60767ab86a"
+      "sha256": "44c96c56562ba70b1e4174e1749e5a8f48e34d21a31082b5c0149b9f0fed83fa"
     },
     {
       "householdId": "hh-115",
-      "sha256": "ea463f89342f613f83cf3b4c0e22455bb6a10b398974774814ff767604560062"
+      "sha256": "fd269038f849eea9c87d19939d86bd6354abc910f2facc3e6de4f96db4824451"
     },
     {
       "householdId": "hh-116",
-      "sha256": "42bf547305cc2a4ea4d7809d05fdb3936005fc1e394cd0a08e5736e9393a80e2"
+      "sha256": "32757d6632b0928d4175bd796b4cc16b1bdfab51567f36726864465ca4ead240"
     },
     {
       "householdId": "hh-117",
-      "sha256": "8dc912115b2b4de9d92954ba3c16b11939f5d43523e7c782495bfda7eb27616b"
+      "sha256": "307a79b68f0dc26fa94b840b5d4f846476be88ab8585be9552138045d415f192"
     },
     {
       "householdId": "hh-118",
-      "sha256": "ca6ce0bafe9f3088e1edddd1f91e3726ecbfa3aa6308b7a30735aead1f04b17e"
+      "sha256": "bccb4282d4e33cefa60393c94fa68001ea7f747e9f69a9c2984a6c064ccb1cc2"
     },
     {
       "householdId": "hh-119",
-      "sha256": "46fea8fc1662650f9fb793d6747121a998ce99dd4a1c626be81a0d25dedcfa46"
+      "sha256": "ad64878eb37af61d70697d3199f646cfcd80ccac521db659e6210d1f0a21dabd"
     },
     {
       "householdId": "hh-120",
-      "sha256": "d33420db1bf0381a010c0a3ee07e614d3767538e02d1fbe72e8f8c4ba8b531d6"
+      "sha256": "c0f2264cfcbe27c93068a1a6eb4490d6c9298b2301358bcdb6569fee1e5624ea"
     }
   ]
 }

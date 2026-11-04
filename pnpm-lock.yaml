@@ -264,6 +264,12 @@ importers:
 
   eval:
     dependencies:
+      '@mano/mail':
+        specifier: workspace:*
+        version: link:../packages/mail
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       sharp:
         specifier: ^0.34.3
         version: 0.34.5

@@ -17,6 +17,11 @@ export const CODE_FILES = [
   "eval/src/render.mjs",
   "eval/src/tools.mjs",
   "eval/src/ipc.mjs",
+  "eval/src/openrouter.mjs",
+  "eval/src/pool.mjs",
+  "eval/src/mano-adapter.mjs",
+  "eval/src/build-mano.mjs",
+  "eval/src/tracks.mjs",
   "eval/src/baselines.mjs",
   "eval/src/harness.mjs",
   "eval/src/grader.mjs",
@@ -25,10 +30,12 @@ export const CODE_FILES = [
   "eval/src/cli-baselines.mjs",
   "eval/src/cli-freeze.mjs",
   "eval/src/cli-verify.mjs",
+  "eval/src/cli-heldout.mjs",
   "eval/src/pack-public.json",
   "eval/src/systems/reminder.mjs",
   "eval/src/systems/parser.mjs",
   "eval/src/systems/general-agent.mjs",
+  "eval/src/systems/mano.mjs",
 ];
 
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");

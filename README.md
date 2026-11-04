@@ -174,13 +174,14 @@ The held-out test lives in `eval/`, frozen before anyone tunes prompts. Twenty d
 
 Letter wording comes from template packs. The public pack (`eval/src/pack-public.json`) renders the dev split. The held-out split renders only from a private pack of unseen families, loaded from the path in `MANO_EVAL_TEMPLATE_PACK`; the freeze record commits only its SHA-256, and the pack is published after the final run. The loader is tested with an obviously fake pack under `eval/test/fixtures/`.
 
-Two tracks: text (all letters as text) and photo (photographed letters as images). Three baselines run each track in isolated subprocesses: a plain reminder tool, a deterministic string-matching parser (the honest bar), and a general agent (one generic prompt, real model run with a link-checker tool). Every child runs offline under Node's permission model (Node 25 or later); the general agent reaches the model only through a parent-side IPC broker that holds the key and an allowlist. The report prints correct packets, missed and false deadlines, readable-copy requests, model versus enforced safety recognition, evidence requests, failures, and cost and time per scenario, with score splits per template group (public versus private).
+Two tracks: text (all letters as text) and photo (photographed letters as images). Mano and three baselines run each track in isolated subprocesses: a plain reminder tool, a deterministic string-matching parser (the honest bar), and a general agent (one generic prompt, real model run with a link-checker tool). Mano runs its real letter reader from `packages/mail`, which reads images only, so on the text track each letter's exact text is drawn on a clean page. Every child runs offline under Node's permission model (Node 25 or later); model calls go only through a parent-side IPC broker that holds the key and an allowlist. The report prints correct packets, missed and false deadlines, readable-copy requests, model versus enforced safety recognition, evidence requests, failures, and cost and time per scenario, with score splits per template group (public versus private).
 
 ```sh
 pnpm --filter ./eval run check      # tests, no keys needed
 pnpm --filter ./eval run verify     # verify freeze (held-out check needs seed plus pack)
 pnpm eval:baselines                 # deterministic baselines; agent needs a key
-ws keys run -- pnpm eval:baselines  # all baselines live, both tracks
+ws keys run -- pnpm eval:baselines  # all systems live on the dev split, both tracks
+pnpm --filter ./eval run heldout    # all systems on the held-out split; prints aggregates only
 ```
 
 ## Prior work
