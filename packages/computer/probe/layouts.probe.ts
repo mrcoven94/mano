@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { describe, it } from "vitest";
-import type { ComputerAction } from "../src/actions";
+import { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "../src/form-fill";
 import { runLoop, type LoopOutcome } from "../src/loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload } from "../src/model";
 import { OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
@@ -13,7 +13,10 @@ import { PlaywrightComputer } from "../src/playwright";
  * Does a fill work on a layout it has never seen? Runs one fill on each fixed
  * layout of the sandbox portal and on fresh seeded ones with a synthetic person,
  * reads back what the portal saved, and prints a row per layout. Misses stay in
- * the table. Filling saves a draft and files nothing.
+ * the table. Filling saves a draft and files nothing. The task and instructions
+ * are the agent's own (src/form-fill.ts), so one run gives both numbers: what it
+ * did at this probe's looser limits, and what it did at the agent's. The agent
+ * runs on the hosted desktop; this runs in local Chromium.
  *
  * Run it against a sandbox portal you started, with its draft token set:
  *
@@ -35,9 +38,6 @@ const FIXED_LAYOUTS = ["larkmoor", "quillhaven", "tern-valley", "northbrine", "b
 const MAX_SCRAMBLES = 5;
 const MAX_STEPS = 20;
 const LAYOUT_DEADLINE_MS = 180_000;
-// What the agent's fill allows today (apps/agent/agent/lib/computer-fill.ts).
-const AGENT_STEPS = 8;
-const AGENT_MS = 60_000;
 const META_MODEL_ID = "muse-spark-1.3";
 const META_BASE_URL = "https://api.meta.ai/v1";
 
@@ -53,15 +53,8 @@ const PERSON: Array<{ name: string; label: string; value: string; typed?: string
 ];
 const typedOf = (field: (typeof PERSON)[number]) => field.typed ?? field.value;
 
-// No layout's words are in here: the person's values, and what the end looks like.
-const TASK = [
-  "Fill out the form open in this browser with exactly these values. Do not submit anything else.",
-  ...PERSON.map((f) => `${f.label}: ${typedOf(f)}`),
-  "This form is new to you. It may word these fields differently, ask them in another order, spread them over several steps, or keep them in sections you have to open. Match each value to the field that means the same thing.",
-  "Type each value exactly as written. For a date field, click it, press Ctrl+A, then type the date.",
-  "Enter every value, then press the button that moves on. When a page asks you to attach documents, stop and reply with exactly: ACCEPTED",
-  "If the form shows an error instead, stop and reply with REJECTED: and the error text.",
-].join("\n");
+// The agent's own task and instructions. No layout's words are in them.
+const TASK = fillTask(PERSON.map((f) => ({ label: f.label, value: typedOf(f) })));
 
 function modelFromEnv(): { label: string; id: string; client?: ModelClient } {
   const wanted = process.env["MEASURE_MODEL"] ?? "standin";
@@ -155,6 +148,8 @@ interface Row {
   missed: string[];
   seconds: number;
   steps: number;
+  /** All fields correct within what the agent's fill allows, on this same task. */
+  withinAgentLimits: boolean;
 }
 
 async function readDraft(id: string, token: string): Promise<Record<string, unknown> | null> {
@@ -172,22 +167,9 @@ function outcomeWords(outcome: LoopOutcome): string {
 
 class OutOfCredit extends Error {}
 
-// A screenshot taken while a click's navigation is starting can hang until
-// Playwright's 30 second timeout, on any layout. Local Chromium only, so it
-// would measure the stand-in browser and not the fill. Each step's wall time
-// includes this wait.
-const SETTLE_MS = 300;
-
-class SettledComputer extends PlaywrightComputer {
-  override async act(actions: ComputerAction[]): Promise<void> {
-    await super.act(actions);
-    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-  }
-}
-
 async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, token: string, out: string | undefined): Promise<Row> {
   const draft = randomBytes(32).toString("hex");
-  const computer = new SettledComputer({ allowedOrigins: [new URL(PORTAL).origin] });
+  const computer = new PlaywrightComputer({ allowedOrigins: [new URL(PORTAL).origin] });
   // Only the stand-in looks inside the page.
   const client = model.client ?? new StandInModel(() => (computer as unknown as { launched: { page: Page } }).launched.page);
   const started = performance.now();
@@ -197,7 +179,7 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await computer.goto(`${PORTAL}${layout}/apply?draft=${draft}`);
-    const run = runLoop(computer, client, TASK, { model: model.id, maxSteps: MAX_STEPS, onTurn: (turn) => (steps = turn.step) });
+    const run = runLoop(computer, client, TASK, { model: model.id, maxSteps: MAX_STEPS, instructions: FILL_INSTRUCTIONS, onTurn: (turn) => (steps = turn.step) });
     run.catch(() => undefined);
     const deadline = new Promise<"deadline">((resolve) => (timer = setTimeout(() => resolve("deadline"), LAYOUT_DEADLINE_MS)));
     const result = await Promise.race([run, deadline]);
@@ -217,12 +199,13 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
   if (outOfCredit) throw new OutOfCredit();
   const saved = await readDraft(draft, token);
   const missed = PERSON.filter((f) => saved?.[f.name] !== f.value).map((f) => f.name);
-  return { layout, model: model.label, outcome, correct: PERSON.length - missed.length, missed, seconds, steps };
+  const withinAgentLimits = missed.length === 0 && steps <= FILL_MAX_STEPS && seconds * 1000 <= FILL_DEADLINE_MS;
+  return { layout, model: model.label, outcome, correct: PERSON.length - missed.length, missed, seconds, steps, withinAgentLimits };
 }
 
 function rowLine(r: Row): string {
   const fields = `${r.correct}/${PERSON.length}`.padEnd(6);
-  return `${r.layout.padEnd(30)} ${fields} ${r.seconds.toFixed(1).padStart(7)}s ${String(r.steps).padStart(5)}  ${r.model.padEnd(20)} ${r.outcome.padEnd(12)} ${r.missed.join(",")}`;
+  return `${r.layout.padEnd(30)} ${fields} ${r.seconds.toFixed(1).padStart(7)}s ${String(r.steps).padStart(5)}  ${r.model.padEnd(20)} ${(r.withinAgentLimits ? "yes" : "no").padEnd(6)} ${r.outcome.padEnd(12)} ${r.missed.join(",")}`;
 }
 
 describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
@@ -245,7 +228,7 @@ describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
       if (out) mkdirSync(out, { recursive: true });
 
       if (!model.client) console.log("STAND-IN RUN: it reads the page's HTML instead of the screen. These rows prove the plumbing and measure no model.");
-      console.log(`${"layout".padEnd(30)} ${"fields".padEnd(6)} ${"wall".padStart(8)} ${"steps".padStart(5)}  ${"model".padEnd(20)} ${"outcome".padEnd(12)} missed`);
+      console.log(`${"layout".padEnd(30)} ${"fields".padEnd(6)} ${"wall".padStart(8)} ${"steps".padStart(5)}  ${"model".padEnd(20)} ${"agent".padEnd(6)} ${"outcome".padEnd(12)} missed`);
       const rows: Row[] = [];
       let stopped = false;
       for (const layout of layouts) {
@@ -263,11 +246,10 @@ describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
 
       const correct = rows.reduce((sum, r) => sum + r.correct, 0);
       const whole = rows.filter((r) => r.correct === PERSON.length);
-      const inBudget = whole.filter((r) => r.steps <= AGENT_STEPS && r.seconds * 1000 <= AGENT_MS);
       const seconds = rows.map((r) => r.seconds).sort((a, b) => a - b);
       const median = seconds.length > 0 ? `${seconds[Math.floor(seconds.length / 2)]!.toFixed(1)}s` : "none";
-      console.log(`Layouts run: ${rows.length} of ${layouts.length}${stopped ? " (stopped early)" : ""}. Fully correct: ${whole.length}. Fields correct: ${correct} of ${rows.length * PERSON.length}. Median wall: ${median}.`);
-      console.log(`Fully correct within the agent's current limits of ${AGENT_STEPS} steps and ${AGENT_MS / 1000}s: ${inBudget.length}. This run allowed ${MAX_STEPS} steps and ${LAYOUT_DEADLINE_MS / 1000}s.`);
+      console.log(`Layouts run: ${rows.length} of ${layouts.length}${stopped ? " (stopped early)" : ""}. Fields correct: ${correct} of ${rows.length * PERSON.length}. Median wall: ${median}.`);
+      console.log(`Fully correct at the agent's limits (${FILL_MAX_STEPS} steps, ${FILL_DEADLINE_MS / 1000}s): ${rows.filter((r) => r.withinAgentLimits).length}. Fully correct at this probe's limits (${MAX_STEPS} steps, ${LAYOUT_DEADLINE_MS / 1000}s): ${whole.length}.`);
       if (seeds.length > 0) console.log(`Seeds: ${seeds.join(",")}`);
       if (out) writeFileSync(join(out, "results.json"), JSON.stringify({ portal: PORTAL, seeds, rows }, null, 2));
     },

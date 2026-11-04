@@ -5,7 +5,7 @@ import { FakeModelClient, type Computer, type ComputerAction } from "@mano/compu
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
-import { FORMS } from "../agent/lib/forms.js";
+import { FORMS, layoutOf, resolveForm } from "../agent/lib/forms.js";
 import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -477,6 +477,45 @@ describe("fill_form", () => {
     expect(out.status).toBe("unavailable");
     expect(out.note).toMatch(/start_form_draft/);
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it.each(["/scramble/judge-1", "/v/larkmoor"])("fills the test layout at %s by its address, reads the draft as usual and files nothing", async (layout) => {
+    engine.profile = profile();
+    const out = await run("turn_layout01", { form: `${PORTAL}${layout}/apply` });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(computer.visited[0]).toMatch(new RegExp(`^${PORTAL}${layout}/apply\\?draft=[0-9a-f]{32,128}$`));
+    expect(portal.reads).toHaveLength(1);
+    expect(engine.approvals()[0].status).toBe("pending");
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "https://real-benefits.example.gov/scramble/judge-1/apply",
+    "https://real-benefits.example.gov/v/larkmoor/apply",
+    "http://portal.test.example.gov/scramble/judge-1/apply",
+    "http://portal.test:8080/scramble/judge-1/apply",
+    "https://portal.test/scramble/judge-1/apply",
+  ])("refuses a layout's path on another origin: %s", async (form) => {
+    engine.profile = profile();
+    const out = await run("turn_layout02", { form });
+    expect(out.status).toBe("unknown_form");
+    expect(computer.visited).toEqual([]);
+  });
+
+  it.each(["/scramble/judge-1/caseworker", "/scramble/bad_seed!/apply", "/v/Larkmoor/apply", "/v/larkmoor/../../caseworker", "/v/larkmoor/submissions", "/scramble/apply"])(
+    "refuses what is not a layout of the form: %s",
+    (path) => {
+      expect(resolveForm(`${PORTAL}${path}`, PORTAL)).toBeNull();
+    },
+  );
+
+  it("takes only the layout from an address, nothing else it carries", () => {
+    const ref = `http://someone:secret@portal.test/scramble/judge-1/apply?draft=${"a".repeat(64)}#x`;
+    expect(resolveForm(ref, PORTAL)?.id).toBe("food-renewal");
+    expect(layoutOf(ref, PORTAL)).toBe("/scramble/judge-1");
+    expect(layoutOf("food-renewal", PORTAL)).toBe("");
+    expect(layoutOf(`${PORTAL}/apply`, PORTAL)).toBe("");
+    expect(layoutOf("https://real-benefits.example.gov/scramble/judge-1/apply", PORTAL)).toBe("");
   });
 
   it("refuses any address that is not the sandbox portal", async () => {
