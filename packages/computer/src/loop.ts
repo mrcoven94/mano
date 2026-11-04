@@ -42,6 +42,21 @@ function dataUrl(png: Uint8Array): string {
   return `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
 }
 
+// Names a key only when it is a known key: a model can put anything in a
+// keypress, and a person's words must not reach the log.
+const KNOWN_KEY = /^(?:[a-z0-9]|f\d{1,2}|ctrl|control|alt|shift|meta|cmd|command|super|win|home|end|pageup|pagedown|page_up|page_down|space|insert|up|down|left|right|arrowup|arrowdown|arrowleft|arrowright|tab|enter|return|escape|esc|backspace|delete)$/i;
+
+// What a refused batch held, and each earlier turn's action types. Never a
+// typed value.
+function logRefused(actions: ComputerAction[], turns: string[]): void {
+  const refused = actions.map((a) => {
+    if (a.type === "keypress") return { type: a.type, keys: (Array.isArray(a.keys) ? a.keys : []).map((k) => (KNOWN_KEY.test(String(k)) ? k : "other")) };
+    if (a.type === "click") return { type: a.type, button: a.button, x: a.x, y: a.y };
+    return { type: a.type };
+  });
+  console.warn(JSON.stringify({ type: "mano_computer_refused", turns, refused }));
+}
+
 /** Stateless replay holds 29 call pairs; past that the server refuses. */
 const MAX_REPLAY_PAIRS = 29;
 
@@ -66,6 +81,7 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
     },
   ];
 
+  const turns: string[] = [];
   for (let step = 0; step < maxSteps; step++) {
     const pairs = history.filter(isComputerCall).length;
     if (pairs >= MAX_REPLAY_PAIRS) return { status: "step_budget", steps: step };
@@ -83,7 +99,11 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
     const call: ComputerCall = calls[0]!;
     if (call.pending_safety_checks.length > 0) return { status: "safety_check", checks: call.pending_safety_checks, steps: step + 1 };
     const actions = allowedActions(call.actions);
-    if (!actions) return { status: "refused", steps: step + 1 };
+    if (!actions) {
+      logRefused(call.actions, turns);
+      return { status: "refused", steps: step + 1 };
+    }
+    turns.push(actions.map((a) => a.type).join(","));
     options.onTurn?.({ step: step + 1, call: actions });
     await computer.act(actions);
     const output = {

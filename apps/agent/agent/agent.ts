@@ -31,7 +31,8 @@
 // Run: pnpm --filter @mano/agent dev, with Engine running (locally,
 // pnpm --filter @mano/engine dev). Without a key for the chosen model
 // route (META_MODEL_API_KEY, or OPENROUTER_API_KEY when
-// MANO_MODEL_PROVIDER=openrouter) a stand-in answers; without ENGINE_URL
+// MANO_MODEL_PROVIDER=openrouter, or MODAL_PROXY_TOKEN and MODAL_ENDPOINT_URL
+// when MANO_MODEL_PROVIDER=modal) a stand-in answers; without ENGINE_URL
 // and MANO_ENGINE_AGENT_TOKEN the turn route answers 503. Test: pnpm
 // --filter @mano/agent check (tsc plus vitest, no keys, against Engine's
 // own auth, gateway and agent-state code) and pnpm --filter @mano/agent
