@@ -114,13 +114,20 @@ const DATE = `(?<date>${DATE_PATTERN})`;
 // weekday count land on the wrong date.
 const COUNT = String.raw`within\s+(?<days>\d{1,3})\s+(?:calendar\s+)?days?\s+(?:of|from|after)`;
 
+const FROM_NOTICE = String.raw`${COUNT}\s+the\s+(?:date\s+of\s+this\s+(?:notice|letter)|notice\s+date(?:\s+printed\s+above)?)`;
+
 const FORMS: { form: DeadlineForm; re: RegExp }[] = [
   { form: "by", tail: String.raw`by\s+${DATE}` },
   { form: "on-or-before", tail: String.raw`on\s+or\s+before\s+${DATE}` },
   { form: "no-later-than", tail: String.raw`no\s+later\s+than\s+${DATE}` },
   { form: "within-days-of-date", tail: String.raw`${COUNT}\s+${DATE}` },
-  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+date\s+of\s+this\s+(?:notice|letter)` },
+  { form: "within-days-of-notice", tail: FROM_NOTICE },
 ].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^${LEAD_IN}(?<duty>${DUTY})\\s+${tail}$`, "i") }));
+// Reaching the office is read only for a count, which never publishes.
+FORMS.push({
+  form: "within-days-of-notice",
+  re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+must\s+reach\s+the\s+review\s+office)\s+${FROM_NOTICE}$`, "i"),
+});
 FORMS.push({
   form: "due",
   re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),

@@ -284,8 +284,8 @@ AN-3. This determination applies only to the program and household shown.`,
     id: "denial-relative-appeal",
     notice: "November 3, 2026",
     marks: ["Your request must reach the review office within 30 calendar days after the notice date printed above."],
-    result: "asked no date",
-    date: null,
+    result: "asked right date",
+    date: "2026-12-03",
     text: `State of Kelvessa Family Assistance Review Office
 620 Nerrivet Square
 Vellquora, Kelvessa 00047
@@ -522,7 +522,7 @@ describe("the twelve letters", () => {
   it("adds up to the counts in the pull request", () => {
     const counts: Record<string, number> = {};
     for (const { result } of LETTERS) counts[result] = (counts[result] ?? 0) + 1;
-    expect(counts).toEqual({ "held right": 1, "asked right date": 4, "asked no date": 6, "scam warning": 1 });
+    expect(counts).toEqual({ "held right": 1, "asked right date": 5, "asked no date": 5, "scam warning": 1 });
   });
 });
 

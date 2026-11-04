@@ -170,6 +170,36 @@ describe("gateSentence reads the wording a plain letter uses", () => {
     });
   });
 
+  it("counts from the notice date printed above, and still asks", () => {
+    const sentence = "Your request must reach the review office within 30 calendar days after the notice date printed above.";
+    expect(gateSentence(sentence, "2026-11-03")).toEqual({
+      kind: "ask",
+      reason: "counted",
+      count: { days: 30, fromIso: "2026-11-03", resultIso: "2026-12-03" },
+    });
+    expect(gateSentence(sentence, null)).toEqual({ kind: "ask", reason: "no-notice-date" });
+    expect(gateSentence("Respond within 30 days after the notice date printed above.", "2026-11-03")).toEqual({
+      kind: "ask",
+      reason: "counted",
+      count: { days: 30, fromIso: "2026-11-03", resultIso: "2026-12-03" },
+    });
+  });
+
+  // Reaching the office is read only for a count, which never publishes.
+  it.each([
+    "Your request must reach the review office by November 18, 2026.",
+    "Your request must reach the review office no later than November 18, 2026.",
+    "Your request must reach the review office on or before November 18, 2026.",
+    "Your request must reach the review office within 10 business days after the notice date printed above.",
+    "Your hearing must reach the review office within 30 days after the notice date printed above.",
+    "Your benefits must reach the review office within 30 days after the notice date printed above.",
+    "This office must reach you within 30 days after the notice date printed above.",
+  ])("never counts or publishes: %s", (sentence) => {
+    const verdict = gateSentence(sentence, "2026-11-03");
+    expect(verdict).toMatchObject({ kind: "ask" });
+    expect(verdict).not.toHaveProperty("count");
+  });
+
   // A bullet takes its meaning from a heading this gate cannot see, and
   // each near-miss keeps the wording and breaks what makes it a duty.
   it.each([
@@ -187,7 +217,6 @@ describe("gateSentence reads the wording a plain letter uses", () => {
     "Send the requested proof so it reaches the office by November 18, 2026.",
     "Your packet must reach this office by November 18, 2026.",
     "Your renewal must reach the review office by November 18, 2026.",
-    "Your request must reach the review office within 30 calendar days after the notice date printed above.",
     "Your renewal is due for review on November 18, 2026.",
     "Your case is due for renewal by November 18, 2026.",
   ])("asks: %s", (sentence) => {
