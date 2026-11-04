@@ -30,6 +30,28 @@ function modelFailures(outputs) {
   return outputs.reduce((n, o) => n + (o.failures ?? []).filter((f) => MODEL_FAILURES.has(f.reason)).length, 0);
 }
 
+// How Mano's answers treated each letter's expected date, for the report only.
+// Nothing here reaches the grader. "Named right, not scored" means the answer
+// showed the right date but the frozen mapping gave no credit, for example
+// because it showed a second date too, so it does not change the score.
+export function dateAnswerCounts(outputs, answers) {
+  const counts = { letters: 0, held: 0, askedAndScored: 0, namedRightNotScored: 0, namedWrong: 0, noDate: 0 };
+  for (const o of outputs) {
+    for (const { letterId, dueDate } of answers[o.householdId]?.groundTruth?.deadlines ?? []) {
+      const entry = o.letterDates?.find((d) => d.letterId === letterId);
+      const held = entry?.held ?? [];
+      const named = entry?.named ?? [];
+      counts.letters++;
+      if (held.includes(dueDate)) counts.held++;
+      else if (o.reminders?.some((r) => r.letterId === letterId && r.dueDate === dueDate)) counts.askedAndScored++;
+      else if (named.includes(dueDate)) counts.namedRightNotScored++;
+      else if (held.length > 0 || named.length > 0) counts.namedWrong++;
+      else counts.noDate++;
+    }
+  }
+  return counts;
+}
+
 async function runOne(sys, inputs) {
   const built = sys.build ? await sys.build() : null;
   try {
@@ -64,6 +86,7 @@ export async function runTrack(trackName, inputs, answers, { label, perScenario 
       const mode = sys.live ? label : "deterministic";
       console.log(formatReport(sys.name, graded, { costUsd: graded.costUsd, elapsedMs: wallMs, mode }));
       console.log(`household status: ${JSON.stringify(statusCounts(outputs))}`);
+      if (outputs.some((o) => o.letterDates)) console.log(`date answers, not part of the score: ${JSON.stringify(dateAnswerCounts(outputs, answers))}`);
       if (sys.live) console.log(`model call failures: ${modelFailures(outputs)}`);
       console.log(`time per household: ${(graded.elapsedMs / Math.max(1, graded.households) / 1000).toFixed(2)}s`);
       results[sys.name] = graded;

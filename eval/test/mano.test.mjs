@@ -7,6 +7,7 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { dateAnswerCounts } from "../src/tracks.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
@@ -429,6 +430,26 @@ setTimeout(() => {}, 5000);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("date-answer counts sort each expected date and leave the score alone", () => {
+  const want = (letterId, dueDate) => ({ letterId, dueDate, program: "x" });
+  const answers = { "hh-1": { householdId: "hh-1", hasDocuments: [], letters: { a: { requires: [] }, b: { requires: [] }, c: { requires: [] }, d: { requires: [] }, e: { requires: [] }, f: { requires: [] } }, groundTruth: { deadlines: ["a", "b", "c", "d", "e", "f"].map((l) => want(l, "2026-11-20")), correctPacket: [], packetGroups: [], mustRefuse: [], mustRequest: [], decoyLetterIds: [] } } };
+  const output = {
+    householdId: "hh-1", status: "ok", packet: [], refused: [], enforced: [], requested: [], failures: [], toolCalls: [],
+    reminders: [{ letterId: "a", dueDate: "2026-11-20" }, { letterId: "b", dueDate: "2026-11-20" }],
+    letterDates: [
+      { letterId: "a", held: ["2026-11-20"], named: ["2026-11-20"] },
+      { letterId: "b", held: [], named: ["2026-11-20"] },
+      { letterId: "c", held: [], named: ["2026-11-11", "2026-11-20"] },
+      { letterId: "d", held: [], named: ["2026-12-25"] },
+      { letterId: "e", held: [], named: [] },
+    ],
+  };
+  assert.deepEqual(dateAnswerCounts([output], answers), { letters: 6, held: 1, askedAndScored: 1, namedRightNotScored: 1, namedWrong: 1, noDate: 2 });
+  const { letterDates: _dropped, ...without } = output;
+  const scored = (o) => { const { rows: _r, elapsedMs: _e, ...rest } = gradeAll([o], answers); return rest; };
+  assert.deepEqual(scored(output), scored(without));
 });
 
 test("the broker refuses Modal calls under a zero ceiling", async () => {

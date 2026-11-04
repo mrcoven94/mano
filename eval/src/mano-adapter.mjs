@@ -159,6 +159,14 @@ function spokenDate(iso) {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" });
 }
 
+// Every date the answer shows, as the answer writes them. For the report's
+// date-answer counts only: scoring reads reminders and never this.
+const NAMED_DATE = /\b(January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2}), (\d{4})\b/g;
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function namedDates(text) {
+  return [...text.matchAll(NAMED_DATE)].map(([, month, day, year]) => `${year}-${String(MONTHS.indexOf(month) + 1).padStart(2, "0")}-${day.padStart(2, "0")}`);
+}
+
 function linkUrl(value) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
@@ -190,6 +198,7 @@ function readFailed(reading) {
 export async function letterResult(letter, reading, { client, fetchImpl, hasDocuments }) {
   const out = { reminder: null, failure: null, namesFailed: false, packet: [], requested: [], refused: [], enforced: [] };
   const answer = answerReading(reading);
+  out.dates = { held: answer.deadlines.map((d) => d.dueDate), named: namedDates(answer.text) };
   const scam = reading.warnings.some((w) => w.kind === "scam_suspect");
   const instruction = reading.warnings.some((w) => w.kind === "instruction_in_content");
   const due = answer.deadlines[0]?.dueDate ?? dateShownInQuestion(reading, answer.text);
@@ -249,6 +258,7 @@ export async function manoHousehold(input, { route, chatUrl, fetchImpl, sharp, r
     failures: [],
     toolCalls: [],
     packetIncomplete: false,
+    letterDates: [],
   };
   const packet = new Set();
   const requested = new Set();
@@ -264,6 +274,7 @@ export async function manoHousehold(input, { route, chatUrl, fetchImpl, sharp, r
       }
       const reading = await read(files, { personId: `eval-${input.householdId}`, synthetic: true, model: client });
       const r = await letterResult(letter, reading, { client, fetchImpl, hasDocuments: input.hasDocuments });
+      output.letterDates.push({ letterId: letter.letterId, ...r.dates });
       if (r.reminder) output.reminders.push(r.reminder);
       if (r.failure) output.failures.push(r.failure);
       if (r.namesFailed) output.failures.push({ letterId: letter.letterId, reason: "names_failed" });
