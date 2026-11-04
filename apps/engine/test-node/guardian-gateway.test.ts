@@ -15,6 +15,7 @@ import {
   type Checker,
   type GatewayOptions,
 } from "../src/gateway/index.js";
+import type { CheckResult } from "../src/gateway/checker.js";
 import { DefiniteFailureError } from "../src/gateway/types.js";
 
 // Guardian on the gateway's live path, against a fake Guardian over real
@@ -74,6 +75,14 @@ beforeEach(() => {
   checks = [];
   warms = 0;
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function openStorage() {
   const db = new DatabaseSync(":memory:");
@@ -370,23 +379,26 @@ describe("a yes that finds the safety check unavailable", () => {
   });
 
   it("a late unavailable check never says retryable after another yes filed it", async () => {
+    // Call 1 is the draft and call 2 is the late yes, which stays out until
+    // the other yes has filed.
+    const lateCheckStarted = deferred<void>();
+    const lateCheck = deferred<CheckResult>();
     let calls = 0;
-    const checker = {
-      async check() {
+    const checker: Checker = {
+      check() {
         calls += 1;
-        if (calls === 2) {
-          await new Promise((r) => setTimeout(r, 50));
-          return { verdict: "block", problems: ["The safety check is taking longer than usual."], unavailable: true };
-        }
-        return { verdict: "pass", problems: [] };
+        if (calls !== 2) return Promise.resolve({ verdict: "pass", problems: [] });
+        lateCheckStarted.resolve();
+        return lateCheck.promise;
       },
-    } as unknown as GatewayOptions["checker"];
+    };
     const { gateway, executor, approvalId } = await drafted({ checker });
-    const [late, first] = await Promise.all([
-      gateway.approveAndExecute(approvalId, "maria"),
-      gateway.approveAndExecute(approvalId, "maria"),
-    ]);
+    const lateYes = gateway.approveAndExecute(approvalId, "maria");
+    await lateCheckStarted.promise;
+    const first = await gateway.approveAndExecute(approvalId, "maria");
     expect(first.status).toBe("completed");
+    lateCheck.resolve({ verdict: "block", problems: ["The safety check is taking longer than usual."], unavailable: true });
+    const late = await lateYes;
     // The other yes filed it, so the late one answers that receipt (LAP-747).
     expect(late).toMatchObject({ status: "completed", receipt: { externalId: first.receipt!.externalId } });
     expect(late.retryable).toBeUndefined();
