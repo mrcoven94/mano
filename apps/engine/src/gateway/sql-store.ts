@@ -9,11 +9,14 @@ import type { LatestProposal, ProposalOrder } from "./types.js";
 // paired writes with no await between them cannot interleave inside one
 // agent, which is what makes consume atomic.
 
-function addColumn(sql: SqlStorage, table: string, column: string, ddl: string): void {
+// True when the column was added now, false when it already existed.
+function addColumn(sql: SqlStorage, table: string, column: string, ddl: string): boolean {
   try {
     sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    return true;
   } catch {
     // The column already exists: additive migrations are idempotent.
+    return false;
   }
 }
 
@@ -38,6 +41,12 @@ export function ensureGatewayTables(sql: SqlStorage): void {
   // synchronous step that creates the approval.
   addColumn(sql, "approvals", "proposal_received_at", "TEXT");
   addColumn(sql, "approvals", "proposal_turn_id", "TEXT");
+  // The frozen request's deadline, so the reminder sweep reads one short
+  // column instead of parsing every pending request. Rows written before
+  // the column existed are filled once, when it is added.
+  if (addColumn(sql, "approvals", "deadline_at", "TEXT")) {
+    sql.exec("UPDATE approvals SET deadline_at = json_extract(request_json, '$.deadlineAt') WHERE json_valid(request_json)");
+  }
   sql.exec(`CREATE TABLE IF NOT EXISTS latest_proposal(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), generation INTEGER NOT NULL, approval_id TEXT NOT NULL,
     received_at TEXT NOT NULL, turn_id TEXT NOT NULL)`);
@@ -71,7 +80,7 @@ const PROPOSAL_CURRENT_SQL =
   "(approvals.proposal_turn_id IS NULL OR approvals.id = " +
   `(SELECT approval_id FROM latest_proposal WHERE slot = 1 AND generation = ${CURRENT_GENERATION}))`;
 
-const APPROVAL_COLUMNS =
+export const APPROVAL_COLUMNS =
   "id, action_type, recipient, purpose, document_hash, document_id, idempotency_key," +
   " status, approved_by, created_at, remind_at, expires_at, escalated, person_id," +
   " request_json, request_hash, problems_json";
@@ -79,6 +88,15 @@ const APPROVAL_COLUMNS =
 const ATTEMPT_COLUMNS =
   "idempotency_key, status, updated_at, request_hash, action_type, recipient, person_id, provider";
 const ATTEMPT_READ = `${ATTEMPT_COLUMNS}, version, lookup_failing_since, next_lookup_at`;
+
+function deadlineAtOf(requestJson: string): string | null {
+  try {
+    const deadlineAt = (JSON.parse(requestJson) as { deadlineAt?: unknown }).deadlineAt;
+    return typeof deadlineAt === "string" ? deadlineAt : null;
+  } catch {
+    return null;
+  }
+}
 
 export function approvalFromRow(r: Record<string, unknown>): Approval {
   return {
@@ -195,11 +213,11 @@ export class SqlApprovalStore implements ApprovalStore {
   putApproval(a: Approval): void {
     this.sql.exec(
       // A rewrite keeps the generation the row was recorded under.
-      `INSERT OR REPLACE INTO approvals(${APPROVAL_COLUMNS}, generation) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +
+      `INSERT OR REPLACE INTO approvals(${APPROVAL_COLUMNS}, deadline_at, generation) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +
         `COALESCE((SELECT generation FROM approvals WHERE id = ?), ${CURRENT_GENERATION}))`,
       a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
       a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), a.id,
+      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), deadlineAtOf(a.requestJson), a.id,
     );
   }
 
@@ -210,12 +228,12 @@ export class SqlApprovalStore implements ApprovalStore {
 
   createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null {
     const inserted = this.sql.exec(
-      `INSERT INTO approvals(${APPROVAL_COLUMNS}, generation) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
+      `INSERT INTO approvals(${APPROVAL_COLUMNS}, deadline_at, generation) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
         " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'retired', 'rejected', 'revoked'))" +
         ` AND ${CURRENT_GENERATION} = ?`,
       a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
       a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), generation,
+      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), deadlineAtOf(a.requestJson), generation,
       a.idempotencyKey, generation,
     ).rowsWritten;
     if (inserted > 0) {

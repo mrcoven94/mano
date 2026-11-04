@@ -4,6 +4,7 @@ import type { EventAttachment } from "@mano/channels";
 import { parseModelCosts } from "./global.js";
 import type { ModelCosts } from "./runner.js";
 import {
+  DECORATION_TAGS,
   defaultMeta,
   type ApprovalRow,
   type AttachmentChoice,
@@ -13,6 +14,7 @@ import {
   type OutboundRow,
   type PendingInbound,
   type PersistedTurn,
+  type TurnHistoryRow,
 } from "./store.js";
 
 const SCHEMA = `
@@ -212,6 +214,49 @@ function turnFromRow(row: TurnRow): PersistedTurn {
   };
 }
 
+const TURN_COLUMNS =
+  "turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_by_model, cost_settled, attempts, state, created_at_ms, updated_at_ms";
+
+const OUTBOUND_COLUMNS =
+  "idem_key, turn, part, tag, bubble_text, attempts, state, code, chat_id, message_id, reply_to, created_at_ms, updated_at_ms";
+
+// openSend (store.ts) as SQL.
+const OPEN_SEND_WHERE = `tag NOT IN (${[...DECORATION_TAGS].map((t) => `'${t}'`).join(", ")}) AND state IN ('uncertain', 'sending')`;
+
+type OutboundSqlRow = {
+  idem_key: string;
+  turn: number;
+  part: number;
+  tag: string;
+  bubble_text: string;
+  attempts: number;
+  state: OutboundRow["state"];
+  code: string | null;
+  chat_id: string | null;
+  message_id: string | null;
+  reply_to: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+};
+
+function outboundFromRow(r: OutboundSqlRow): OutboundRow {
+  return {
+    key: r.idem_key,
+    turn: r.turn,
+    part: r.part,
+    tag: r.tag,
+    text: r.bubble_text,
+    attempts: r.attempts,
+    state: r.state,
+    code: r.code,
+    chatId: r.chat_id,
+    messageId: r.message_id,
+    replyTo: r.reply_to ?? null,
+    createdAtMs: r.created_at_ms,
+    updatedAtMs: r.updated_at_ms,
+  };
+}
+
 // Each meta field's column, for writes of only the fields a step owns.
 const META_COLUMNS: Record<keyof ConversationMeta, string> = {
   turn: "turn",
@@ -389,7 +434,8 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   pending(): PendingInbound[] {
-    const rows = this.sql.exec("SELECT * FROM pending ORDER BY received_at_ms ASC").toArray() as unknown as Array<{
+    const rows = this.sql
+      .exec("SELECT event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id, crisis FROM pending ORDER BY received_at_ms ASC").toArray() as unknown as Array<{
       event_id: string;
       received_at_ms: number;
       chat_id: string;
@@ -446,45 +492,15 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   outboundByKey(key: string): OutboundRow | null {
-    const row = firstRow<{
-      idem_key: string;
-      turn: number;
-      part: number;
-      tag: string;
-      bubble_text: string;
-      attempts: number;
-      state: OutboundRow["state"];
-      code: string | null;
-      chat_id: string | null;
-      message_id: string | null;
-      reply_to?: string | null;
-      created_at_ms: number;
-      updated_at_ms: number;
-    }>(this.sql.exec("SELECT * FROM outbounds WHERE idem_key = ?", key));
-    if (!row) return null;
-    return {
-      key: row.idem_key,
-      turn: row.turn,
-      part: row.part,
-      tag: row.tag,
-      text: row.bubble_text,
-      attempts: row.attempts,
-      state: row.state,
-      code: row.code,
-      chatId: row.chat_id,
-      messageId: row.message_id,
-      replyTo: row.reply_to ?? null,
-      createdAtMs: row.created_at_ms,
-      updatedAtMs: row.updated_at_ms,
-    };
+    const row = firstRow<OutboundSqlRow>(this.sql.exec(`SELECT ${OUTBOUND_COLUMNS} FROM outbounds WHERE idem_key = ?`, key));
+    return row ? outboundFromRow(row) : null;
   }
 
   outboundByMessageId(messageId: string): OutboundRow | null {
-    const row = firstRow<{ idem_key: string }>(
-      this.sql.exec("SELECT * FROM outbounds WHERE message_id = ? LIMIT 1", messageId),
+    const row = firstRow<OutboundSqlRow>(
+      this.sql.exec(`SELECT ${OUTBOUND_COLUMNS} FROM outbounds WHERE message_id = ? LIMIT 1`, messageId),
     );
-    if (!row) return null;
-    return this.outboundByKey(row.idem_key);
+    return row ? outboundFromRow(row) : null;
   }
 
   updateOutbound(key: string, patch: Partial<OutboundRow>): void {
@@ -515,35 +531,29 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   outbounds(): OutboundRow[] {
-    return (this.sql.exec("SELECT * FROM outbounds ORDER BY created_at_ms ASC").toArray() as unknown as Array<{
-      idem_key: string;
-      turn: number;
-      part: number;
-      tag: string;
-      bubble_text: string;
-      attempts: number;
-      state: OutboundRow["state"];
-      code: string | null;
-      chat_id: string | null;
-      message_id: string | null;
-      reply_to?: string | null;
-      created_at_ms: number;
-      updated_at_ms: number;
-    }>).map((r) => ({
-      key: r.idem_key,
-      turn: r.turn,
-      part: r.part,
-      tag: r.tag,
-      text: r.bubble_text,
-      attempts: r.attempts,
-      state: r.state,
-      code: r.code,
-      chatId: r.chat_id,
-      messageId: r.message_id,
-      replyTo: r.reply_to ?? null,
-      createdAtMs: r.created_at_ms,
-      updatedAtMs: r.updated_at_ms,
-    }));
+    return (this.sql.exec(`SELECT ${OUTBOUND_COLUMNS} FROM outbounds ORDER BY created_at_ms ASC`).toArray() as unknown as OutboundSqlRow[]).map(
+      outboundFromRow,
+    );
+  }
+
+  openSends(): OutboundRow[] {
+    return (
+      this.sql.exec(`SELECT ${OUTBOUND_COLUMNS} FROM outbounds WHERE ${OPEN_SEND_WHERE} ORDER BY created_at_ms ASC`).toArray() as unknown as OutboundSqlRow[]
+    ).map(outboundFromRow);
+  }
+
+  hasOpenSend(turn?: number): boolean {
+    const cursor =
+      turn === undefined
+        ? this.sql.exec(`SELECT 1 FROM outbounds WHERE ${OPEN_SEND_WHERE} LIMIT 1`)
+        : this.sql.exec(`SELECT 1 FROM outbounds WHERE turn = ? AND ${OPEN_SEND_WHERE} LIMIT 1`, turn);
+    return firstRow(cursor) !== null;
+  }
+
+  outboundStates(turn: number): OutboundRow["state"][] {
+    return (this.sql.exec("SELECT state FROM outbounds WHERE turn = ?", turn).toArray() as unknown as Array<{ state: OutboundRow["state"] }>).map(
+      (r) => r.state,
+    );
   }
 
   holdReceipt(receipt: import("./store.js").HeldReceipt): void {
@@ -559,7 +569,7 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   takeReceipts(messageId: string): import("./store.js").HeldReceipt[] {
-    const taken = (this.sql.exec("SELECT * FROM held_receipts WHERE message_id = ? ORDER BY recorded_at_ms ASC", messageId).toArray() as unknown as Array<{
+    const taken = (this.sql.exec("SELECT event_id, message_id, chat_id, state, code, recorded_at_ms FROM held_receipts WHERE message_id = ? ORDER BY recorded_at_ms ASC", messageId).toArray() as unknown as Array<{
       event_id: string;
       message_id: string;
       chat_id: string | null;
@@ -594,7 +604,7 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   pendingApprovals(nowMs: number): ApprovalRow[] {
-    return (this.sql.exec("SELECT * FROM approvals WHERE status = 'pending' AND expires_at_ms > ?", nowMs).toArray() as unknown as Array<{
+    return (this.sql.exec("SELECT id, code_hash, summary, status, decision, created_at_ms, expires_at_ms FROM approvals WHERE status = 'pending' AND expires_at_ms > ?", nowMs).toArray() as unknown as Array<{
       id: string;
       code_hash: string;
       summary: string;
@@ -611,6 +621,18 @@ export class SqlConversationStore implements ConversationStore {
       createdAtMs: r.created_at_ms,
       expiresAtMs: r.expires_at_ms,
     }));
+  }
+
+  pendingApprovalCount(nowMs: number): number {
+    const row = firstRow<{ n: number }>(this.sql.exec("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND expires_at_ms > ?", nowMs));
+    return row?.n ?? 0;
+  }
+
+  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null {
+    const row = firstRow<{ id: string }>(
+      this.sql.exec("SELECT id FROM approvals WHERE status = 'pending' AND expires_at_ms > ? AND code_hash = ? LIMIT 1", nowMs, codeHash),
+    );
+    return row?.id ?? null;
   }
 
   answerApproval(id: string, decision: "yes" | "no"): void {
@@ -636,13 +658,20 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   unfinishedTurn(): PersistedTurn | null {
-    const row = firstRow<TurnRow>(this.sql.exec("SELECT * FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1"));
+    const row = firstRow<TurnRow>(this.sql.exec(`SELECT ${TURN_COLUMNS} FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1`));
     return row ? turnFromRow(row) : null;
   }
 
-  recentTurns(limit: number): PersistedTurn[] {
-    const rows = this.sql.exec("SELECT * FROM turns WHERE state = 'finished' ORDER BY turn DESC LIMIT ?", limit).toArray() as unknown as TurnRow[];
-    return rows.map(turnFromRow);
+  unfinishedTurnAttempts(): number | null {
+    const row = firstRow<{ attempts: number }>(this.sql.exec("SELECT attempts FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1"));
+    return row ? row.attempts : null;
+  }
+
+  recentTurns(limit: number): TurnHistoryRow[] {
+    const rows = this.sql
+      .exec("SELECT items_json, answer_json FROM turns WHERE state = 'finished' ORDER BY turn DESC LIMIT ?", limit)
+      .toArray() as unknown as Array<{ items_json: string; answer_json: string | null }>;
+    return rows.map((r) => ({ itemsJson: r.items_json, answerJson: r.answer_json }));
   }
 
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void {
@@ -726,10 +755,10 @@ export class SqlConversationStore implements ConversationStore {
 
   pendingPresentations(): import("./store.js").PresentationRow[] {
     return this.sql
-      .exec("SELECT * FROM presentations WHERE state = 'pending' ORDER BY turn")
+      .exec("SELECT turn, approval_id, approval, generation FROM presentations WHERE state = 'pending' ORDER BY turn")
       .toArray()
       .map((r) => {
-        const row = r as { turn: number; approval_id: string; approval: string; generation: number; state: string };
+        const row = r as { turn: number; approval_id: string; approval: string; generation: number };
         return {
           turn: Number(row.turn),
           approvalId: row.approval_id,
@@ -752,7 +781,7 @@ export class SqlConversationStore implements ConversationStore {
       state: import("./store.js").AgentSendRow["state"];
       created_at_ms: number;
       updated_at_ms: number;
-    }>(this.sql.exec("SELECT * FROM agent_sends WHERE agent_key = ?", key));
+    }>(this.sql.exec("SELECT agent_key, turn, generation, state, created_at_ms, updated_at_ms FROM agent_sends WHERE agent_key = ?", key));
     if (!row) return null;
     return {
       key: row.agent_key,
@@ -782,7 +811,7 @@ export class SqlConversationStore implements ConversationStore {
 
   chatBackground(chatKey: string): ChatBackground | null {
     const row = firstRow<{ chat_key: string; state: ChatBackground["state"]; attempts: number; locked_until_ms: number; updated_at_ms: number }>(
-      this.sql.exec("SELECT * FROM chat_backgrounds WHERE chat_key = ?", chatKey),
+      this.sql.exec("SELECT chat_key, state, attempts, locked_until_ms, updated_at_ms FROM chat_backgrounds WHERE chat_key = ?", chatKey),
     );
     return row
       ? { chatKey: row.chat_key, state: row.state, attempts: row.attempts, lockedUntilMs: row.locked_until_ms, updatedAtMs: row.updated_at_ms }

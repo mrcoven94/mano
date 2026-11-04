@@ -6,6 +6,8 @@
 // like a turn.
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 
+const HANDLE_HASH = /^[0-9a-f]{64}$/;
+
 export interface DeletionDeps {
   secret: string | undefined;
   resetSession(handleHash: string): Promise<unknown>;
@@ -22,7 +24,7 @@ export async function handleDeleted(request: Request, deps: DeletionDeps): Promi
     return Response.json({ ok: false, reason: "bad_json" }, { status: 400 });
   }
   const { handleHash, generation } = body;
-  if (typeof handleHash !== "string" || !/^[0-9a-f]{64}$/.test(handleHash) || typeof generation !== "number") {
+  if (typeof handleHash !== "string" || !HANDLE_HASH.test(handleHash) || typeof generation !== "number") {
     return Response.json({ ok: false, reason: "bad_notice" }, { status: 400 });
   }
   try {

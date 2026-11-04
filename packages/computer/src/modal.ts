@@ -21,6 +21,8 @@ interface Session {
 
 const DEFAULT_RETRY_DELAYS_MS = [500, 1000, 2000];
 
+const TRAILING_SLASH_RE = /\/$/;
+
 /**
  * Hosted desktop behind the session service in modal/. One Sandbox per run,
  * on the person's own profile volume. Control calls carry the per-session
@@ -34,7 +36,7 @@ export class ModalComputer implements Computer {
 
   constructor(private options: ModalComputerOptions) {
     if (!options.personId) throw new Error("ModalComputer needs the person's id");
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.baseUrl = options.baseUrl.replace(TRAILING_SLASH_RE, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -57,7 +59,7 @@ export class ModalComputer implements Computer {
     if (typeof body.id !== "string" || typeof body.control_url !== "string" || typeof body.session_secret !== "string" || !body.session_secret) {
       throw new Error("session service returned no session");
     }
-    return { id: body.id, controlUrl: body.control_url.replace(/\/$/, ""), secret: body.session_secret };
+    return { id: body.id, controlUrl: body.control_url.replace(TRAILING_SLASH_RE, ""), secret: body.session_secret };
   }
 
   private async control(path: string, body?: unknown): Promise<Response> {

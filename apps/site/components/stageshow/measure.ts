@@ -13,6 +13,7 @@ export type Rect = { x: number; y: number; width: number; height: number }
 export type Target = string | Point | { at: string; x: number; y: number } | { wide: Target; compact: Target }
 
 export const EMPTY: Rect = { x: 0, y: 0, width: 0, height: 0 }
+const MATRIX_TRANSFORM = /^matrix\(([^)]+)\)$/
 
 export const nameOf = (t: Target) => (typeof t === 'string' ? t : 'at' in t ? t.at : null)
 
@@ -56,7 +57,7 @@ export function targetRectOf(root: HTMLElement, el: HTMLElement, fallback: numbe
   const r = rectOf(root, el, fallback, space)
   const style = getComputedStyle(el)
   const t = style.transform
-  const m = t && t !== 'none' ? t.match(/^matrix\(([^)]+)\)$/) : null
+  const m = t && t !== 'none' ? t.match(MATRIX_TRANSFORM) : null
   if (!m) return r
   const [a, b, c, d, e, f] = m[1].split(',').map(Number)
   if (b || c || e || f || !a || !d) return r

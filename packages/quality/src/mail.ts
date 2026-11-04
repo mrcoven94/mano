@@ -32,11 +32,16 @@ export function expectedDeadline(c: BenchCase): string | null {
   return deadline?.kind === "one" ? deadline.date : null;
 }
 
+const SCAM_MARKER_RE = /\b(?:URGENT|verify now)\b/i;
+const GREETING_RE = /^\s*dear\b/i;
+const SENTENCE_BREAK_RE = /\n|(?<=\.)\s+/;
+const CONDITION_RE = /\b(?:if|unless)\b/i;
+
 // The date a letter was printed, alone on its line above the greeting, says
 // when it was sent, not when to act; the mail reader sets it aside too.
 function withoutPrintedDate(transcript: string): string {
   const lines = transcript.split("\n");
-  const greeting = lines.findIndex((l) => /^\s*dear\b/i.test(l));
+  const greeting = lines.findIndex((l) => GREETING_RE.test(l));
   return lines.filter((l, i) => !(i < greeting && extractDates(l)[0] === l.trim())).join("\n");
 }
 
@@ -49,12 +54,12 @@ export class TranscriptDeadlineReader implements DeadlineReader {
   readonly live = false;
 
   async readDeadline(letter: LetterImage): Promise<string | null> {
-    if (/\b(?:URGENT|verify now)\b/i.test(letter.transcript)) return null;
+    if (SCAM_MARKER_RE.test(letter.transcript)) return null;
     const text = withoutPrintedDate(letter.transcript);
     const dates = [...new Set(extractDates(text))];
     if (dates.length !== 1) return null;
-    const sentence = text.split(/\n|(?<=\.)\s+/).find((s) => s.includes(dates[0]!))!;
-    return sentence.trim().endsWith(".") && !/\b(?:if|unless)\b/i.test(sentence) ? dates[0]! : null;
+    const sentence = text.split(SENTENCE_BREAK_RE).find((s) => s.includes(dates[0]!))!;
+    return sentence.trim().endsWith(".") && !CONDITION_RE.test(sentence) ? dates[0]! : null;
   }
 }
 

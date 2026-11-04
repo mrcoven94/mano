@@ -162,23 +162,30 @@ function categoriesOf(letter: Letter): SendCategory[] {
   return ORDER.filter((c) => found.has(c));
 }
 
+const RECERTIFICATION_WORD = /\brecertif/;
+const INTERVIEW_WORD = /\binterview\b/;
+const HEARING_WORD = /\bhearing\b/;
+const APPEAL_WORD = /\bappeal\b/;
+const RENEWAL_HEADS = /\b(?:renew|recertif|redetermin)/g;
+const DOCUMENT_WORDS = /\b(proofs?|documents?|forms?|pay stubs?|paperwork|records?|statements?|receipts?)\b/;
+
 // The kind follows the duty the gate read, so a word that only
 // qualifies it ("your recertification appeal") never names it. Within a
 // renewal, the last renewal word is the head noun. Only what the
 // published sentence says; no kind when it says none.
 function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
   const t = sentence.toLowerCase();
-  if (obligation === "appeal") return /\bhearing\b/.test(t) ? "hearing" : "appeal";
+  if (obligation === "appeal") return HEARING_WORD.test(t) ? "hearing" : "appeal";
   if (obligation === "pay") return "payment";
   if (obligation === "renew") {
-    const head = t.match(/\b(?:renew|recertif|redetermin)/g)?.at(-1);
+    const head = t.match(RENEWAL_HEADS)?.at(-1);
     return head === "recertif" ? "recertification" : head === "redetermin" ? "redetermination" : "renewal";
   }
-  if (/\brecertif/.test(t)) return "recertification";
-  if (/\binterview\b/.test(t)) return "interview";
-  if (/\bhearing\b/.test(t)) return "hearing";
-  if (/\bappeal\b/.test(t)) return "appeal";
-  if (obligation === "respond" && /\b(proofs?|documents?|forms?|pay stubs?|paperwork|records?|statements?|receipts?)\b/.test(t)) return "documents";
+  if (RECERTIFICATION_WORD.test(t)) return "recertification";
+  if (INTERVIEW_WORD.test(t)) return "interview";
+  if (HEARING_WORD.test(t)) return "hearing";
+  if (APPEAL_WORD.test(t)) return "appeal";
+  if (obligation === "respond" && DOCUMENT_WORDS.test(t)) return "documents";
   return null;
 }
 
@@ -194,6 +201,7 @@ const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
 const DOUBT = /\b(not|never|don'?t|do not|no longer|unless|if|except|instead|actual|either|or)\b/i;
+const NEXT_RENEWAL = /\bnext\s+(?:renewal|recertification)\b/i;
 
 // The one date a deadline question can name: only when the letter gives
 // exactly one and nothing around it casts doubt. "unclear" names none, so
@@ -259,7 +267,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
       sentence: proposal.quote,
     };
     // A published "next renewal" is the renewal the person owes next.
-    const next = /\bnext\s+(?:renewal|recertification)\b/i.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
+    const next = NEXT_RENEWAL.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
     lines.push(next ? `Your next ${kind} is due ${spoken(proposal.dueDate)}.` : `It is due ${spoken(proposal.dueDate)}.`);
   } else if (question) {
     ask = heldBackQuestion(question);
