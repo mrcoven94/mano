@@ -93,3 +93,31 @@ test("on a 402 with nothing else wrong, the smoke is provider-unavailable", asyn
   assert.equal(code, 0);
   assert.equal(gate.status, "provider-unavailable");
 });
+
+// The nightly is the only check that runs every suite against the real model,
+// so a provider outage there must not read as a pass (LAP-977).
+test("on a 402, the nightly fails with the outage named in the job summary", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(402, { "content-type": "application/json" });
+    res.end(BILLING_402);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const out = mkdtempSync(join(tmpdir(), "quality-nightly-402-"));
+  const summaryPath = join(out, "summary.md");
+  const pkg = fileURLToPath(new URL("..", import.meta.url));
+  try {
+    const child = spawn(process.execPath, ["--import", "./src/register.ts", "src/bin/nightly.ts", "--out", out], {
+      cwd: pkg,
+      env: { PATH: process.env.PATH ?? "", ...env, MANO_MODEL_BASE_URL: `http://127.0.0.1:${port}/v1`, GITHUB_STEP_SUMMARY: summaryPath },
+      stdio: "ignore",
+    });
+    const code = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+    assert.equal(code, 1);
+    const summary = readFileSync(summaryPath, "utf8");
+    assert.match(summary, /model provider unavailable/);
+    assert.match(summary, /billing_error \/ billing_not_configured/);
+  } finally {
+    server.close();
+  }
+});
