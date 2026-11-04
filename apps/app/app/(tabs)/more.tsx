@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { DemoBanner, Muted, Screen, SectionTitle, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
+import { forgetCrisisLine } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
 import { colors, tapTarget, type } from "../../lib/theme";
 
@@ -37,6 +38,8 @@ export default function More() {
       {session?.email ? <Muted>{session.email}</Muted> : null}
       <Pressable
         onPress={() => {
+          // Signing out on purpose: nothing stays for the next person here.
+          forgetCrisisLine();
           void signOut().then(() => router.replace("/(auth)/sign-in"));
         }}
         accessibilityRole="button"

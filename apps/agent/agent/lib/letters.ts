@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 
 import { answerReading, readMail, type HeldDeadline, type MailReading, type ModelClient } from "@mano/mail";
 
+import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
 import { rememberFact, timeLeft } from "./memory.js";
 
@@ -67,14 +68,14 @@ const spoken = (iso: string): string => {
 async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string, deadlineAt: number): Promise<string[]> {
   const lines: string[] = [];
   for (const d of deadlines) {
-    let outcome: "saved" | "unavailable" | "failed";
+    let outcome: "saved" | "passed" | "unavailable" | "failed";
     const time = timeLeft(deadlineAt);
     if (time === null) {
       lines.push(`I could not save ${spoken(d.dueDate)} to your deadlines yet.`);
       continue;
     }
     try {
-      outcome = await engine.saveDeadline({
+      const saved = await engine.saveDeadline({
         title: d.title,
         dueDate: d.dueDate,
         ...(d.federalProgram ? { program: d.federalProgram } : {}),
@@ -82,6 +83,9 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
         source: { kind: "letter", documentId: d.file, sentence: d.sentence, receivedAt },
         idempotencyKey: deadlineKey(d),
       }, time ?? undefined);
+      // Mail reads a letter's date from its own text and never against today, so
+      // an old letter's date lands here. Engine keeps it, as "was due", with no nudges.
+      outcome = saved === "unavailable" ? saved : daysLeft(saved.deadline, Date.parse(receivedAt)) < 0 ? "passed" : "saved";
     } catch (err) {
       const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
       console.warn(JSON.stringify({ type: "mano_deadline_failed", status: err instanceof EngineError ? err.status : null, timedOut }));
@@ -91,9 +95,11 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
     lines.push(
       outcome === "saved"
         ? `I saved ${date} to your deadlines.`
-        : outcome === "unavailable"
-          ? `I could not save ${date} to your deadlines yet.`
-          : `I could not save ${date} to your deadlines just now.`,
+        : outcome === "passed"
+          ? `${date} has already passed, so no reminder will go out. If the office gave you a newer date, send it to me.`
+          : outcome === "unavailable"
+            ? `I could not save ${date} to your deadlines yet.`
+            : `I could not save ${date} to your deadlines just now.`,
     );
   }
   return lines;
