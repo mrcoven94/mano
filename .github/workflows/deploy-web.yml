@@ -99,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             page=$(curl -s -o /dev/null -w '%{http_code}' "$WEB_URL/sign-in" || true)
             api=$(curl -s -o /dev/null -w '%{http_code}' "$WEB_URL/api/persons/x/conversation" || true)
             echo "sign-in $page, signed-out api $api"
