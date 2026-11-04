@@ -328,11 +328,15 @@ export function nextOwedAt(sql: SqlStorage): number | null {
 
 type NoticeSender = Pick<ConversationRunner, "sendAgentText">;
 
-// True when the text went or never can: a delete, STOP, a close or a definite
-// refusal ends it. A throw or today's budget leaves it for another try.
+// True when the text went or never can: a delete, STOP, a close or a refusal
+// ends it. A throw, today's budget or a provider that did not take it leaves
+// it for another try. It is sent once, under no-replay: the turn machinery must
+// never send a stale notice after a STOP and a return, and a try that may have
+// landed is not sent again under its own key.
 async function sendNotice(runner: NoticeSender, notice: OwedNotice, logger: Logger): Promise<boolean> {
   try {
-    return (await runner.sendAgentText(notice)).reason !== "budget";
+    const out = await runner.sendAgentText({ ...notice, noReplay: true });
+    return out.reason !== "budget" && out.reason !== "failed";
   } catch (err) {
     logger.warn("email_notice_failed", { err: errName(err) });
     return false;
@@ -355,7 +359,10 @@ export async function sendOneOwedNotice(
   if (!row) return;
   const drop = () => sql.exec("DELETE FROM email_owed WHERE key = ?", row.key);
   if (Number(row.epoch) !== store.meta().decorationEpoch) return void drop();
-  if (await sendNotice(runner, { key: row.key, text: row.text, generation: Number(row.generation) }, logger)) return void drop();
+  // A key of its own for each try, since a no-replay key answers the same way
+  // for good. The cost is a second notice if a try that looked lost had landed.
+  const notice = { key: `${row.key}#${row.attempts}`, text: row.text, generation: Number(row.generation) };
+  if (await sendNotice(runner, notice, logger)) return void drop();
   const attempts = Number(row.attempts) + 1;
   if (attempts >= NOTICE_MAX_ATTEMPTS) {
     logger.warn("email_notice_abandoned", { attempts });

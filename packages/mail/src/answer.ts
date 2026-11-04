@@ -288,7 +288,9 @@ export function answerReading(reading: MailReading): MailAnswer {
   const answers = read.map((letter) => letterAnswer(reading, letter));
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `Letter ${i + 1}. ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
-  if (missed) paragraphs.push("I could not read part of what you sent. Send that photo again if it had another letter.");
+  // A letter that already says not all of it was read has said this.
+  const said = reading.questions.some((q) => q.kind === "text_truncated");
+  if (missed && !said) paragraphs.push("I could not read part of what you sent. Send that photo again if it had another letter.");
   return {
     outcome: "read",
     text: paragraphs.join("\n\n"),

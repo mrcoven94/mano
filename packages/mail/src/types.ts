@@ -212,5 +212,8 @@ export interface ReadMailOptions {
   personId: string;
   synthetic: boolean;
   model: import("./model.js").ModelClient;
+  // The files are the parts of one email: if any part goes unread, the rest
+  // may be contradicted by it, so no date holds from any of them.
+  wholeEmail?: boolean;
 }
 

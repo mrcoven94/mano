@@ -988,6 +988,57 @@ describe("an arrival text that does not go", () => {
     expect(inbox.sentAfterOpen()).toHaveLength(1);
   });
 
+  describe("when the provider did not take it", () => {
+    const providerDown = (inbox: Awaited<ReturnType<typeof openInbox>>) => {
+      const real = inbox.h.channel.send.bind(inbox.h.channel);
+      const state = { down: true, tried: [] as string[] };
+      inbox.h.channel.send = async (msg) => {
+        if (msg.text.startsWith("A letter came")) state.tried.push(msg.text);
+        if (state.down) throw new Error("provider down");
+        return real(msg);
+      };
+      return state;
+    };
+
+    it("is never replayed after STOP and a return", async () => {
+      const inbox = await openInbox();
+      const provider = providerDown(inbox);
+      await inbox.send(pdfMail());
+      expect(provider.tried).toHaveLength(1);
+      await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_stop_uncertain", occurredAtMs: inbox.h.now + 1, text: "STOP" }), "webhook");
+      provider.down = false;
+      inbox.h.advance(61_000);
+      await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_back_uncertain", occurredAtMs: inbox.h.now, text: "START" }), "webhook");
+      await inbox.h.runner.resolveUncertain();
+      await runTurnAfterBatch(inbox.h);
+      await tryOne(inbox);
+      expect(provider.tried).toHaveLength(1);
+      expect(owedCount(inbox.sql)).toBe(0);
+    });
+
+    it("stays owed through an outage, then goes once, told to try once", async () => {
+      const inbox = await openInbox();
+      const provider = providerDown(inbox);
+      await inbox.send(pdfMail());
+      expect(owedCount(inbox.sql)).toBe(1);
+      provider.down = false;
+      await inbox.h.runner.resolveUncertain();
+      expect(provider.tried).toHaveLength(1);
+      inbox.h.advance(61_000);
+      await tryOne(inbox);
+      expect(owedCount(inbox.sql)).toBe(0);
+      const sent = inbox.h.channel.sends.filter((m) => m.text === ARRIVED_PDF_TEXT);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.once).toBe(true);
+    });
+
+    it("is told to try once on the first send too", async () => {
+      const inbox = await openInbox();
+      await inbox.send(pdfMail());
+      expect(inbox.h.channel.sends.find((m) => m.text === ARRIVED_PDF_TEXT)!.once).toBe(true);
+    });
+  });
+
   it("gives up after a day of an outage, and says so in the log", async () => {
     const inbox = await openInbox();
     const provider = failing(inbox);

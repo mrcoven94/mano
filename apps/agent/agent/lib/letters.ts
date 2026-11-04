@@ -203,8 +203,12 @@ export async function readTextedPhotos(
       if (bytes) files.push({ bytes, mimeType: photo.mimeType, name: photo.id });
     }
     if (files.length === 0) throw new Error("No stored photo.");
+    // A part of an email that did not come back is a part not read.
+    if (emailed && files.length < photos.length) {
+      for (const file of files) if (!file.mimeType.includes("truncated=")) file.mimeType += "; truncated=yes";
+    }
     const reading = await Promise.race([
-      readMail(files, { personId: engine.personId, synthetic: false, model: until(model, deadline) }),
+      readMail(files, { personId: engine.personId, synthetic: false, model: until(model, deadline), wholeEmail: emailed }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline + 2_000 - Date.now())).unref?.()),
     ]);
     if (!reading) throw new Error("Reading timed out.");
