@@ -890,6 +890,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
       proposal = proposalOrderFor(this.db(), split.turnId) ?? undefined;
       if (!proposal) return { status: "blocked" as const, reason: "That turn is not in this conversation's ledger." };
     }
+    const asked = split.request as { type?: unknown; recipient?: unknown; payload?: { consent?: unknown; caseId?: unknown } | null };
+    if (asked.type === "share" && asked.payload?.consent === "grant" && typeof asked.recipient === "string" && typeof asked.payload.caseId === "string" && shareRevoked(this.db(), asked.recipient, asked.payload.caseId)) {
+      this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(asked.payload.caseId) });
+      return { status: "blocked" as const, reason: `Case ${asked.payload.caseId} was revoked and cannot be shared again with this organization.` };
+    }
     const result = await this.gateway.requestAction(split.request, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
@@ -1090,11 +1095,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
         return { status: "blocked" as const, reason: "Consent expiry already passed." };
       }
     }
-    if (shareRevoked(this.db(), orgAgentId, input.caseId)) {
-      const reason = `Case ${input.caseId} was revoked and cannot be shared again with this organization.`;
-      this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(input.caseId) });
-      return { status: "blocked" as const, reason };
-    }
     // The key identifies the grant: person, organization, case and
     // expiry. The same grant retried resends one message, while another
     // org or a re-grant after expiry delivers fresh.
@@ -1153,6 +1153,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (!isCaseId(caseId)) throw new DefiniteFailureError(CASE_ID_RULE);
     if (consent === "provide" && !shareActive(this.db(), match[0], caseId, Date.now())) {
       throw new DefiniteFailureError("This case is no longer shared with that organization.");
+    }
+    // The one way out for a grant, whichever route drafted it: drafted before
+    // a revocation, it never reaches the organization.
+    if (consent === "grant" && shareRevoked(this.db(), match[0], caseId)) {
+      throw new DefiniteFailureError("This case was revoked and cannot be shared again with this organization.");
     }
     const stored = this.storedOutboundMessage(req.idempotencyKey);
     const message = stored ?? (await this.buildAndStoreOutboundMessage(req, match[0], consent, caseId));
@@ -1307,14 +1312,20 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // staff. Checked here too: a revoked share reads nothing, whatever the
   // organization's records say.
   async readSharedDocument(recipient: string, caseId: string, documentId: string): Promise<{ name: string; contentB64: string } | null> {
-    if (!shareActive(this.db(), recipient, caseId, Date.now())) return null;
-    const grant = readableDocuments(this.db(), recipient, caseId).find((d) => d.documentId === documentId);
+    const grantNow = () =>
+      shareActive(this.db(), recipient, caseId, Date.now())
+        ? readableDocuments(this.db(), recipient, caseId).find((d) => d.documentId === documentId)
+        : undefined;
+    const grant = grantNow();
     const row = grant ? this.documentRow(documentId) : undefined;
     const bytes = row?.name ? await this.documentBytes(documentId) : null;
     if (!grant || !row?.name || bytes == null) return null;
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    if ((await sha256Hex(raw)) !== grant.hash) return null;
-    this.store.audit({ event: "case.document_read", caseHash: await auditDigest(caseId) });
+    const [hash, caseHash] = await Promise.all([sha256Hex(raw), auditDigest(caseId)]);
+    // A delete or revoke can land during those waits: this check is the last
+    // step before the bytes leave.
+    if (hash !== grant.hash || grantNow()?.hash !== grant.hash) return null;
+    this.store.audit({ event: "case.document_read", caseHash });
     return { name: row.name, contentB64: bytesToBase64(raw) };
   }
 

@@ -123,6 +123,13 @@ async function upload(person: Person, name = "pay-stub.png") {
   return ((await res.json()) as { id: string }).id;
 }
 
+// An old revocation the migration could not place: in force for every office.
+function unplacedRevocation(person: Person, caseId: string) {
+  return runInDurableObject(agentOf(person), (_i, state) => {
+    state.storage.sql.exec("INSERT INTO revoked_shares VALUES ('*', ?, '2026-11-03T00:00:00.000Z')", caseId);
+  });
+}
+
 function agentOf(person: Person) {
   const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
   return ns.get(ns.idFromName(person.id));
@@ -331,9 +338,18 @@ describe("LAP-863: sharing a case with a caseworker", () => {
     await grant(maria, orgB, "case-new-org", { Name: "Maria Testcase" });
     expect(await caseIds(orgB)).toEqual(["case-new-org"]);
 
-    // The same organization and case: refused for good, and no access.
-    const refused = await approve(maria, await propose(maria, orgA, "your food benefits renewal", { consent: "grant", caseId: "case-new-org", scope: [] }));
-    expect(refused.status).not.toBe("completed");
+    // The same organization and case: refused for good, before any question.
+    const refused = await asPerson(maria, "POST", "/action", {
+      type: "share",
+      recipient: `org:${orgA}`,
+      purpose: "your food benefits renewal",
+      payload: { consent: "grant", caseId: "case-new-org", scope: [] },
+      idempotencyKey: `share-${crypto.randomUUID()}`,
+      actor: "foreground",
+      sources: [{ kind: "profile", id: maria.id }],
+      origin: "person",
+    });
+    expect(await refused.json()).toMatchObject({ status: "blocked" });
     expect(await caseIds(orgA)).toEqual([]);
     const person = agentOf(maria) as unknown as PersonAgent;
     const again = await person.grantConsent(maria.id, { orgAgentId: `org:${orgA}`, purpose: "renewal", scope: [], caseId: "case-new-org" });
@@ -398,6 +414,34 @@ describe("LAP-863: sharing a case with a caseworker", () => {
     });
     const person = agentOf(maria) as unknown as PersonAgent;
     expect(await person.grantConsent(maria.id, { orgAgentId: `org:${org}`, purpose: "renewal", scope: [], caseId: "case-unplaced" })).toMatchObject({ status: "blocked" });
+  });
+
+  it("a revocation the migration cannot place stops a grant on the action route, before any question", async () => {
+    const maria = resident();
+    const org = unique("county");
+    await unplacedRevocation(maria, "case-any");
+    const res = await asPerson(maria, "POST", "/action", {
+      type: "share",
+      recipient: `org:${org}`,
+      purpose: "your food benefits renewal",
+      payload: { consent: "grant", caseId: "case-any", scope: ["Name"], details: [{ label: "Name", value: "Maria Testcase" }] },
+      idempotencyKey: `share-${crypto.randomUUID()}`,
+      actor: "foreground",
+      sources: [{ kind: "profile", id: maria.id }],
+      origin: "person",
+    });
+    expect(await res.json()).toMatchObject({ status: "blocked" });
+    expect(await caseIds(org)).toEqual([]);
+  });
+
+  it("a grant drafted before that revocation is never delivered on her yes", async () => {
+    const maria = resident();
+    const org = unique("county");
+    const drafted = await propose(maria, org, "your food benefits renewal", { consent: "grant", caseId: "case-drafted", scope: ["Name"], details: [{ label: "Name", value: "Maria Testcase" }] });
+    await unplacedRevocation(maria, "case-drafted");
+    expect((await approve(maria, drafted)).status).not.toBe("completed");
+    expect(await caseIds(org)).toEqual([]);
+    expect((await shares(maria)).active).toEqual([]);
   });
 
   it("the agent reads shares with the turn's handle grant, for that person only", async () => {
@@ -510,7 +554,7 @@ describe("LAP-863: a document grant is one approved document, in one conversatio
 
   const noticeStatuses = (person: Person) =>
     runInDurableObject(agentOf(person), (_i, state) =>
-      (state.storage.sql.exec("SELECT status FROM reminders WHERE id LIKE 'case-share-notice:%' ORDER BY created_at_ms").toArray() as { status: string }[]).map((r) => r.status),
+      (state.storage.sql.exec("SELECT status FROM reminders WHERE id LIKE 'case-share-notice:%' ORDER BY id").toArray() as { status: string }[]).map((r) => r.status),
     );
 
   function channelsAnswer(answer: () => Response) {
@@ -646,11 +690,122 @@ describe("LAP-863: a document grant is one approved document, in one conversatio
     expect(texts[0]!.text).toContain("still has the details you approved");
   });
 
+  it("Channels sending while every reply is lost makes one copy, under one key", async () => {
+    const { maria } = await sharedDocument("lostreplies");
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+    const agent = agentOf(maria) as unknown as PersonAgent;
+    const sent = new Map<string, number>();
+    let repliesLost = true;
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { key } = JSON.parse(String(init?.body)) as { key: string };
+      const duplicate = sent.has(key);
+      if (!duplicate) sent.set(key, 1);
+      return repliesLost ? new Response("lost", { status: 503 }) : Response.json({ sent: true, duplicate });
+    });
+    const giveUp = () =>
+      runInDurableObject(agentOf(maria), (_i, state) => {
+        state.storage.sql.exec("UPDATE reminders SET attempts = 8, next_at_ms = 0, claim_token = NULL, claimed_at_ms = NULL WHERE id LIKE 'case-share-notice:%' AND status = 'sending'");
+      });
+    await nextText(maria, 1);
+    await agent.deliverDueReminders();
+    await giveUp();
+    await agent.deliverDueReminders();
+    expect(await noticeStatuses(maria)).toEqual(["failed"]);
+
+    await nextText(maria, 1);
+    await agent.deliverDueReminders();
+    await giveUp();
+    await agent.deliverDueReminders();
+    expect(await noticeStatuses(maria)).toEqual(["failed"]);
+    expect(sent.size).toBe(1);
+
+    repliesLost = false;
+    await nextText(maria, 1);
+    await agent.deliverDueReminders();
+    expect(await noticeStatuses(maria)).toEqual(["sent"]);
+    expect(sent.size).toBe(1);
+  });
+
+  it("a notice Channels keeps refusing stops after three keys in a conversation", async () => {
+    const { maria } = await sharedDocument("capped");
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+    const agent = agentOf(maria) as unknown as PersonAgent;
+    channelsAnswer(() => Response.json({ sent: false, reason: "refused" }));
+    for (let i = 0; i < 5; i++) {
+      await nextText(maria, 1);
+      await agent.deliverDueReminders();
+    }
+    expect(await noticeStatuses(maria)).toEqual(["dropped", "dropped", "dropped"]);
+  });
+
+  it("a grant that reached the office stays hers to stop, whatever old revocation stands", async () => {
+    const maria = resident();
+    const org = unique("county");
+    await grant(maria, org, "case-held", { Name: "Maria Testcase" });
+    const key = await loseTheAnswer(maria, "grant");
+    await unplacedRevocation(maria, "case-held");
+    const { recovered } = await reconcile(maria);
+    expect(recovered).toEqual([{ key, status: "reconciled" }]);
+    expect(await caseIds(org)).toEqual(["case-held"]);
+    expect((await shares(maria)).active).toMatchObject([{ caseId: "case-held" }]);
+    await revoke(maria, org, "case-held");
+    expect(await caseIds(org)).toEqual([]);
+  });
+
   it("a delete with nothing shared promises nothing", async () => {
     const maria = resident();
     expect((await deleteConversation(maria, 1)).status).toBe(200);
     await nextText(maria, 1);
     expect(await noticeStatuses(maria)).toEqual([]);
+  });
+});
+
+describe("LAP-863: a document read checks access after its last wait", () => {
+  // Maria shares a document, and something happens while its bytes are read.
+  async function readWhile(label: string, during: (agent: Pick<PersonAgent, "deleteConversation" | "revokeConsent" | "approve">, maria: Person, org: string, caseId: string) => Promise<unknown>) {
+    const maria = resident();
+    const org = unique(label);
+    const caseId = `case-${label}`;
+    recordTexts();
+    await grant(maria, org, caseId, { Name: "Maria Testcase" });
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(org, caseId, "pay-stub", key)).status).toBe(201);
+    const id = await upload(maria);
+    await yes(maria, org, "send your pay stub", { consent: "provide", caseId, requestId: key, documentKind: "pay-stub" }, id);
+    return runInDurableObject(agentOf(maria), async (instance) => {
+      const agent = instance as unknown as Pick<PersonAgent, "deleteConversation" | "revokeConsent" | "approve" | "readSharedDocument"> & {
+        documentBytes(documentId: string): Promise<Uint8Array | null>;
+      };
+      const read = agent.documentBytes.bind(agent);
+      let happened = false;
+      agent.documentBytes = async (documentId: string) => {
+        const bytes = await read(documentId);
+        if (!happened) {
+          happened = true;
+          await during(agent, maria, org, caseId);
+        }
+        return bytes;
+      };
+      return agent.readSharedDocument(`org:${org}`, caseId, id);
+    });
+  }
+
+  it("a delete that lands during the read keeps the bytes", async () => {
+    const out = await readWhile("readdelete", (agent, maria) => agent.deleteConversation(maria.id, { generation: 1 }));
+    expect(out).toBeNull();
+  });
+
+  it("a revoke that lands during the read keeps the bytes", async () => {
+    const out = await readWhile("readrevoke", async (agent, maria, org, caseId) => {
+      const draft = await agent.revokeConsent(maria.id, { orgAgentId: `org:${org}`, caseId });
+      expect((await agent.approve(draft.approval!.id, maria.id)).status).toBe("completed");
+    });
+    expect(out).toBeNull();
+  });
+
+  it("with nothing in the way the read answers", async () => {
+    const out = await readWhile("readplain", async () => undefined);
+    expect(out).toMatchObject({ name: "pay-stub.png" });
   });
 });
 

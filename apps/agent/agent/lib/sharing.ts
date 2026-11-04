@@ -8,9 +8,9 @@
 // opens a new one, and the office sees nothing of the old case in it.
 import { createHash } from "node:crypto";
 
-import { SANDBOX_ORG_AGENT_ID, recipientName } from "@mano/protocol";
+import { ANY_RECIPIENT, SANDBOX_ORG_AGENT_ID, recipientName } from "@mano/protocol";
 
-import type { EngineDeadline, EngineShare, PersonEngine, Profile } from "./engine.js";
+import type { EngineDeadline, EngineShare, EngineShares, PersonEngine, Profile } from "./engine.js";
 import { holdForYes, type Draft, type HoldResult } from "./propose.js";
 
 export const SHARE_ORG = SANDBOX_ORG_AGENT_ID;
@@ -27,6 +27,15 @@ export interface ShareDetail {
 export function shareCaseId(personId: string, round: number): string {
   const id = createHash("sha256").update(`${personId}\n${SHARE_PURPOSE}`).digest("hex").slice(0, 32);
   return `renewal-${id}${round > 0 ? `-${round}` : ""}`;
+}
+
+// The first case no revocation covers for the office, whether its own or an
+// old one standing for every office.
+export function nextShareCaseId(personId: string, revoked: EngineShares["revoked"]): string {
+  const closed = new Set(revoked.filter((r) => r.recipient === SHARE_ORG || r.recipient === ANY_RECIPIENT).map((r) => r.caseId));
+  let round = 0;
+  while (closed.has(shareCaseId(personId, round))) round += 1;
+  return shareCaseId(personId, round);
 }
 
 // The values the grant shares, by the words the question and the caseworker

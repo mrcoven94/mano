@@ -10,6 +10,9 @@ export const RECIPIENT_NAMES = {
   "org:sandbox-county": "the Sandbox County Human Services test office",
 } as const;
 
+// In a revocation's record: it stands for every organization.
+export const ANY_RECIPIENT = "*";
+
 export const SANDBOX_ORG_ID = "sandbox-county";
 export const SANDBOX_ORG_AGENT_ID = `org:${SANDBOX_ORG_ID}`;
 

@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { personEngine, requireTurn } from "../lib/person.js";
 import { holdForYes } from "../lib/propose.js";
-import { SHARE_FORM, SHARE_ORG, SHARE_PURPOSE, grantDraft, renewalDetails, shareCaseId } from "../lib/sharing.js";
+import { SHARE_FORM, SHARE_ORG, SHARE_PURPOSE, grantDraft, nextShareCaseId, renewalDetails } from "../lib/sharing.js";
 
 export default defineTool({
   description:
@@ -28,8 +28,7 @@ export default defineTool({
     if (!details.some((d) => d.label === "Name")) {
       return { status: "needs_answer", sent: false, question: "What name should your caseworker see on your renewal?", note: "Ask this one question, save the answer with update_profile, then call share_case again.", ...stamp };
     }
-    const round = revoked.filter((r) => r.recipient === SHARE_ORG).length;
-    const held = await holdForYes(engine, ctx, turn, grantDraft(shareCaseId(engine.personId, round), details));
+    const held = await holdForYes(engine, ctx, turn, grantDraft(nextShareCaseId(engine.personId, revoked), details));
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false, ...stamp };
     return {
       approvalId: held.approval.id,

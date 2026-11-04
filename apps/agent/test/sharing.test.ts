@@ -6,6 +6,7 @@ import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
 import { presentationHash } from "../agent/lib/pending.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import { heldOf, initialSettleState, reduceSettleEvent } from "../agent/lib/settle.js";
+import { shareCaseId } from "../agent/lib/sharing.js";
 import shareCase from "../agent/tools/share_case.js";
 import stopSharing from "../agent/tools/stop_sharing.js";
 import { DefiniteFailureError, TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
@@ -301,6 +302,15 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     // A later photo is not an answer to anything: nothing is offered.
     engine.putDocument(PERSON, "photo-late-1", new Uint8Array([1, 2, 3]));
     expect((await say(null, "photo-late-1")).status).not.toBe("waiting_approval");
+  });
+
+  it("a new share never uses a case an old revocation still covers", async () => {
+    const { sql } = engine.person(PERSON);
+    sql.exec("INSERT INTO revoked_shares VALUES ('*', ?, '2026-11-03T00:00:00.000Z')", shareCaseId(PERSON, 0));
+    await say("I want my caseworker to see my renewal");
+    expect(JSON.parse(engine.approvals().at(-1)!.requestJson).payload.caseId).toBe(shareCaseId(PERSON, 1));
+    await say("YES");
+    expect((await shares()).active).toMatchObject([{ caseId: shareCaseId(PERSON, 1) }]);
   });
 
   it("sharing again after stopping opens a new case", async () => {

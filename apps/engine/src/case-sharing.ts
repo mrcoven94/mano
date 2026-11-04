@@ -14,7 +14,7 @@
 // recall what its staff already saved, and says so in a text after the
 // person's next message (Channels forgets how to reach them in the delete,
 // so it cannot be sooner).
-import { recipientName } from "@mano/protocol";
+import { ANY_RECIPIENT, recipientName } from "@mano/protocol";
 
 import { createReminder, currentGeneration } from "./agents/agent-state.js";
 
@@ -43,6 +43,7 @@ export function documentKindLabel(kind: unknown): string | null {
 // these.
 const REQUEST_REMINDER_PREFIX = "case-request:";
 const NOTICE_REMINDER_PREFIX = "case-share-notice:";
+const MAX_NOTICE_KEYS = 3;
 
 export function isShareReminder(id: string): boolean {
   return id.startsWith(REQUEST_REMINDER_PREFIX) || id.startsWith(NOTICE_REMINDER_PREFIX);
@@ -81,10 +82,6 @@ export function ensureCaseSharingTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS share_delete_notices(generation INTEGER PRIMARY KEY)`);
 }
 
-// Stands for every organization: an old revocation the migration could not
-// place stays in force for all of them.
-const ANY_ORGANIZATION = "*";
-
 // Revocations recorded before they were per organization name only the
 // case. A revoke's stored outbound message names the organization, and is
 // stored before delivery, so only one whose effect was applied counts: a
@@ -110,13 +107,15 @@ export function migrateRevokedCases(sql: SqlExec): void {
     }
   }
   for (const [caseId, at] of revoked) {
-    if (!placed.has(caseId)) sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", ANY_ORGANIZATION, caseId, at);
+    if (!placed.has(caseId)) sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", ANY_RECIPIENT, caseId, at);
   }
   sql.exec("DROP TABLE revoked_cases");
 }
 
+// Whether a grant may go out. An old revocation the migration could not
+// place stays in force for every organization.
 export function shareRevoked(sql: SqlExec, recipient: string, caseId: string): boolean {
-  return sql.exec("SELECT 1 FROM revoked_shares WHERE recipient IN (?, ?) AND case_id = ?", recipient, ANY_ORGANIZATION, caseId).toArray().length > 0;
+  return sql.exec("SELECT 1 FROM revoked_shares WHERE recipient IN (?, ?) AND case_id = ?", recipient, ANY_RECIPIENT, caseId).toArray().length > 0;
 }
 
 export function shareActive(sql: SqlExec, recipient: string, caseId: string, nowMs: number): boolean {
@@ -170,9 +169,11 @@ export function applyShareOutcome(
   if (typeof caseId !== "string" || !caseId) return;
   const { recipient } = approval;
   if (payload?.consent === "grant") {
-    // A revocation already recorded wins: a grant whose response was lost
-    // and that reconciles after it never restores it.
-    if (shareRevoked(sql, recipient, caseId)) return;
+    // This organization's own revocation wins: it recorded that too, so a
+    // grant whose response was lost and that reconciles after it never
+    // restores anything. Any other way, the organization holds this grant,
+    // so it goes on the record, where the person can stop it.
+    if (sql.exec("SELECT 1 FROM revoked_shares WHERE recipient = ? AND case_id = ?", recipient, caseId).toArray().length > 0) return;
     // Parsed to epoch milliseconds at write time; an unreadable value
     // fails closed as already expired.
     const raw = payload.expiresAt;
@@ -228,16 +229,26 @@ function oweDeleteNotice(sql: SqlExec): void {
 // Channels forgets how to reach a person in a delete and learns again from
 // their next message, so that is when the notice goes. It stays owed until
 // Channels says it sent one: a text waiting on a retry is left to finish,
-// and one Channels refused or gave up on goes again on the next message.
-// True when this queued one.
+// and one with no answer goes again under its own key, so Channels dedupes it
+// if the text did go. Only a refusal, which sent nothing, takes a new key, and
+// a conversation gets at most MAX_NOTICE_KEYS. True when this queued one.
 export function queueDeleteNotice(sql: SqlExec, nowMs: number): boolean {
   const generation = currentGeneration(sql);
   if (sql.exec("SELECT 1 FROM share_delete_notices WHERE generation = ?", generation).toArray().length === 0) return false;
   const prefix = `${NOTICE_REMINDER_PREFIX}${generation}:`;
-  const tries = (sql.exec("SELECT status FROM reminders WHERE id LIKE ?", `${prefix}%`).toArray() as { status: string }[]).map((r) => r.status);
-  if (tries.some((status) => ["sent", "scheduled", "claimed", "sending"].includes(status))) return false;
+  const tries = sql.exec("SELECT id, status FROM reminders WHERE id LIKE ? ORDER BY id", `${prefix}%`).toArray() as { id: string; status: string }[];
+  if (tries.some((t) => ["sent", "scheduled", "claimed", "sending"].includes(t.status))) return false;
   const { active } = listShares(sql, nowMs);
   if (active.length === 0) return false;
+  const last = tries.at(-1);
+  if (last?.status === "failed") {
+    sql.exec(
+      "UPDATE reminders SET status = 'scheduled', next_at_ms = ?, attempts = 0, claim_token = NULL, claimed_at_ms = NULL, finished_at_ms = NULL WHERE id = ?",
+      nowMs, last.id,
+    );
+    return true;
+  }
+  if (tries.length >= MAX_NOTICE_KEYS) return false;
   const offices = active.map((s) => {
     const name = recipientName(s.recipient);
     return `${name.charAt(0).toUpperCase()}${name.slice(1)} can no longer open the documents you sent, but it still has the details you approved for ${s.purpose}.`;
