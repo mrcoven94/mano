@@ -4,9 +4,8 @@
 // the gate published, and what to send as categories. No free text from
 // the letter ever reaches the reply, so no phone number, link, address or
 // instruction can, however the letter writes it. A deadline the gate did
-// not publish becomes one question that names the date src/naming.ts found
-// the person must meet, or the one date the letter gives with no doubt around
-// it. A scam letter gets a plain warning, and a letter whose only trouble is a
+// not publish becomes one question that names the date the reader says the
+// person must meet, once src/naming.ts has checked it against the letter. A scam letter gets a plain warning, and a letter whose only trouble is a
 // link a warning about the link. Either way its date is said only as what the letter claims, to check
 // with the office, so a false alarm never takes a real date away and a real
 // scam's date is never stated as fact. Mano holds no deadline from either.
@@ -185,30 +184,13 @@ function soleDate(question: Question): string | "unclear" | null {
   return dates.size === 1 && !doubted ? [...dates][0]! : "unclear";
 }
 
-type DuePurpose = keyof AnswerWords["dueLooks"];
-
-// What a named date is for, in closed words: the sentence never reaches the
-// reply. A label says what is owed, so proof of a payment is not a payment.
-const PROOF_OF = /\b(?:proof|copy|copies|receipt|evidence)\s+of\s+(?:your\s+)?(?:\w+\s+){0,2}(?:payment|renewal|recertification|redetermination|premium|bill)\b/i;
-const OWES_MONEY = /^(?:please\s+)?pay\b|\b(?:payment|premium|balance|bill)\s+(?:is|are)\s+due\b/i;
-const OWES_RENEWAL = /\b(?:renewal|recertification|redetermination)\b[^.;:]*\b(?:must|(?:is|are)\s+due)\b|\b(?:return|send|submit|complete|file)\s+(?:\w+\s+){0,3}(?:renewal|recertification|redetermination)\b|^renew\b/i;
-
-function purposeOf(date: NamedDate): DuePurpose {
-  if (PROOF_OF.test(date.sentence)) return "deadline";
-  const kind = kindOf(date.sentence, date.obligation);
-  if (kind === "documents") return "documents";
-  if (kind === "payment" && OWES_MONEY.test(date.sentence)) return "payment";
-  if ((kind === "renewal" || kind === "recertification" || kind === "redetermination") && OWES_RENEWAL.test(date.sentence)) return "renewal";
-  return "deadline";
-}
-
 function dutyQuestion(named: Extract<NamedDates, { kind: "duty" }>, w: AnswerWords, isPast: (iso: string) => boolean): string {
   const live = named.dates.filter((d) => !isPast(d.iso));
   const [first, second] = live;
   if (!first) return w.passed(w.date(named.dates.map((d) => d.iso).sort().at(-1)!));
   const interview = named.interview && !isPast(named.interview) ? [w.alsoInterview(w.date(named.interview))] : [];
-  if (!second) return [...interview, w.dueLooks[purposeOf(first)](w.date(first.iso)), w.checkDate].join(" ");
-  return [...interview, w.twoDates(w.date(first.iso), w.dueFor[purposeOf(first)], w.date(second.iso), w.dueFor[purposeOf(second)])].join(" ");
+  if (!second) return [...interview, w.dueLooks[first.purpose](w.date(first.iso)), w.checkDate].join(" ");
+  return [...interview, w.twoDates(w.date(first.iso), w.dueFor[first.purpose], w.date(second.iso), w.dueFor[second.purpose])].join(" ");
 }
 
 function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: AnswerWords, isPast: (iso: string) => boolean): string {
@@ -221,8 +203,6 @@ function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: Answer
       return dutyQuestion(named, w, isPast);
     case "request":
       return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askRequest(w.date(named.iso));
-    case "window":
-      return isPast(named.resultIso) ? w.passed(w.date(named.resultIso)) : w.askWindow(named.days, w.date(named.fromIso), w.date(named.resultIso));
   }
 }
 

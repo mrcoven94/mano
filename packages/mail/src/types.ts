@@ -159,23 +159,20 @@ export interface Question {
 // What the first reply may name when the gate held nothing, always as a
 // question. Naming holds nothing: only the gate's grammar does.
 export type NamedDates =
-  // One or two dates the person is told to meet, and any interview beside them.
+  // One or two dates the person must meet, and any interview beside them.
   | { kind: "duty"; dates: NamedDate[]; interview: string | null }
-  // No duty: a request for a hearing, appeal or review with its own date.
+  // Nothing due: a request for a hearing, appeal or review with its own date.
   | { kind: "request"; iso: string }
-  // No duty: a count from a date, shown with the count.
-  | { kind: "window"; days: number; fromIso: string; resultIso: string }
   // Before the letter's own notice date.
   | { kind: "passed"; iso: string }
   // The letter says it is someone else's or no longer stands.
   | { kind: "not-theirs" }
-  // Something on the letter could change whose date it is, or whether it holds.
+  // The reader found nothing, or what it found did not hold up against the letter.
   | { kind: "unsure" };
 
 export interface NamedDate {
   iso: string;
-  sentence: string;
-  obligation: Obligation;
+  purpose: "renewal" | "documents" | "payment" | "deadline";
 }
 
 export interface DeadlineProposal {

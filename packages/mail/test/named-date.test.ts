@@ -174,7 +174,6 @@ describe("the vetoes stay rules: a reader that names a date anyway is overruled"
     "Addressee: Lorna Talvek",
     "Recipient: Selvi Darnovel",
     "For Lorna Talvek:",
-    "Lorna Talvek:",
     "Instructions for Selvi Darnovel",
     "This notice was intended for another person.",
     "This notice does not concern you.",

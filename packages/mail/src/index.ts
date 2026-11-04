@@ -107,7 +107,7 @@ import {
   type AskReason,
   type DayCount,
 } from "./gate.js";
-import { dutyDate, nameDates } from "./naming.js";
+import { nameDates } from "./naming.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { ModelFailure, failureKindOf, readingModelFor } from "./model.js";
@@ -694,7 +694,15 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     // Every date in the letter other than the proposed sentence's own,
     // and its counted result, is quoted with the sentence it sits in.
     // A single notice date alone on a header line is set aside.
-    const best = pickProposal(picks, noticeIso);
+    // Two letters read from one crop share one transcription, so a date in it
+    // may belong to the other letter.
+    const sharedCrop = members.some((m) => pages.some((p) => p.order !== m.order && p.file === m.file && p.crop === m.crop));
+    const readerDates = members.flatMap((m) => (m.extraction?.readerDates ? [m.extraction.readerDates] : []));
+    const named: NamedDates | null = sharedCrop
+      ? { kind: "unsure" }
+      : nameDates(letterText, noticeIso, readerDates.length > 0 ? { meet: readerDates.flatMap((r) => r.meet), other: readerDates.flatMap((r) => r.other) } : null);
+    const namesADate = named?.kind === "duty" || named?.kind === "request" || named?.kind === "passed";
+    const best = pickProposal(picks, noticeIso, named?.kind === "duty" ? named.dates.map((d) => d.iso) : []);
     const focus = best?.pick.sentence ?? (found.length === 1 ? found[0]!.sentence : null);
     if (focus) {
       const dates = letterTexts.flatMap((t) => dateOccurrences(t, noticeIso));
@@ -766,12 +774,8 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           others: withheld.filter((c) => c.sentence !== best.pick.sentence),
         }
       : null;
-    if (proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r))) {
-      const why = [...new Set(reasons)].join("; ");
-      // Two letters read from one crop share one transcription, so a date in it
-      // may belong to the other letter.
-      const sharedCrop = members.some((m) => pages.some((p) => p.order !== m.order && p.file === m.file && p.crop === m.crop));
-      const named: NamedDates | null = sharedCrop ? { kind: "unsure" } : nameDates(letterText, noticeIso);
+    if (proposal !== null || withheld.length > 0 || namesADate || reasons.some((r) => !ownQuestion.has(r))) {
+      const why = [...new Set(reasons)].join("; ") || "the letter words it in a way the gate does not read";
       ask({
         kind: "confirm_deadline",
         letterId,
@@ -1219,19 +1223,20 @@ type Pick = { sentence: string; quote: string; citation: Citation };
 function pickProposal(
   picks: Pick[],
   noticeIso: string | null,
+  readerIsos: string[],
 ): { pick: Pick; dueDate: string; count: DayCount | null } | null {
   const scored = picks
     .filter((p) => isDeadlineSentence(p.sentence))
     .map((pick) => {
       const v = gateSentence(pick.sentence, noticeIso);
-      // A date the person must meet, then a date the sentence states, then a
-      // window counted from the notice date. An appeal right is never first.
+      // The grammar's date, then the date the reader chose, then another date
+      // the sentence states, then a window counted from the notice date. An
+      // appeal right is never first.
       if (v.kind === "deadline") return { pick, tier: v.obligation === "appeal" ? 2 : 0, dueDate: v.iso, count: null };
       if (v.kind === "ask" && v.count) return { pick, tier: 3, dueDate: v.count.resultIso, count: v.count };
       const dates = parseAllDates(pick.sentence, noticeIso);
       if (dates.length !== 1) return null;
-      const stated = dutyDate(pick.sentence) !== null && obligationOf(pick.sentence) !== "appeal";
-      return { pick, tier: stated ? 1 : 2, dueDate: dates[0]!, count: null };
+      return { pick, tier: readerIsos.includes(dates[0]!) ? 1 : 2, dueDate: dates[0]!, count: null };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null && chronologyOf(x.dueDate, noticeIso) === "ok")
     .sort((a, b) => a.tier - b.tier);
