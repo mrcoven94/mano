@@ -636,6 +636,149 @@ describe("review of f808af6: a total she corrected does not come back", () => {
   });
 });
 
+describe("review of 7b4a5b7: a correction is never lost", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const update = (input: Parameters<typeof updateProfile.execute>[0], turnId: string) =>
+    updateProfile.execute(input, toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 })) as Promise<{ forgotten?: string[] }>;
+  const fromDocument = (key: string, fields: Record<string, string | number>) => person().patchProfile({ idempotencyKey: key, source: "document", documentId: PHOTO, fields });
+  const address = async () => (await person().getProfile())!.person.address;
+
+  beforeEach(() => engine.putDocument(PERSON, PHOTO, PNG));
+
+  describe("an address", () => {
+    it("takes a correction of only the state, and leaves the old state's case behind", async () => {
+      await fill({ address: "12 Oak St, Fresno, WA 93721", caseNumber: "WA-1" });
+      await fill({ address: "12 Oak St, Fresno, CA 93721" });
+      expect((await address()).state?.value).toBe("CA");
+      expect(await draftValue("address")).toBe("12 Oak St, Fresno, CA 93721");
+      expect(await draftValue("caseNumber")).toBeUndefined();
+    });
+
+    it("takes a correction of only the state with a new case in the same call", async () => {
+      await fill({ address: "12 Oak St, Fresno, WA 93721", caseNumber: "WA-1" });
+      await fill({ address: "12 Oak St, Fresno, CA 93721", caseNumber: "WA-1" });
+      expect(await draftValue("address")).toBe("12 Oak St, Fresno, CA 93721");
+      expect(await draftValue("caseNumber")).toBe("WA-1");
+    });
+
+    it.each([
+      ["12 Oak St, Fresno, California 93721", ["12 Oak St", undefined, "Fresno", "CA", "93721"], "12 Oak St, Fresno, CA 93721"],
+      ["12 Oak St, Fresno California 93721", ["12 Oak St", undefined, "Fresno", "CA", "93721"], "12 Oak St, Fresno, CA 93721"],
+      ["12 Oak St,Fresno,California,93721", ["12 Oak St", undefined, "Fresno", "CA", "93721"], "12 Oak St, Fresno, CA 93721"],
+      ["12 Oak St, Apt 4, Fresno, Nueva York 10001-1234", ["12 Oak St", "Apt 4", "Fresno", "NY", "10001-1234"], "12 Oak St, Apt 4, Fresno, NY 10001-1234"],
+      ["5 Hill Rd, Charleston, West Virginia 25301", ["5 Hill Rd", undefined, "Charleston", "WV", "25301"], "5 Hill Rd, Charleston, WV 25301"],
+      ["12 Oak St, Fresno CA 93721", ["12 Oak St", undefined, "Fresno", "CA", "93721"], "12 Oak St, Fresno, CA 93721"],
+    ])("splits %s, and reads back apart from the state's spelling", async (typed, parts, readBack) => {
+      await fill({ address: typed });
+      const a = await address();
+      expect([a.line1?.value, a.line2?.value, a.city?.value, a.state?.value, a.zip?.value]).toEqual(parts);
+      expect(await draftValue("address")).toBe(readBack);
+    });
+
+    it("takes a ZIP correction after a state written out", async () => {
+      await fill({ address: "12 Oak St, Fresno, California 93721" });
+      await update({ person: { address: { zip: "93722" } } }, "turn_review7_zip001");
+      expect(await draftValue("address")).toBe("12 Oak St, Fresno, CA 93722");
+    });
+
+    it("does not let a document fill a person's address that has no line 2", async () => {
+      await fill({ address: "12 Oak St, Fresno, California 93721" });
+      await fromDocument("doc-line2", { "person.address.line2": "Unit 9" });
+      expect(await draftValue("address")).toBe("12 Oak St, Fresno, CA 93721");
+    });
+
+    it.each(["12 Oak St Fresno California 93721", "703 Frendle Path, Drelvessa, Kelvessa 00042"])("keeps %s whole and lets no document fill in around it", async (typed) => {
+      await fill({ address: typed });
+      expect([(await address()).line1?.value, (await address()).city, (await address()).zip]).toEqual([typed, undefined, undefined]);
+      await fromDocument("doc-fill", { "person.address.city": "Sacramento", "person.address.zip": "95814" });
+      expect(await draftValue("address")).toBe(typed);
+      expect(summarizeProfile(await person().getProfileView())).not.toContain("Sacramento");
+    });
+
+    it("does not let a document's state route the case when her whole address names none", async () => {
+      await fill({ address: "703 Frendle Path, Drelvessa, Kelvessa 00042" });
+      await fromDocument("doc-state", { "person.address.state": "CA", "programs.ca.program": "CalFresh", "programs.ca.state": "CA", "programs.ca.caseNumber": "CA-DOC" });
+      expect(await draftValue("caseNumber")).toBeUndefined();
+    });
+
+    it("asks when she changes a part next to a whole address, rather than ignore it", async () => {
+      await fill({ address: "12 Oak St Fresno California 93721" });
+      await update({ person: { address: { zip: "93722" } } }, "turn_review7_zip002");
+      expect(await draftValue("address")).toBeUndefined();
+    });
+  });
+
+  describe("a stated total", () => {
+    const job = async () => (await person().getProfile())!.income.find((i) => i.source?.value === "diner")!;
+
+    it("survives a job restated at the same amount", async () => {
+      await update({ income: [{ source: "diner", amount: 1000, frequency: "monthly" }] }, "turn_review7_job001");
+      await fill({ monthlyIncome: "1800" });
+      await update({ income: [{ ref: (await job()).id, amount: 1000, frequency: "monthly" }] }, "turn_review7_job002");
+      expect(await draftValue("monthlyIncome")).toBe("1800");
+      await update({ income: [{ source: "diner", amount: 1000, frequency: "monthly" }] }, "turn_review7_job003");
+      expect(await draftValue("monthlyIncome")).toBe("1800");
+    });
+
+    it("survives a job renamed with the same pay", async () => {
+      await update({ income: [{ source: "diner", amount: 1000, frequency: "monthly" }] }, "turn_review7_job004");
+      await fill({ monthlyIncome: "1800" });
+      await update({ income: [{ ref: (await job()).id, source: "the diner on 5th" }] }, "turn_review7_job005");
+      expect(await draftValue("monthlyIncome")).toBe("1800");
+    });
+
+    it("still ends when the amount really changes", async () => {
+      await update({ income: [{ source: "diner", amount: 1000, frequency: "monthly" }] }, "turn_review7_job006");
+      await fill({ monthlyIncome: "1800" });
+      await update({ income: [{ ref: (await job()).id, amount: 1100 }] }, "turn_review7_job007");
+      expect(await draftValue("monthlyIncome")).toBe("1100");
+    });
+
+    it("is saved even when it matches her own entries, so a later document does not add to it", async () => {
+      await update({ income: [{ source: "diner", amount: 1800, frequency: "monthly" }] }, "turn_review7_job008");
+      await fill({ monthlyIncome: "1800" });
+      await fromDocument("stub-500", { "income.stub.source": "side job", "income.stub.amount": 500, "income.stub.frequency": "monthly" });
+      expect(await draftValue("monthlyIncome")).toBe("1800");
+    });
+
+    it("is written once when she says it again", async () => {
+      await fill({ monthlyIncome: "1800" });
+      const patches: string[] = [];
+      vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") patches.push(String(url));
+        return engine.fetch(url, init);
+      });
+      await fill({ monthlyIncome: "1800" });
+      expect(patches).toEqual([]);
+    });
+  });
+
+  describe("a new case", () => {
+    it("does not land on an entry whose state was corrected", async () => {
+      await fill({ address: "12 Oak St, Fresno, CA 93721", caseNumber: "FIRST" });
+      const [first] = (await person().getProfile())!.programs;
+      await update({ programs: [{ ref: first!.id, state: "WA" }] }, "turn_review7_case01");
+      await fill({ caseNumber: "SECOND" });
+      const programs = (await person().getProfile())!.programs;
+      expect(programs.find((p) => p.id === first!.id)).toMatchObject({ state: { value: "WA" }, caseNumber: { value: "FIRST" } });
+      expect(await draftValue("caseNumber")).toBe("SECOND");
+      expect(programs).toHaveLength(2);
+    });
+
+    it("is written once when a turn retries", async () => {
+      await fill({ address: "12 Oak St, Fresno, CA 93721" });
+      const again = () =>
+        handleTurn(
+          signed("/channels/mano/turn", { turnId: "turn_review7_retry1", generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: ["CASE-1"], attachmentCount: 0 }),
+          { secret: SECRET, engine: client(), runAgent: modelCalling([{ tool: "fill_form", answers: { caseNumber: "CASE-1" } }]) },
+        );
+      await again();
+      await again();
+      expect((await person().getProfile())!.programs).toHaveLength(1);
+    });
+  });
+});
+
 describe("a member a document or note writes without a name", () => {
   const own = (key: string, fields: Record<string, string | boolean>) => person().patchProfile({ idempotencyKey: key, source: "person", fields });
   const fromDocument = (key: string, fields: Record<string, string>) => person().patchProfile({ idempotencyKey: key, source: "document", documentId: PHOTO, fields });
@@ -672,11 +815,10 @@ describe("a member a document or note writes without a name", () => {
 describe("a state written out in an address", () => {
   const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
 
-  it.each(STATE_NAMES.flatMap(([code, english, spanish]) => (english === spanish ? [[code, english]] : [[code, english], [code, spanish]])))("%s from %s: the state is known, the case is kept, and the address files as she typed it", async (code, name) => {
-    const address = `12 Main St, Anytown, ${name} 00601`;
-    await fill({ address, caseNumber: "CASE-1" });
+  it.each(STATE_NAMES.flatMap(([code, english, spanish]) => (english === spanish ? [[code, english]] : [[code, english], [code, spanish]])))("%s from %s: the state is known, the case is kept, and the address reads back with its code", async (code, name) => {
+    await fill({ address: `12 Main St, Anytown, ${name} 00601`, caseNumber: "CASE-1" });
     expect((await person().getProfile())!.person.address.state?.value).toBe(code);
-    expect(await draftValue("address")).toBe(address);
+    expect(await draftValue("address")).toBe(`12 Main St, Anytown, ${code} 00601`);
     expect(await draftValue("caseNumber")).toBe("CASE-1");
   });
 
@@ -691,12 +833,12 @@ describe("a state written out in an address", () => {
     await fill({ address: "12 Oak St, Fresno, CA 93721" });
     await fill({ address: "5 Hill Rd, Charleston, West Virginia 25301" });
     const { address } = (await person().getProfile())!.person;
-    expect([address.line1?.value, address.city, address.state?.value, address.zip]).toEqual(["5 Hill Rd, Charleston, West Virginia 25301", undefined, "WV", undefined]);
+    expect([address.line1?.value, address.city?.value, address.state?.value, address.zip?.value]).toEqual(["5 Hill Rd", "Charleston", "WV", "25301"]);
   });
 
   it("reads back once on the summary, not with the state twice", async () => {
-    await fill({ address: "12 Oak St, Fresno, California 93721" });
-    expect(summarizeProfile(await person().getProfileView())).toContain("12 Oak St, Fresno, California 93721.");
+    await fill({ address: "12 Oak St Fresno California 93721" });
+    expect(summarizeProfile(await person().getProfileView())).toContain("12 Oak St Fresno California 93721.");
   });
 
   it.each(["703 Frendle Path, Drelvessa, Kelvessa 00042", "12 Oak St, Fresno, Californa 93721"])("%s still asks for the case number later", async (address) => {

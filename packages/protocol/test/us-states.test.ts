@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUsState, timeZoneForState, usStateCode, usStateInAddress } from "../src/index.js";
+import { isUsState, timeZoneForState, usAddressParts, usStateCode, usStateInAddress } from "../src/index.js";
 import { STATE_NAMES } from "./state-names.js";
 
 const CODES = STATE_NAMES.map(([code]) => code);
@@ -114,5 +114,22 @@ describe("usStateInAddress", () => {
     ["empty", ""],
   ])("finds none with %s", (_why, address) => {
     expect(usStateInAddress(address)).toBeNull();
+  });
+});
+
+describe("usAddressParts", () => {
+  it.each([
+    ["12 Oak St, Fresno, California 93721", "12 Oak St, Fresno", "CA", "93721"],
+    ["12 Oak St, Fresno California, 93721-1234", "12 Oak St, Fresno", "CA", "93721-1234"],
+    ["12 Oak St Fresno West Virginia 25301", "12 Oak St Fresno", "WV", "25301"],
+    ["12 Oak St, Fresno, ca 93721", "12 Oak St, Fresno", "CA", "93721"],
+    ["Washington, D.C. 20001", "Washington", "DC", "20001"],
+    ["California 93721", "", "CA", "93721"],
+  ])("%s is what comes before the state, the state and the ZIP", (address, rest, state, zip) => {
+    expect(usAddressParts(address)).toEqual({ rest, state, zip });
+  });
+
+  it.each(["703 Frendle Path, Drelvessa, Kelvessa 00042", "12 Oak Ct 93721", "12 Oak St, Fresno, California", ""])("finds no parts in %j", (address) => {
+    expect(usAddressParts(address)).toBeNull();
   });
 });
