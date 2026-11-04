@@ -67,11 +67,15 @@ describe("reports for the judge demo", () => {
       reports.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return new Response(null, { status: 204 });
     });
-    const computer = { screenshot: async () => new Uint8Array([9]), close: async () => undefined } as never;
+    let closed = false;
+    const computer = { screenshot: async () => new Uint8Array([9]), close: async () => { closed = true; } } as never;
     const deps = tracedFillDeps({ computer, model: {}, modelId: "m", deadlineMs: 1, draftToken: "t" } as unknown as FillDeps, `handle-${DEMO}`) as FillDeps;
     await deps.computer.screenshot();
     expect(reports).toHaveLength(0);
     const closing = deps.computer.close();
+    // A stalled report does not keep the computer open.
+    await vi.waitFor(() => expect(closed).toBe(true));
+    expect(reports).toHaveLength(0);
     release();
     await closing;
     expect(reports).toHaveLength(1);

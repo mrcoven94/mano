@@ -126,7 +126,7 @@ export function tracedMailModel(client: MailModel, handleHash: string): MailMode
 }
 
 // A fill has 60 seconds, so reporting a screen never holds it up. Closing the
-// computer waits for what is still on its way.
+// computer then waits for what is still on its way.
 function tracedComputer(inner: Computer, handleHash: string, sending: Promise<void>[]): Computer {
   let reported = 0;
   let last: Uint8Array | null = null;
@@ -146,9 +146,11 @@ function tracedComputer(inner: Computer, handleHash: string, sending: Promise<vo
     stageFile: (name, data) => inner.stageFile(name, data),
     fileUploadHint: () => inner.fileUploadHint(),
     liveViewUrl: () => inner.liveViewUrl(),
+    // The computer goes first: a run past its deadline ends when it closes, so a
+    // stalled report must not leave it running and able to start another call.
     close: async () => {
-      await Promise.all(sending);
       await inner.close();
+      await Promise.all(sending);
     },
   };
 }
