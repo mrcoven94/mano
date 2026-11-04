@@ -162,8 +162,10 @@ const failure = (httpStatus: number, status: string, reason?: string): TurnRespo
   body: { status, text: "", ...(reason ? { reason } : {}) },
 });
 
-// Live readings use the Standard model ID with store: false. Without a
-// key the stand-in answers nothing, so the reply says it could not read.
+// Live readings use the Standard model ID with store: false, or Meta's
+// open-weight model on zero-retention endpoints under the same setting as
+// the agent's own model path (lib/muse.ts). Without a key the stand-in
+// answers nothing, so the reply says it could not read.
 let mailModel: ModelClient | null = null;
 function defaultMailModel(): ModelClient {
   mailModel ??= createModelClient(process.env, { synthetic: false });

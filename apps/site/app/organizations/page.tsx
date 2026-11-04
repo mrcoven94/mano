@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Faq from "@/components/Faq";
+import ShareFlow from "@/components/home/ShareFlow";
 import OrgConsent from "@/components/teams/OrgConsent";
 import OrgScenes from "@/components/teams/OrgScenes";
 import Verified from "@/components/teams/Verified";
@@ -46,6 +47,12 @@ export default function Organizations() {
         </div>
       </section>
 
+      <section className="h-share" aria-labelledby="share-h">
+        <div className="wrap">
+          <ShareFlow />
+        </div>
+      </section>
+
       <Verified id="org-vf" office="Northside Family Center" />
 
       <Rules
@@ -60,13 +67,13 @@ export default function Organizations() {
           ["Mano never sells personal data.", ""],
         ]}
         log={{
-          title: "Maria Lopez · Food benefits renewal",
+          title: "Maria Torres · Food benefits renewal",
           lines: [
             { at: "9:12", who: "Dana", role: "Case manager", text: "Asked Maria for her Oct 24 pay stub, for this renewal only." },
-            { at: "9:40", who: "Maria Lopez", text: "Shared the pay stub with Northside until Dec 31." },
+            { at: "9:40", who: "Maria Torres", text: "Shared the pay stub with Northside until Dec 31." },
             { at: "9:41", who: "Mano", mano: true, text: "Attached it to the renewal." },
             { at: "9:55", who: "Dana", role: "Case manager", text: "Approved the renewal." },
-            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Sample County, once." },
+            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Springfield County, once." },
           ],
         }}
       />

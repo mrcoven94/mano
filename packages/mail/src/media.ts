@@ -46,6 +46,9 @@ export type MediaErrorCode =
   | "ffmpeg_missing"
   | "video_decode_failed";
 
+// A MediaError is a verdict on the file: the decoder looked at it and it
+// is not usable, or ffmpeg is missing. Any other error is the service
+// failing on a file that may be fine, so readMail never blames the photo.
 export class MediaError extends Error {
   readonly code: MediaErrorCode;
   constructor(code: MediaErrorCode, message: string) {
@@ -82,6 +85,23 @@ export interface NormalizedImage {
   height: number;
 }
 
+// What the decoders say about an input they cannot use, as measured on
+// truncated, corrupted and mislabeled files (sharp 0.34, heic-decode 2.1).
+// Anchored, so a wrapped error cannot pass as a verdict, and an unknown
+// message counts as the service failing. sharp puts "corrupt header" before
+// any loader error, out of memory included, so only the cause after it
+// counts.
+const UNUSABLE_INPUT = [
+  /^Input buffer contains unsupported image format/,
+  /^(?:Input buffer has corrupt header: )?(?:VipsJpeg: (?:premature end|Corrupt JPEG)|pngload_buffer: (?:end of stream|libspng read error|invalid IHDR)|webp: unable to parse|gifload_buffer: Unexpected end|svgload_buffer: bad dimensions|glib: XML parse error)/,
+  /^input buffer is not a HEIC image/,
+  /^HEIF image not found/,
+];
+
+function isUnusableInput(err: unknown): boolean {
+  return err instanceof Error && UNUSABLE_INPUT.some((verdict) => verdict.test(err.message));
+}
+
 async function sharpOf(buffer: Buffer): Promise<import("sharp").Sharp> {
   const { default: sharp } = await import("sharp");
   return sharp(buffer);
@@ -97,6 +117,7 @@ export async function normalizeImage(bytes: Uint8Array, mimeType: string): Promi
       const meta = await img.metadata();
       const w = meta.width ?? 0;
       const h = meta.height ?? 0;
+      if (w === 0 || h === 0) throw new MediaError("image_decode_failed", "The image has no pixels.");
       let pipeline = img.rotate();
       if (Math.max(w, h) > MAX_PHOTO_SIDE) {
         pipeline = pipeline.resize(MAX_PHOTO_SIDE, MAX_PHOTO_SIDE, { fit: "inside", withoutEnlargement: true });
@@ -105,6 +126,7 @@ export async function normalizeImage(bytes: Uint8Array, mimeType: string): Promi
       const outMeta = await (await sharpOf(out)).metadata();
       return { buffer: out, width: outMeta.width ?? 0, height: outMeta.height ?? 0 };
     } catch (err) {
+      if (!isUnusableInput(err)) throw err;
       throw new MediaError("image_decode_failed", `Could not decode image: ${errMessage(err)}`);
     }
   }
@@ -115,27 +137,25 @@ export async function normalizeImage(bytes: Uint8Array, mimeType: string): Promi
 }
 
 async function decodeHeic(bytes: Uint8Array): Promise<NormalizedImage> {
+  const { default: decode } = await import("heic-decode");
   let decoded: { width: number; height: number; data: Uint8ClampedArray };
   try {
-    const { default: decode } = await import("heic-decode");
     decoded = await decode({ buffer: Buffer.from(bytes) });
   } catch (err) {
+    if (!isUnusableInput(err)) throw err;
     throw new MediaError("heic_decode_failed", `Could not decode HEIC photo: ${errMessage(err)}`);
   }
-  try {
-    const { default: sharp } = await import("sharp");
-    let pipeline = sharp(Buffer.from(decoded.data), {
-      raw: { width: decoded.width, height: decoded.height, channels: 4 },
-    });
-    if (Math.max(decoded.width, decoded.height) > MAX_PHOTO_SIDE) {
-      pipeline = pipeline.resize(MAX_PHOTO_SIDE, MAX_PHOTO_SIDE, { fit: "inside", withoutEnlargement: true });
-    }
-    const out = await pipeline.jpeg({ quality: 90 }).toBuffer();
-    const meta = await sharp(out).metadata();
-    return { buffer: out, width: meta.width ?? 0, height: meta.height ?? 0 };
-  } catch (err) {
-    throw new MediaError("heic_decode_failed", `Could not convert HEIC photo: ${errMessage(err)}`);
+  if (decoded.width === 0 || decoded.height === 0) throw new MediaError("heic_decode_failed", "The image has no pixels.");
+  const { default: sharp } = await import("sharp");
+  let pipeline = sharp(Buffer.from(decoded.data), {
+    raw: { width: decoded.width, height: decoded.height, channels: 4 },
+  });
+  if (Math.max(decoded.width, decoded.height) > MAX_PHOTO_SIDE) {
+    pipeline = pipeline.resize(MAX_PHOTO_SIDE, MAX_PHOTO_SIDE, { fit: "inside", withoutEnlargement: true });
   }
+  const out = await pipeline.jpeg({ quality: 90 }).toBuffer();
+  const meta = await sharp(out).metadata();
+  return { buffer: out, width: meta.width ?? 0, height: meta.height ?? 0 };
 }
 
 // For tests and scripts that skip when ffmpeg is absent. The video path
@@ -196,17 +216,19 @@ export async function extractVideoFrames(
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        reject(new MediaError("video_decode_failed", "Video decoding timed out."));
+        reject(new Error("Video decoding timed out."));
       }, timeoutMs);
       child.on("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         if (err.code === "ENOENT") reject(new MediaError("ffmpeg_missing", "Video needs ffmpeg, which is not installed."));
-        else reject(new MediaError("video_decode_failed", `Video decoding failed: ${err.message}`));
+        else reject(err);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
         if (tooLarge) {
           reject(new MediaError("video_decode_failed", "Video frames exceed the 256 MB decode cap."));
+        } else if (code === null) {
+          reject(new Error("Video decoding was killed."));
         } else if (code !== 0) {
           const detail = Buffer.concat(errChunks).toString("utf8").slice(0, 200);
           reject(new MediaError("video_decode_failed", `Video decoding failed (exit ${code}): ${detail}`));

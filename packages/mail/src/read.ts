@@ -4,7 +4,7 @@
 // reference number when that is unambiguous, otherwise with one small
 // model call over the page summaries.
 
-import { readingModelFor, type ModelClient, type ModelContent } from "./model.js";
+import { ModelFailure, readingModelFor, type ModelClient, type ModelContent, type ResponsesResult } from "./model.js";
 import { clampBox } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -47,6 +47,8 @@ export interface PageExtraction {
   extraLetter: ExtraLetter | null;
   usage: { inputTokens: number; outputTokens: number } | null;
   elapsedMs: number;
+  // The model that answered, which a client may choose.
+  model?: string;
 }
 
 function fieldProp(description: string): Record<string, unknown> {
@@ -234,19 +236,34 @@ export function extraLetterExtraction(page: PageExtraction): PageExtraction | nu
   };
 }
 
-export function parsePageExtraction(text: string): PageExtraction {
-  let data: unknown;
+// The JSON in an answer: the whole text, or the object inside prose or a
+// code fence. Undefined when there is none.
+function parseAnswer(text: string): unknown {
   try {
-    data = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     const span = text.match(/\{[\s\S]*\}/);
-    if (!span) return emptyExtraction();
+    if (!span) return undefined;
     try {
-      data = JSON.parse(span[0]);
+      return JSON.parse(span[0]);
     } catch {
-      return emptyExtraction();
+      return undefined;
     }
   }
+}
+
+// Only the model saying the page could not be read, or a transcription of
+// it, counts as a reading. Anything else is the service failing.
+function isPageReading(text: string): boolean {
+  const data = parseAnswer(text);
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return false;
+  const { readable, full_text: fullText } = data as Record<string, unknown>;
+  return readable === false || (readable === true && typeof fullText === "string" && fullText.trim() !== "");
+}
+
+export function parsePageExtraction(text: string): PageExtraction {
+  const data = parseAnswer(text);
+  if (data === undefined) return emptyExtraction();
   const o = (data ?? {}) as Record<string, unknown>;
   const base = emptyExtraction();
   return {
@@ -268,6 +285,22 @@ export function parsePageExtraction(text: string): PageExtraction {
     pageMarker: toField(o["page_marker"]),
     extraLetter: toExtraLetter(o["extra_letter"]),
   };
+}
+
+// A page that ended with no reading, and what its attempts were billed,
+// since they still count against the file's budget. The words are this
+// package's own: an answer's text can carry provider text.
+export class PageReadFailed extends Error {
+  readonly usage: PageExtraction["usage"];
+  readonly model: string;
+  readonly elapsedMs: number;
+  constructor(message: string, usage: PageExtraction["usage"], model: string, elapsedMs: number) {
+    super(message);
+    this.name = "PageReadFailed";
+    this.usage = usage;
+    this.model = model;
+    this.elapsedMs = elapsedMs;
+  }
 }
 
 export function readPage(
@@ -346,50 +379,52 @@ async function readContent(
   let inputTokens = 0;
   let outputTokens = 0;
   let sawUsage = false;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await model.responses({
-      model: readingModelFor(opts.synthetic),
-      store: false,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: READ_SYSTEM }] },
-        { role: "user", content },
-      ],
-      text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
-      // Two stacked letters need room for both transcriptions.
-      max_output_tokens: 8000,
-    }, { deadline: opts.deadline });
-    last = res.text;
-    // Usage sums across attempts: every retry spends tokens.
-    if (res.usage) {
-      inputTokens += res.usage.inputTokens;
-      outputTokens += res.usage.outputTokens;
-      sawUsage = true;
-    }
-    // Retry only transport-level emptiness, never a real answer: a valid
-    // readable:false stays a question for the person, not a retry.
-    if (extractJsonObject(last) !== null) break;
-  }
-  return {
-    ...parsePageExtraction(last),
-    usage: sawUsage ? { inputTokens, outputTokens } : null,
-    elapsedMs: Date.now() - started,
+  let answeredBy = readingModelFor(opts.synthetic);
+  const charge = (usage: PageExtraction["usage"]): void => {
+    if (!usage) return;
+    inputTokens += usage.inputTokens;
+    outputTokens += usage.outputTokens;
+    sawUsage = true;
   };
-}
-
-function extractJsonObject(text: string): string | null {
-  try {
-    JSON.parse(text);
-    return text;
-  } catch {
-    const span = text.match(/\{[\s\S]*\}/);
-    if (!span) return null;
+  const failure = (message: string): PageReadFailed =>
+    new PageReadFailed(message, sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res: ResponsesResult;
     try {
-      JSON.parse(span[0]);
-      return span[0];
-    } catch {
-      return null;
+      res = await model.responses({
+        model: readingModelFor(opts.synthetic),
+        store: false,
+        input: [
+          { role: "system", content: [{ type: "input_text", text: READ_SYSTEM }] },
+          { role: "user", content },
+        ],
+        text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
+        // Two stacked letters need room for both transcriptions.
+        max_output_tokens: 8000,
+      }, { deadline: opts.deadline });
+    } catch (err) {
+      if (err instanceof ModelFailure && err.billed) {
+        answeredBy = err.billed.model;
+        charge(err.billed.usage);
+      }
+      throw failure(err instanceof Error ? err.message : String(err));
+    }
+    last = res.text;
+    answeredBy = res.model;
+    // Usage sums across attempts: every retry spends tokens.
+    charge(res.usage);
+    // Retry only an answer that is not a reading, never a real one: a valid
+    // readable:false stays a question for the person, not a retry.
+    if (isPageReading(last)) {
+      return {
+        ...parsePageExtraction(last),
+        usage: sawUsage ? { inputTokens, outputTokens } : null,
+        elapsedMs: Date.now() - started,
+        model: answeredBy,
+      };
     }
   }
+  throw failure("The model's answers were not a reading of the page.");
 }
 
 export interface GroupablePage {
@@ -554,7 +589,7 @@ export async function groupWithModel(
   pages: GroupablePage[],
   model: ModelClient,
   opts: { synthetic: boolean; deadline?: number },
-): Promise<{ groups: number[][]; usage: PageExtraction["usage"]; elapsedMs: number }> {
+): Promise<{ groups: number[][]; usage: PageExtraction["usage"]; elapsedMs: number; model: string }> {
   const started = Date.now();
   const summaries = pages.map((p) => {
     const e = p.extraction;
@@ -610,9 +645,9 @@ export async function groupWithModel(
     for (const p of pages) {
       if (!seen.has(p.index)) groups.push([p.index]);
     }
-    return { groups: validateGroups(pages, groups), usage: res.usage, elapsedMs };
+    return { groups: validateGroups(pages, groups), usage: res.usage, elapsedMs, model: res.model };
   } catch {
-    return { groups: pages.map((p) => [p.index]), usage: res.usage, elapsedMs };
+    return { groups: pages.map((p) => [p.index]), usage: res.usage, elapsedMs, model: res.model };
   }
 }
 
