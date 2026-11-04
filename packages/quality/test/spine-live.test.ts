@@ -211,6 +211,12 @@ test("the pages the portal and Engine really render pass", async () => {
   assert.equal(run.failedStep, null, run.steps.at(-1)?.detail);
 });
 
+test("a filing in Spanish is read as a filing", async () => {
+  const run = await runLive(config({ yesTexts: [`Listo. Enviado: Food benefits renewal. Confirmación ${CONFIRMATION}.`] }));
+  assert.equal(run.ok, true);
+  assert.equal(run.confirmation, CONFIRMATION);
+});
+
 test("a filing with any field other than Maria's fails, and says which", async () => {
   const run = await runLive(config({ filed: { "Monthly income": "$194" } }));
   assert.equal(run.failedStep, "portal");
