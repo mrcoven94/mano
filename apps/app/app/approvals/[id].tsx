@@ -300,7 +300,7 @@ export default function ApprovalDetail() {
         <Card>
           <Body>{s.approvalMissing}</Body>
           <View style={styles.back}>
-            <Btn title={s.approvalsTitle} onPress={goBack} />
+            <Btn title={s.approvalsTitle} onPress={() => router.replace("/(tabs)/approvals")} />
           </View>
         </Card>
       ) : !approval ? (
