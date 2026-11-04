@@ -1,7 +1,9 @@
 // A photo texted to the line, read inside the same turn. Channels stored
 // it in the person's Engine documents and sent its reference; this reads
 // it back, runs readMail (SAM 3.1 splits pages, Muse Spark reads them, on
-// the Standard model ID with store: false) and answers from the reading
+// the Standard model ID with store: false; under MANO_MODEL_PROVIDER=openrouter,
+// on-device detection splits them and Muse Spark Open reads them on
+// zero-retention endpoints) and answers from the reading
 // with answerReading: what the letter is, the deadline the gate publishes
 // (held in Engine through POST /deadlines), otherwise one question that
 // quotes the sentence, and what to send. A photo with no words gets that
@@ -168,6 +170,9 @@ export async function readTextedPhotos(
       new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline + 2_000 - Date.now())).unref?.()),
     ]);
     if (!reading) throw new Error("Reading timed out.");
+    // Fixed words only: a fallback's detail never quotes the letter or the provider.
+    const fallback = reading.warnings.find((w) => w.kind === "segmentation_fallback");
+    if (fallback) console.log(JSON.stringify({ type: "mano_letters_segmentation_fallback", why: fallback.detail ?? null }));
     const answer = answerReading(reading);
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt), markLetters(engine, reading, deadlineAt)]);
