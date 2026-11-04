@@ -107,7 +107,7 @@ const REPLAY_LINK = /https?:\/\/\S+\/fill\/[0-9a-f]{32}/;
 const REPLAY_SCREEN = /<img src="data:image\/png;base64,/g;
 const SAFETY_CHECK_WAIT = /safety check is taking a moment/i;
 const STILL_CHECKING = /checking/i;
-const CONFIRMATION = /Confirmation ([^\s.]+)/;
+const CONFIRMATION = /Confirma(?:tion|ción) ([^\s.]+)/;
 const SIMULATED_FILING = /simulated filing/i;
 
 // What the portal must hold, by the label on its caseworker page. Punctuation
