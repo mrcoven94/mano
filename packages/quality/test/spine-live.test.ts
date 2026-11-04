@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { glimmerCheckerFromEnv } from "@mano/guardian";
 import { looksSpanish, runLive, type LiveConfig, type StepName } from "../src/spine-live.ts";
@@ -27,8 +28,8 @@ interface Scene {
   executor?: string;
   turnModel?: string;
   filed?: Record<string, string>;
-  attached?: boolean;
   portalPage?: string;
+  filedFile?: Response;
 }
 
 const FILED_PAGE: Record<string, string> = {
@@ -44,7 +45,7 @@ const FILED_PAGE: Record<string, string> = {
 };
 
 function caseworkerPage(scene: Scene): string {
-  const rows = { ...FILED_PAGE, ...(scene.attached === false ? {} : { "File 1": `<a href="/caseworker/x/file/0">letter.jpeg</a>` }), ...scene.filed };
+  const rows = { ...FILED_PAGE, ...scene.filed };
   return `<table>${Object.entries(rows).map(([label, value]) => `<tr><td class="label">${label}</td><td>${value}</td></tr>`).join("\n")}</table>`;
 }
 
@@ -72,6 +73,7 @@ function deployment(scene: Scene = {}): typeof fetch {
     if (url.pathname.endsWith("/approvals")) {
       return Response.json({ approvals: [{ id: "ap-1", outcome: { receipt: scene.receipt ?? { externalId: CONFIRMATION, simulated: false } } }] });
     }
+    if (/^\/caseworker\/[^/]+\/file\/0$/.test(url.pathname)) return scene.filedFile ?? new Response(readFileSync(new URL("../src/spine-letter.jpg", import.meta.url)));
     if (url.pathname.startsWith("/caseworker/")) return new Response(scene.portalPage ?? caseworkerPage(scene), { status: scene.portalStatus ?? 200 });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -137,6 +139,21 @@ test("the deadline counts only with its year", async () => {
 
 test("a question with no replay link fails: the draft never used the computer", async () => {
   assert.equal(await failedAt({ fillTurns: [{ status: "waiting_approval", text: QUESTION }] }), "fill");
+});
+
+test("--past-fill carries a draft with no fill to YES and the run still fails", async () => {
+  const run = await runLive(config({ fillTurns: [{ status: "waiting_approval", text: QUESTION }] }, { pastFill: true }));
+  assert.equal(run.ok, false);
+  assert.equal(run.failedStep, "fill");
+  assert.equal(run.steps.find((s) => s.step === "fill")?.model, "meta/muse-spark-open");
+  assert.equal(run.confirmation, CONFIRMATION);
+  assert.ok(run.steps.find((s) => s.step === "portal")?.ok);
+});
+
+test("--past-fill does not carry on when no question was shown", async () => {
+  const run = await runLive(config({ fillTurns: Array.from({ length: 9 }, () => ({ status: "replied", text: "What is your date of birth?" })) }, { pastFill: true }));
+  assert.equal(run.failedStep, "fill");
+  assert.equal(run.steps.at(-1)?.step, "fill");
 });
 
 test("a replay link on another host fails and is not opened", async () => {
@@ -208,8 +225,11 @@ test("punctuation and a written-out amount still match", async () => {
   assert.equal(await failedAt({ filed: { Address: "418 Alder St Apt 3 Springfield IL 62701", "Monthly income": "$1,940.00" } }), null);
 });
 
-test("a filing with no document fails", async () => {
-  assert.equal(await failedAt({ attached: false }), "portal");
+test("a filing whose document is missing or is not the letter fails", async () => {
+  assert.equal(await failedAt({ filedFile: new Response("not found", { status: 404 }) }), "portal");
+  const run = await runLive(config({ filedFile: new Response(new Uint8Array([1, 2, 3])) }));
+  assert.equal(run.failedStep, "portal");
+  assert.match(run.steps.at(-1)!.detail, /not Maria's letter: HTTP 200, 3 bytes/);
 });
 
 test("a model column shows whatever the deployment reports, including the Modal route", async () => {

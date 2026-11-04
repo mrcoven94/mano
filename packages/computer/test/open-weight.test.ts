@@ -46,6 +46,8 @@ describe("computer use on the open-weight model", () => {
     const replayed = (bodies[1]!.input as { type?: string; arguments?: string }[]).find((item) => item.type === "function_call");
     expect(JSON.parse(replayed!.arguments!).actions.slice(0, 2)).toMatchObject([{ x: 227, y: 98 }, { x: 500, y: 500 }]);
     expect(JSON.stringify((bodies[0]!.tools as unknown[])[0])).toContain("0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).toContain("grid from 0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).not.toContain("Coordinates are pixels");
   });
 
   test("a scroll with no point scrolls at the middle of the screen, and a scroll with half a point is refused", async () => {
@@ -66,6 +68,7 @@ describe("computer use on the open-weight model", () => {
     const fetchImpl = (async (input: unknown, init?: RequestInit) => {
       urls.push(String(input));
       bodies.push(JSON.parse(String(init?.body)) as Body);
+      expect(init?.redirect).toBe("error");
       return Response.json({ id: "r1", status: "completed", output: [say("ACCEPTED")] });
     }) as typeof fetch;
     const client = new OpenWeightModelClient({ apiKey: "wk.ws", modalUrl: "https://a--ep-b-server.us-west.modal.direct/", fetchImpl, retryDelaysMs: [] });

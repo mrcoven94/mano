@@ -11,6 +11,7 @@
 // with the office, so a false alarm never takes a real date away and a real
 // scam's date is never stated as fact. Mano holds no deadline from either.
 import type { Letter, LetterFields, MailReading, Obligation, Question, Warning } from "./types.js";
+import { ANSWER_WORDS, type AnswerWords, type ReplyLanguage } from "./words.js";
 
 // What a held deadline is for, when the published sentence says.
 export type DeadlineKind = "renewal" | "recertification" | "redetermination" | "interview" | "hearing" | "appeal" | "payment" | "documents";
@@ -59,19 +60,9 @@ export interface MailAnswer {
   deadlines: HeldDeadline[];
 }
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-function spoken(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return `${MONTHS[m! - 1]} ${d}, ${y}`;
-}
-
-function listOf(items: string[]): string {
+function listOf(items: string[], and: string): string {
   if (items.length <= 1) return items.join("");
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  return `${items.slice(0, -1).join(", ")} ${and} ${items[items.length - 1]}`;
 }
 
 // Programs Mano names: how it says the name, and the federal program.
@@ -122,17 +113,6 @@ function typeOf(letter: Letter): LetterType {
   const text = letterText(letter);
   return TYPES.find(([re]) => re.test(text))?.[1] ?? "other";
 }
-
-const TYPE_WORDS: Record<LetterType, (program: string) => string> = {
-  renewal: (p) => `This is a ${p} renewal letter.`,
-  interview: (p) => `This is a ${p} letter about an interview.`,
-  "documents needed": (p) => `This is a ${p} letter asking for documents.`,
-  "change notice": (p) => `This is a ${p} notice of a change.`,
-  denial: (p) => `This is a ${p} denial letter.`,
-  overpayment: (p) => `This is a ${p} letter about an overpayment.`,
-  hearing: (p) => `This is a ${p} letter about a hearing.`,
-  other: (p) => `This is a ${p} letter.`,
-};
 
 // How each category is recognized; pay stubs before income, so a stub
 // counts as both.
@@ -189,17 +169,6 @@ function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
   return null;
 }
 
-const SCAM =
-  "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.";
-const SUSPECT_LINK = "This letter has a link I do not trust. Do not open it, pay through it, or type anything into it.";
-const CHECK_WITH_OFFICE = "Check with your office, at a phone number or office you already know.";
-const CONFIRMED_THEN_TELL = "If they confirm it, tell me and I will remind you.";
-const claimOf = (iso: string): string => `The letter claims a deadline of ${spoken(iso)}, and I have not confirmed it.`;
-const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
-const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
-const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?";
-const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
-const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
 const DOUBT = /\b(not|never|don'?t|do not|no longer|unless|if|except|instead|actual|either|or)\b/i;
 const NEXT_RENEWAL = /\bnext\s+(?:renewal|recertification)\b/i;
 
@@ -216,41 +185,41 @@ function soleDate(question: Question): string | "unclear" | null {
   return dates.size === 1 && !doubted ? [...dates][0]! : "unclear";
 }
 
-function heldBackQuestion(question: Question): string | null {
+function heldBackQuestion(question: Question, w: AnswerWords): string | null {
   const date = soleDate(question);
   if (!date) return null;
-  if (date === "unclear") return SEVERAL_DATES;
-  return `It looks like the letter gives a deadline of ${spoken(date)}. Is that the date you need to meet?`;
+  if (date === "unclear") return w.severalDates;
+  return w.askDate(w.date(date));
 }
 
 // The date stays the letter's claim: it is said, never held, since the
 // person may be reading a real deadline or a scam's.
-function suspectLinkLines(question: Question | undefined): string[] {
+function suspectLinkLines(question: Question | undefined, w: AnswerWords): string[] {
   const date = question ? soleDate(question) : null;
-  if (!date) return [SUSPECT_LINK, "If you are not sure about this letter, check with your office, at a phone number or office you already know."];
-  const claim = date === "unclear" ? "The letter mentions a date, and I have not confirmed it." : claimOf(date);
-  return [SUSPECT_LINK, claim, CHECK_WITH_OFFICE, CONFIRMED_THEN_TELL];
+  if (!date) return [w.suspectLink, w.notSure];
+  const claim = date === "unclear" ? w.mentionsADate : w.claim(w.date(date));
+  return [w.suspectLink, claim, w.checkWithOffice, w.confirmedThenTell];
 }
 
 // The dates are the letter's words, kept only so a false alarm can say them.
-function scamLines(warning: Warning): string[] {
+function scamLines(warning: Warning, w: AnswerWords): string[] {
   const date = warning.claimedDate;
-  if (!date) return [SCAM];
-  return [SCAM, date === "several" ? "The letter mentions more than one date, and I have not confirmed any of them." : claimOf(date), CHECK_WITH_OFFICE];
+  if (!date) return [w.scam];
+  return [w.scam, date === "several" ? w.mentionsSeveral : w.claim(w.date(date)), w.checkWithOffice];
 }
 
-function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; held: HeldDeadline | null } {
+function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
-  if (scam) return { lines: scamLines(scam), held: null };
+  if (scam) return { lines: scamLines(scam, w), held: null };
   const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
   if (warnings.some((w) => w.kind === "link_suspect")) {
     const planted = warnings.some((w) => w.kind === "instruction_in_content");
-    return { lines: [...suspectLinkLines(question), ...(planted ? [PLANTED] : [])], held: null };
+    return { lines: [...suspectLinkLines(question, w), ...(planted ? [w.planted] : [])], held: null };
   }
   const program = programOf(letter.fields);
   const type = typeOf(letter);
-  const lines = [TYPE_WORDS[type](program?.name ?? "benefits")];
+  const lines = [w.letterType[type](program?.name ?? w.benefits)];
   const proposal = question?.proposal;
   let held: HeldDeadline | null = null;
   let ask: string | null = null;
@@ -268,14 +237,14 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
     };
     // A published "next renewal" is the renewal the person owes next.
     const next = NEXT_RENEWAL.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
-    lines.push(next ? `Your next ${kind} is due ${spoken(proposal.dueDate)}.` : `It is due ${spoken(proposal.dueDate)}.`);
+    lines.push(next ? w.nextDue(kind, w.date(proposal.dueDate)) : w.due(w.date(proposal.dueDate)));
   } else if (question) {
-    ask = heldBackQuestion(question);
+    ask = heldBackQuestion(question, w);
   }
   const send = categoriesOf(letter);
-  if (send.length > 0) lines.push(`It asks you to send: ${listOf(send)}.`);
-  if (warnings.some((w) => w.kind === "instruction_in_content")) lines.push(PLANTED);
-  lines.push(OFFICIAL);
+  if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
+  if (warnings.some((warning) => warning.kind === "instruction_in_content")) lines.push(w.planted);
+  lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.
   if (ask) lines.push(ask);
   return { lines, held };
@@ -287,14 +256,15 @@ function wasRead(letter: Letter): boolean {
   return f.excerpt.trim().length > 0 || f.asked.length > 0 || [f.sender, f.program, f.subject, f.deadlineText].some(Boolean);
 }
 
-export function answerReading(reading: MailReading): MailAnswer {
+export function answerReading(reading: MailReading, language: ReplyLanguage = "en"): MailAnswer {
+  const w = ANSWER_WORDS[language];
   const read = reading.letters.filter(wasRead);
   const failed = reading.questions.some((q) => q.kind === "read_failed" || q.kind === "budget_exceeded");
-  if (read.length === 0) return { outcome: "unread", text: failed ? FAILED : UNREAD, deadlines: [] };
-  const answers = read.map((letter) => letterAnswer(reading, letter));
-  const paragraphs = answers.map((a, i) => (answers.length > 1 ? `Letter ${i + 1}. ${a.lines.join(" ")}` : a.lines.join(" ")));
+  if (read.length === 0) return { outcome: "unread", text: failed ? w.failed : w.unread, deadlines: [] };
+  const answers = read.map((letter) => letterAnswer(reading, letter, w));
+  const paragraphs = answers.map((a, i) => (answers.length > 1 ? `${w.letterNumber(i + 1)} ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
-  if (missed) paragraphs.push("I could not read part of what you sent. Send that photo again if it had another letter.");
+  if (missed) paragraphs.push(w.missedPart);
   return {
     outcome: "read",
     text: paragraphs.join("\n\n"),

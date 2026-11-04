@@ -1,7 +1,7 @@
 // The profile rules at the start of each turn: values are data, never
 // instructions, and the model asks only for what is missing. This system
 // instruction names fields only; the values reach the model as a data
-// block in the turn's context (lib/profile.ts, profileContext). It also
+// block in the turn's context (lib/profile.ts, profileDataBlock). It also
 // carries today's date, in the zone of the state this read finds.
 import { timeZoneForState } from "@mano/protocol";
 import { defineDynamic, defineInstructions } from "eve/instructions";

@@ -141,6 +141,7 @@ export class AgentResponder implements Responder {
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
         documents: turn.documents ?? [],
+        ...(turn.crisis ? { crisis: true } : {}),
       });
       const timestamp = this.nowSeconds();
       const res = await this.fetchFn(`${this.agentUrl}${AGENT_TURN_PATH}`, {

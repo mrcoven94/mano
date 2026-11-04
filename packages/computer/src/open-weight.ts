@@ -19,6 +19,7 @@
  * reaches only the portal, whose browser pages save drafts and file nothing.
  */
 import { isComputerCall, type ComputerAction, type ComputerCall } from "./actions";
+import { PIXEL_COORDINATES } from "./loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 
 export const OPEN_WEIGHT_BASE_URL = "https://openrouter.ai/api/v1";
@@ -59,6 +60,7 @@ const SCREEN = Object.freeze({ width: 1280, height: 800 });
 const GRID = 1000;
 const toPixel = (value: number, size: number): number => Math.min(size - 1, Math.round((value * size) / GRID));
 const toGrid = (value: number, size: number): number => Math.round((value * GRID) / size);
+const GRID_COORDINATES = "Coordinates are on a grid from 0 to 1000 across and down the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.";
 // Far past any form, and short of the thousands of wheel clicks a huge value
 // would queue on the desktop.
 const MAX_SCROLL = 5000;
@@ -209,6 +211,11 @@ function toOpenWeight(input: unknown[]): unknown[] {
   });
 }
 
+// A redirect must not carry a person's screenshots and values to another host.
+function refusingRedirects(fetchImpl: typeof fetch): typeof fetch {
+  return (input, init) => fetchImpl(input, { ...init, redirect: "error" });
+}
+
 export interface OpenWeightModelOptions {
   apiKey: string;
   /** A Modal Shared Endpoint's URL, with apiKey as its proxy token. Without one, OpenRouter. */
@@ -226,13 +233,13 @@ export class OpenWeightModelClient implements ModelClient {
     // Only leaving it out means OpenRouter: an empty URL is refused below.
     this.modelId = modalUrl === undefined ? OPEN_WEIGHT_MODEL_ID : MODAL_MODEL_ID;
     this.inner = modalUrl !== undefined
-      ? new FetchModelClient({ ...options, baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
+      ? new FetchModelClient({ ...options, fetchImpl: refusingRedirects(options.fetchImpl ?? fetch), baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
       : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
   }
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
     if (request.model !== this.modelId) throw new Error("this path runs only Meta's open-weight model");
-    const response = await this.inner.createResponse({ ...request, tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
+    const response = await this.inner.createResponse({ ...request, instructions: request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES), tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
     return { ...response, output: fromOpenWeight(response.output) };
