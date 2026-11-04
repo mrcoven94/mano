@@ -296,7 +296,10 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json(422, {"applied": applied, "error": str(exc)})
                     return
-                if any(action.get("type") in ("click", "double_click", "keypress") for action in actions):
+                # Only the last action can have started a page load the next
+                # screenshot must wait for. After typing, a field's blinking
+                # caret would keep the screens from matching until the limit.
+                if actions and actions[-1].get("type") in ("click", "double_click", "keypress"):
                     settle()
                 self.send_json(200, {"applied": applied})
             elif path == "/goto":

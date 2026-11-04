@@ -365,9 +365,10 @@ class ControlServer(unittest.TestCase):
             with mock.patch.object(self.control, "SETTLE_SECONDS", 0.02), mock.patch.object(self.control, "screenshot_bytes", lambda: os.urandom(4)):
                 self.control.settle()
 
-    def test_a_click_waits_for_the_screen_and_typing_does_not(self):
+    def test_a_click_waits_for_the_screen_and_a_batch_ending_in_typing_does_not(self):
+        click = {"type": "click", "button": "left", "x": 1, "y": 1}
         with mock.patch.object(self.control, "settle") as settle:
-            self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "type", "text": "x"}]}, SECRET), 200)
+            self.assertEqual(self.call("POST", "/act", {"actions": [click, {"type": "type", "text": "x"}]}, SECRET), 200)
             settle.assert_not_called()
             self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "click", "button": "left", "x": 1, "y": 1}]}, SECRET), 200)
             settle.assert_called_once()
