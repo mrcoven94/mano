@@ -6,7 +6,9 @@
 // instruction can, however the letter writes it. A deadline the gate did
 // not publish becomes one question that names a date only when the letter
 // gives exactly one with no doubt around it. A scam letter gets a plain
-// warning and nothing else from it.
+// warning and nothing else from it. A letter whose only trouble is a link
+// gets a warning about the link, and its date only as what the letter
+// claims, to check with the office. Mano holds no deadline from either.
 import type { Letter, LetterFields, MailReading, Obligation, Question } from "./types.js";
 
 // What a held deadline is for, when the published sentence says.
@@ -181,6 +183,9 @@ function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
 
 const SCAM =
   "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.";
+const SUSPECT_LINK = "This letter has a link I do not trust. Do not open it, pay through it, or type anything into it.";
+const CHECK_WITH_OFFICE = "Check with your office, at a phone number or office you already know.";
+const CONFIRMED_THEN_TELL = "If they confirm it, tell me and I will remind you.";
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
 const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
 const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?";
@@ -188,29 +193,46 @@ const UNREAD = "I could not read the letter in your photo. Send it again with th
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
 const DOUBT = /\b(not|never|don'?t|do not|no longer|unless|if|except|instead|actual|either|or)\b/i;
 
-// A deadline the gate held back: one date only when the letter gives
-// exactly one and nothing around it casts doubt; otherwise a question
-// that names no date. Mano never picks among candidates.
-function heldBackQuestion(question: Question): string | null {
+// The one date a deadline question can name: only when the letter gives
+// exactly one and nothing around it casts doubt. "unclear" names none, so
+// Mano never picks among candidates.
+function soleDate(question: Question): string | "unclear" | null {
   const proposal = question.proposal;
   const withheld = [...(proposal?.others ?? []), ...(question.candidates ?? [])];
   const sentences = [...(proposal ? [proposal.sentence] : []), ...withheld.map((c) => c.sentence)];
   const dates = new Set([...(proposal ? [proposal.dueDate] : []), ...withheld.flatMap((c) => c.dates)]);
   if (dates.size === 0) return null;
   const doubted = sentences.some((s) => DOUBT.test(s)) || Boolean(proposal?.count);
-  if (dates.size === 1 && !doubted) {
-    return `It looks like the letter gives a deadline of ${spoken([...dates][0]!)}. Is that the date you need to meet?`;
-  }
-  return SEVERAL_DATES;
+  return dates.size === 1 && !doubted ? [...dates][0]! : "unclear";
+}
+
+function heldBackQuestion(question: Question): string | null {
+  const date = soleDate(question);
+  if (!date) return null;
+  if (date === "unclear") return SEVERAL_DATES;
+  return `It looks like the letter gives a deadline of ${spoken(date)}. Is that the date you need to meet?`;
+}
+
+// The date stays the letter's claim: it is said, never held, since the
+// person may be reading a real deadline or a scam's.
+function suspectLinkLines(question: Question | undefined): string[] {
+  const date = question ? soleDate(question) : null;
+  if (!date) return [SUSPECT_LINK, "If you are not sure about this letter, check with your office, at a phone number or office you already know."];
+  const claim = date === "unclear" ? "The letter mentions a date, and I have not confirmed it." : `The letter claims a deadline of ${spoken(date)}, and I have not confirmed it.`;
+  return [SUSPECT_LINK, claim, CHECK_WITH_OFFICE, CONFIRMED_THEN_TELL];
 }
 
 function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   if (warnings.some((w) => w.kind === "scam_suspect")) return { lines: [SCAM], held: null };
+  const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
+  if (warnings.some((w) => w.kind === "link_suspect")) {
+    const planted = warnings.some((w) => w.kind === "instruction_in_content");
+    return { lines: [...suspectLinkLines(question), ...(planted ? [PLANTED] : [])], held: null };
+  }
   const program = programOf(letter.fields);
   const type = typeOf(letter);
   const lines = [TYPE_WORDS[type](program?.name ?? "benefits")];
-  const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
   const proposal = question?.proposal;
   let held: HeldDeadline | null = null;
   let ask: string | null = null;

@@ -35,38 +35,47 @@ async function read(fullText: string, deadline: string | null): Promise<{ readin
   return { reading, answer: answerReading(reading) };
 }
 
+// Asks no real office makes, or a sender that is not one.
 // [what it is, the whole letter, the sentence the reader returns as a deadline]
-const SCAMS: [string, string, string | null][] = [
-  ["a payment demand with a link and no urgency word", `${OFFICE}${PAY} Pay online at https://benefit-pay.example/case.`, PAY],
-  ["a payment demand with its link in a later paragraph", `${OFFICE}${PAY}\n\nCase CA-1\n\nbenefit-pay.help/case`, PAY],
+const CLEAR_SCAMS: [string, string, string | null][] = [
   ["a payment demand with urgency words and a link", `${OFFICE}URGENT: ${PAY} Pay at https://benefit-pay.example/now.`, PAY],
-  ["an amount due with a link", `${OFFICE}Amount due: $39.00. Questions? https://benefit-pay.example/case`, null],
-  ["a payment demand dressed as a premium", `${OFFICE}Pay your $39 premium at benefit-pay.help by November 20, 2026.`, null],
-  ["a payment demand under an all-capital domain", `${OFFICE}PAY $39.00 AT BENEFIT-PAY.COM`, null],
-  ["a payment demand that says it is not a scam", `${OFFICE}This is not a scam and you must pay $39.00 at https://benefit-pay.example/case.`, null],
-  ["a payment demand beside a scam warning", `${OFFICE}Beware of scams and pay $39.00 at https://benefit-pay.example/case.`, null],
-  ["a payment demand after do not forget", `${OFFICE}Do not forget to pay $39.00 at https://benefit-pay.example/case.`, null],
   ["a payment demand on a .gov lookalike host", `${OFFICE}${PAY} https://ssa.gov.benefit-pay.example/case`, PAY],
-  ["a payment demand under a legal notice heading", `${OFFICE}LEGAL NOTICE: Pay $39.00 at https://benefit-pay.example/case.`, null],
   ["a gift card demand", `${OFFICE}${PAY} Buy a gift card and text us the codes.`, PAY],
   ["a wire demand", `${OFFICE}${PAY} Payment by wire transfer only.`, PAY],
   ["a crypto demand", `${OFFICE}${PAY} We take payment in Bitcoin.`, PAY],
-  ["a Social Security number by link", `${OFFICE}Enter your Social Security number at https://benefits-check.example/form to stay enrolled.`, null],
-  ["a login by link", `${OFFICE}Log in at https://benefits-check.example/login to see your case.`, null],
-  ["a password by link on the next line", `${OFFICE}Your case needs your password.\nGo to benefits-check.help now.`, null],
   ["a Social Security number by text", `${OFFICE}Text your Social Security number to (555) 300-4000.`, null],
   ["an EBT PIN by email", `${OFFICE}Email your EBT PIN to help@benefits-check.example.`, null],
   ["a lookalike agency name", `U.S. Benefits Department\n${NOTICE}\n\n${RENEW} Call (555) 300-4000.`, RENEW],
   ["a lookalike agency name in capitals", `FEDERAL FOOD STAMP OFFICE\n${NOTICE}\n\n${RENEW}`, RENEW],
   ["a host dressed as a government site", `${OFFICE}${RENEW} Renew at https://calfresh-gov.help/renew.`, RENEW],
-  ["a non-government link to verify benefits", `${OFFICE}Verify your benefits at benefits-check.help by November 20, 2026.`, null],
-  ["a verify ask with its link in the next sentence", `${OFFICE}You need to verify your SNAP benefits. Go to https://benefits-check.example/snap.`, null],
-  ["the office asking you to verify by link", `${OFFICE}We need you to verify your benefits at https://benefits-check.example/snap.`, null],
-  ["a claim on an amount by link", `${OFFICE}Click here to claim your $500 benefit: https://benefits-check.example/claim`, null],
   ["a fee to renew food benefits", `${OFFICE}A $25 processing fee is required to renew your SNAP benefits.`, null],
   ["a fee to keep Medicaid", `${OFFICE}Pay a $25 fee to keep your Medicaid.`, null],
   ["money to keep benefits, the purpose first", `${OFFICE}To keep your food benefits, send $25 to the address below.`, null],
   ["benefits that will not renew without a fee", `${OFFICE}Your CalFresh will not renew without a $25 reinstatement fee.`, null],
+];
+
+// An ordinary ask sent to an untrusted link. It may be a scam or a real
+// notice, so the date is kept as a claim.
+// [what it is, the whole letter, the sentence the reader returns as a deadline, the date Mano names]
+const SUSPECT_LINKS: [string, string, string | null, string | null][] = [
+  ["a payment demand with a link and no urgency word", `${OFFICE}${PAY} Pay online at https://benefit-pay.example/case.`, PAY, "November 20, 2026"],
+  ["a payment demand with its link in a later paragraph", `${OFFICE}${PAY}\n\nCase CA-1\n\nbenefit-pay.help/case`, PAY, "November 20, 2026"],
+  ["an amount due with a link", `${OFFICE}Amount due: $39.00. Questions? https://benefit-pay.example/case`, null, null],
+  ["a payment demand dressed as a premium", `${OFFICE}Pay your $39 premium at benefit-pay.help by November 20, 2026.`, null, "November 20, 2026"],
+  ["a payment demand under an all-capital domain", `${OFFICE}PAY $39.00 AT BENEFIT-PAY.COM`, null, null],
+  ["a payment demand that says it is not a scam", `${OFFICE}This is not a scam and you must pay $39.00 at https://benefit-pay.example/case.`, null, null],
+  ["a payment demand beside a scam warning", `${OFFICE}Beware of scams and pay $39.00 at https://benefit-pay.example/case.`, null, null],
+  ["a payment demand after do not forget", `${OFFICE}Do not forget to pay $39.00 at https://benefit-pay.example/case.`, null, null],
+  ["a payment demand under a legal notice heading", `${OFFICE}LEGAL NOTICE: Pay $39.00 at https://benefit-pay.example/case.`, null, null],
+  ["a Social Security number by link", `${OFFICE}Enter your Social Security number at https://benefits-check.example/form to stay enrolled.`, null, null],
+  ["a login by link", `${OFFICE}Log in at https://benefits-check.example/login to see your case.`, null, null],
+  ["a password by link on the next line", `${OFFICE}Your case needs your password.\nGo to benefits-check.help now.`, null, null],
+  ["a non-government link to verify benefits", `${OFFICE}Verify your benefits at benefits-check.help by November 20, 2026.`, null, "November 20, 2026"],
+  ["a verify ask with its link in the next sentence", `${OFFICE}You need to verify your SNAP benefits. Go to https://benefits-check.example/snap.`, null, null],
+  ["the office asking you to verify by link", `${OFFICE}We need you to verify your benefits at https://benefits-check.example/snap.`, null, null],
+  ["a claim on an amount by link", `${OFFICE}Click here to claim your $500 benefit: https://benefits-check.example/claim`, null, null],
+  ["a real premium on a payment vendor's site", `${OFFICE}Pay your premium by November 20, 2026. Pay online at https://paymypremium.example.`, "Pay your premium by November 20, 2026.", "November 20, 2026"],
+  ["a real county portal on a plain .org", `${OFFICE}${RENEW} Log in to your account at https://county-benefits.example to see your case.`, RENEW, "November 20, 2026"],
 ];
 
 // [what it is, the whole letter, the sentence returned as a deadline, the date Mano holds]
@@ -120,14 +129,40 @@ const REAL: [string, string, string | null, string | null][] = [
   ["a PIN warning", `${OFFICE}Never share your EBT PIN with anyone. To change your PIN, call (555) 100-2000.`, null, null],
 ];
 
-describe("scam letters", () => {
-  it.each(SCAMS)("warns plainly about %s and holds nothing from it", async (_name, text, deadline) => {
+describe("clear scams", () => {
+  it.each(CLEAR_SCAMS)("warns plainly about %s and says no date", async (_name, text, deadline) => {
     const { reading, answer } = await read(text, deadline);
     expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
     expect(answer.text).toBe(WARNING);
     expect(answer.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.questions.filter((q) => q.kind === "confirm_deadline")).toEqual([]);
+  });
+});
+
+describe("a suspect link beside an ordinary ask", () => {
+  it.each(SUSPECT_LINKS)("warns about the link in %s and keeps the date only as a claim", async (_name, text, deadline, claimed) => {
+    const { reading, answer } = await read(text, deadline);
+    const kinds = reading.warnings.map((w) => w.kind);
+    expect(kinds).toContain("link_suspect");
+    expect(kinds).not.toContain("scam_suspect");
+    expect(answer.text).toMatch(/^This letter has a link I do not trust\. Do not open it, pay through it, or type anything into it\./);
+    expect(answer.text).toMatch(/at a phone number or office you already know\./);
+    expect(answer.text).not.toMatch(/looks like a scam|https?:|\.example|\.help|\.com|\$\d|It is due/i);
+    expect(answer.deadlines).toEqual([]);
+    if (claimed) expect(answer.text).toContain(`The letter claims a deadline of ${claimed}, and I have not confirmed it.`);
+  });
+
+  it("names no date when the letter gives more than one", async () => {
+    const { answer } = await read(`${OFFICE}Pay your premium by November 20, 2026 or by December 1, 2026 at https://paymypremium.example.`, null);
+    expect(answer.text).toContain("The letter mentions a date, and I have not confirmed it.");
+    expect(answer.text).not.toMatch(/November|December/);
+  });
+
+  it("a clear scam signal beats a suspect link, so its date is never said", async () => {
+    const { answer } = await read(`${OFFICE}${PAY} Pay online at https://benefit-pay.example/case. A $25 processing fee is required to renew your SNAP benefits.`, PAY);
+    expect(answer.text).toBe(WARNING);
+    expect(answer.deadlines).toEqual([]);
   });
 });
 

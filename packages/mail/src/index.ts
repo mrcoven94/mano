@@ -1089,6 +1089,14 @@ function flagToWarning(
         citation,
         detail: flag.detail,
       };
+    case "suspect_link":
+      return {
+        kind: "link_suspect",
+        message: `Letter ${letterId} has a link that cannot be vouched for: ${flag.label} (${flag.match}).`,
+        letterId,
+        citation,
+        detail: flag.match,
+      };
   }
 }
 

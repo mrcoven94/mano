@@ -95,6 +95,7 @@ export type WarningKind =
   | "phone_unchecked"
   | "address_unchecked"
   | "scam_suspect"
+  | "link_suspect"
   | "conflicting_dates"
   | "segmentation_fallback"
   | "video_truncated"

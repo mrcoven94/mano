@@ -7,7 +7,7 @@
 import type { Citation } from "./types.js";
 
 export interface ContentFlag {
-  kind: "instruction" | "link" | "phone" | "scam";
+  kind: "instruction" | "link" | "phone" | "scam" | "suspect_link";
   // Short label for the warning message.
   label: string;
   // Exact substring that triggered the flag.
@@ -253,50 +253,87 @@ function firstUnofficialLink(text: string): string | null {
   return null;
 }
 
-// Scams with no urgency word and no untraceable method: what is asked,
-// and where the letter sends the person to do it.
-function quietScam(text: string): { label: string; match: string } | null {
+// A letter's sentences with what is not a demand on the person set aside.
+interface Said {
+  originals: string[];
+  said: string[];
+  // Without referrals, whose links are not where a demand sends anyone.
+  reachable: string[];
+}
+
+function saidIn(text: string): Said {
   const originals = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
   const said = originals.map((s) => s.replace(NOT_ASKED, " ").replace(WARNS, " "));
+  return { originals, said, reachable: said.map((s) => s.replace(REFERRAL, " ")) };
+}
+
+// Asks no real office makes, or a sender that is not one. A link is not
+// needed for any of these, and the letter's dates are not worth repeating.
+function clearScam({ originals, said, reachable }: Said): ContentFlag | null {
   const find = (test: (s: string) => boolean): string | null => {
     const k = said.findIndex(test);
     return k < 0 ? null : originals[k]!;
   };
-  const letter = said.join("\n");
-  const reachable = said.map((s) => s.replace(REFERRAL, " "));
-
+  const scam = (label: string, match: string): ContentFlag => ({ kind: "scam", label, match });
   const dressed = findLinks(reachable.join("\n")).find((l) => {
     const host = hostOf(l.match);
     return host && !isOfficial(host) && DRESSED_AS_GOVERNMENT.test(host);
   });
-  if (dressed) return { label: "link dressed as a government site", match: dressed.match };
+  if (dressed) return scam("link dressed as a government site", dressed.match);
+  const letter = said.join("\n");
   const lookalike = letter.match(LOOKALIKE_AGENCY);
-  if (lookalike) return { label: "names an agency that does not exist", match: lookalike[0] };
+  if (lookalike) return scam("names an agency that does not exist", lookalike[0]);
   const secret = find((s) => SECRET_BY_MESSAGE.test(s));
-  if (secret) return { label: "asks for a Social Security number, PIN or password by message", match: secret };
+  if (secret) return scam("asks for a Social Security number, PIN or password by message", secret);
   if (NAMES_BENEFITS.test(letter)) {
     const fee = find((s) => !REAL_CHARGE.test(s) && (NAMED_FEE.test(s) || FEE_TO_KEEP.test(s)));
-    if (fee) return { label: "charges a fee to keep or renew benefits", match: fee };
+    if (fee) return scam("charges a fee to keep or renew benefits", fee);
   }
+  return null;
+}
+
+// Pressure to pay or verify, with an unofficial link or a warning off the
+// person's own office.
+function urgentScam(text: string): ContentFlag | null {
+  const lower = text.toLowerCase();
+  const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
+  if (urgency.length === 0) return null;
+  const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
+  if (!asksPayment) return null;
+  // A real office never tells the person not to contact it.
+  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
+  if (cutOff) {
+    return { kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` };
+  }
+  const link = firstUnofficialLink(text);
+  if (!link) return null;
+  return { kind: "scam", label: "urgent payment or verification ask with an unofficial link", match: link, detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` };
+}
+
+// An ordinary ask (pay, verify, log in, give a Social Security number)
+// that real offices make too, sent to a link that cannot be vouched for.
+// Only the link is suspect: a county on a plain .org or a premium's
+// payment vendor reads the same, so the person is warned off the link and
+// told to check the date, which stays out of Mano's deadlines.
+function suspectLink({ said, reachable }: Said): ContentFlag | null {
   const link = firstUnofficialLink(reachable.join("\n"));
-  if (link) {
-    const demand = find((s) => PAY_DEMAND.test(s.replace(COST_SHARE, (clause) => (findLinks(clause).length > 0 ? clause : " "))));
-    if (demand) return { label: "payment demand with an unofficial link", match: link };
-  }
+  if (!link) return null;
+  const pays = said.some((s) => PAY_DEMAND.test(s.replace(COST_SHARE, (clause) => (findLinks(clause).length > 0 ? clause : " "))));
+  if (pays) return { kind: "suspect_link", label: "payment demand with an unofficial link", match: link };
   for (const [k, s] of reachable.entries()) {
     if (!VERIFY_ASK.test(s) && !SECRET_ASK.test(s)) continue;
     const next = reachable[k + 1] ?? "";
     const near = firstUnofficialLink(POINTER.test(next.trim()) ? `${s}\n${next}` : s);
-    if (near) return { label: "asks to verify benefits or log in at an unofficial link", match: near };
+    if (near) return { kind: "suspect_link", label: "asks to verify benefits or log in at an unofficial link", match: near };
   }
   return null;
 }
 
 // Heuristic scam screen over a whole letter, every page together.
-// Returns flags; the pipeline turns them into scam_suspect warnings.
-// Three signals: a payment demand by an untraceable method; a quiet scam
-// (above); or urgency language plus a payment or verification ask plus
-// an unofficial link. A printed sender name never exempts a link: it is
+// Returns at most one flag, the clearest. The pipeline turns "scam" into a
+// scam_suspect warning, and that letter keeps no date. "suspect_link" is a
+// link_suspect warning, and the letter keeps its dates so the reply can
+// name them as claims. A printed sender name never exempts a link: it is
 // unverified evidence. A real agency letter with a plain phone number
 // never matches. These are plain rules on the letter's words. The DNS
 // check in packages/channels only knows hosts already on a blocklist, and
@@ -307,31 +344,9 @@ export function screenScam(text: string): ContentFlag[] {
   if (demand) {
     return [{ kind: "scam", label: "demands payment by gift or prepaid card, wire, crypto or a payment app", match: demand }];
   }
-  const quiet = quietScam(text);
-  if (quiet) return [{ kind: "scam", ...quiet }];
-  const lower = text.toLowerCase();
-  const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
-  if (urgency.length === 0) return [];
-  const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
-  if (!asksPayment) return [];
-  // A real office never tells the person not to contact it.
-  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
-  if (cutOff) {
-    return [{ kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` }];
-  }
-  const suspicious = findLinks(text).filter((l) => {
-    const host = hostOf(l.match);
-    return !host || !isOfficial(host);
-  });
-  if (suspicious.length === 0) return [];
-  return [
-    {
-      kind: "scam",
-      label: "urgent payment or verification ask with an unofficial link",
-      match: suspicious[0]!.match,
-      detail: `urgency words: ${urgency.slice(0, 3).join(", ")}`,
-    },
-  ];
+  const said = saidIn(text);
+  const flag = clearScam(said) ?? urgentScam(text) ?? suspectLink(said);
+  return flag ? [flag] : [];
 }
 
 // Instructions, links and phones in one piece of text. Scams are

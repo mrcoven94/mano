@@ -7,7 +7,7 @@ import { personEngine, requireTurn } from "../lib/person.js";
 
 export default defineTool({
   description:
-    "Track a deadline the person tells you about, such as a renewal or a form due by a date. Deadlines in letters Mano reads are tracked already; do not add those again. Mano then texts the person 14, 7 and 2 days before and on the day, offering to start it; for an interview or hearing, the day before instead of 2 days before. Pass the due date in their words (\"November 12\", \"11/12\") or as YYYY-MM-DD, and a short title naming the task (\"CalFresh renewal\"). Set kind only when it is clearly one of the listed kinds; the text Mano sends names the action only from kind. Confirm the date back in one short sentence.",
+    "Track a deadline the person tells you about, such as a renewal or a form due by a date. Deadlines in letters Mano reads are tracked already; do not add those again, unless Mano told the person to confirm the date with their office and they say the office confirmed it. Mano then texts the person 14, 7 and 2 days before and on the day, offering to start it; for an interview or hearing, the day before instead of 2 days before. Pass the due date in their words (\"November 12\", \"11/12\") or as YYYY-MM-DD, and a short title naming the task (\"CalFresh renewal\"). Set kind only when it is clearly one of the listed kinds; the text Mano sends names the action only from kind. Confirm the date back in one short sentence.",
   inputSchema: z.object({
     title: z.string().min(1).max(120).describe("What is due, as a short noun phrase: \"CalFresh renewal\"."),
     due: z.string().min(1).max(60).describe("The due date in the person's words, or YYYY-MM-DD."),
