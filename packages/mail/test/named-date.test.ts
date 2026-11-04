@@ -15,8 +15,9 @@ const NOTICE = "November 3, 2026";
 const APPEAL = "You must file your appeal within 90 days of the notice date.";
 const YEAR_DATE = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}\b/g;
 
-async function read(text: string, meet: Meet[], other: Other[] = [], marks: string[] = []): Promise<MailReading> {
+async function read(text: string, meet: Meet[], other: Other[] = [], marks: string[] = [], kind?: string): Promise<MailReading> {
   const page = JSON.stringify({
+    ...(kind ? { document_kind: kind } : {}),
     readable: true,
     readability_note: null,
     full_text: text,
@@ -83,9 +84,9 @@ describe("the reader's date, in wording no rule covers, is named as a question",
     expect(said).toContain("It also lists an interview on November 18, 2026. It looks like your deadline is November 20, 2026.");
   });
 
-  it("an appeal date the reader labels is named as a request only when nothing is due", async () => {
+  it("an appeal date the reader labels is never presented as theirs", async () => {
     const a = "To keep payments going, ask for a hearing by November 23, 2026.";
-    expect((await reply(`${HEAD}${a}`, [], [{ date: "November 23, 2026", for: "appeal" }])).text).toContain("It looks like the date to send your request is November 23, 2026.");
+    expect((await reply(`${HEAD}${a}`, [], [{ date: "November 23, 2026", for: "appeal" }])).named).toEqual([]);
     const b = "Return everything by November 20, 2026.";
     const both = await reply(`${HEAD}${a} ${b}`, [{ date: "November 20, 2026", sentence: b }], [{ date: "November 23, 2026", for: "appeal" }]);
     expect(both.named).toEqual(["November 20, 2026"]);
@@ -119,6 +120,42 @@ describe("code checks what the reader says against the letter", () => {
   it("a numeric date is read month first", async () => {
     const s = "The form must clear our gate by 11/09/2026.";
     expect((await reply(`${HEAD}${s}`, [{ date: "11/09/2026", sentence: s }])).text).toContain("November 9, 2026");
+  });
+
+  it.each([
+    ["a clipped quote that drops the negation", "You must not return your form by November 20, 2026.", "return your form by November 20, 2026.", "November 20, 2026"],
+    ["a clipped quote that drops never", "Never send your form by November 20, 2026.", "send your form by November 20, 2026.", "November 20, 2026"],
+    ["a shortened date that drops a past year", "Your packet was needed by November 20, 2025.", "Your packet was needed by November 20", "November 20"],
+    ["a shortened numeric date", "Your packet was needed by 11/20/2025.", "Your packet was needed by 11/20", "11/20"],
+    ["a date cut from a longer number", "Your packet is needed by 11/20/2026.", "Your packet is needed by 11/20/2026.", "1/20/2026"],
+  ])("%s names none", async (_name, written, quote, date) => {
+    const { text: said, named } = await reply(`${HEAD}${written}`, [{ date, sentence: quote }]);
+    expect(named, said).toEqual([]);
+    expect(said).not.toContain("It looks like");
+  });
+
+  it("an if-not negation is the date to meet, even when the quote is clipped", async () => {
+    const written = "If we do not hear from you by November 14, 2026, your coverage ends.";
+    expect((await reply(`${HEAD}${written}`, [{ date: "November 14, 2026", sentence: "hear from you by November 14, 2026" }])).named).toEqual(["November 14, 2026"]);
+  });
+
+  it("a date with no year on the letter still resolves from the notice date", async () => {
+    const written = "Your packet is needed by November 20.";
+    expect((await reply(`${HEAD}${written}`, [{ date: "November 20", sentence: written }])).named).toEqual(["November 20, 2026"]);
+  });
+
+  it("an office closure labeled as an appeal is never shown", async () => {
+    const closed = "Our office is closed on November 20, 2026.";
+    const { text: said, named } = await reply(`${HEAD}${closed}`, [], [{ date: "November 20, 2026", for: "appeal" }]);
+    expect(named, said).toEqual([]);
+  });
+
+  it("an interview date is shown only from a sentence about an interview", async () => {
+    const a = "Return everything by November 20, 2026.";
+    const b = "Our office is closed on November 18, 2026.";
+    const { text: said } = await reply(`${HEAD}${a} ${b}`, [{ date: "November 20, 2026", sentence: a }], [{ date: "November 18, 2026", for: "interview" }]);
+    expect(said).not.toContain("November 18");
+    expect(said).toContain("November 20, 2026");
   });
 
   it("three dates name none: Mano does not pick among them", async () => {
@@ -211,14 +248,14 @@ describe("the vetoes stay rules: a reader that names a date anyway is overruled"
     ["moved to another date", `${HEAD}${TERSE} Your deadline has been moved to December 4, 2026.`, "November 20, 2026", TERSE],
     ["a duty under Do not", `${HEAD}Do not:\n\n- ${TERSE}`, "November 20, 2026", TERSE],
     ["reversed", `${HEAD}${TERSE} Instead, wait for another notice.`, "November 20, 2026", TERSE],
+    ["moved from one date to the next, the old one chosen", `${HEAD}Return your renewal by November 20, 2026. Your deadline has been moved from November 20, 2026 to December 4, 2026.`, "November 20, 2026", "Return your renewal by November 20, 2026."],
+    ["moved from one date to the next, the new one chosen", `${HEAD}Your deadline has been moved from November 20, 2026 to December 4, 2026.`, "December 4, 2026", "Your deadline has been moved from November 20, 2026 to December 4, 2026."],
+    ["moved in numbers", `${HEAD}Return your renewal by November 20, 2026. Your deadline has been moved from 11/20/2026 to 12/04/2026.`, "November 20, 2026", "Return your renewal by November 20, 2026."],
+    ["a date replaced", `${HEAD}Return your renewal by November 20, 2026. A replacement due date is printed below: December 4, 2026.`, "November 20, 2026", "Return your renewal by November 20, 2026."],
+    ["this letter replaces the last", `${HEAD}This notice replaces our last letter. Return your renewal by November 20, 2026.`, "November 20, 2026", "Return your renewal by November 20, 2026."],
   ])("a date a later sentence changes names none: %s", async (_name, body, date, sentence) => {
     const { text: said, named } = await reply(body, [{ date, sentence }]);
     expect(named, said).toEqual([]);
-  });
-
-  it("the new date is named when the letter plainly moves it there", async () => {
-    const s = "Your deadline has been moved from November 20, 2026 to December 4, 2026.";
-    expect((await reply(`${HEAD}${s}`, [{ date: "December 4, 2026", sentence: s }])).named.at(-1)).toBe("December 4, 2026");
   });
 
   it("a planted instruction names no date and warns", async () => {
@@ -274,5 +311,21 @@ describe("the demo letter names its date on every read", () => {
     const answer = answerReading(await read(LETTER, meet));
     expect(answer.deadlines).toEqual([]);
     expect(answer.text).toContain("It looks like your renewal is due November 14, 2026.");
+  });
+});
+
+// A pay stub prints dates that are nobody's duty. When the reader says so, it
+// reads as a pay stub. A duty on it still makes it a letter.
+const readStub = (text: string, marks: string[] = []): Promise<MailReading> => read(text, [], [{ date: "November 6, 2026", for: "other" }], marks, "pay_stub");
+
+describe("a document whose dates are not duties", () => {
+  it("a question with no duty sentence does not make a pay stub a letter", async () => {
+    const reading = await readStub("Harbor Co-op Grocery\nMaria Torres\nPay period: October 19, 2026 to November 1, 2026\nPay date: November 6, 2026\nNet pay $850.00", ["Pay period: October 19, 2026 to November 1, 2026"]);
+    expect(answerReading(reading).text).toMatch(/^This looks like a pay stub/);
+  });
+
+  it("a due date on it still makes it a letter", async () => {
+    const reading = await readStub("Harbor Co-op Grocery\nNet pay $850.00\nYour renewal is due November 20, 2026.");
+    expect(answerReading(reading).text).not.toMatch(/^This looks like a pay stub/);
   });
 });
