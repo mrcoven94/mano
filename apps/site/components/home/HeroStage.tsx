@@ -110,7 +110,7 @@ export default function HeroStage() {
             </span>
           </span>
         </h1>
-        <p className="h-lede">Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Some of this works today and the rest is coming soon. It files only after you say yes, and in this demo only on a practice portal, not a real office.</p>
+        <p className="h-lede">Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Some of this works today and the rest is coming soon. Mano files only after your yes, on a practice portal, not a real office.</p>
         <div className="btn-row h-ctas">
           <TextMano className="btn btn-primary btn-lg" />
           <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
