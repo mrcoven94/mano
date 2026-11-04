@@ -271,10 +271,12 @@ const OFFICE_SENDS = /^\s*(?:we\s+(?:will|may|can)\s+(?:send|text|e-?mail|mail|m
 // have no premium or copay, and only some health programs have an enrollment
 // fee.
 const NO_FEE_AT_ALL = /\bfree\s+of\s+charge\b|\bfee\s+waivers?\b/gi;
+// Evidence of what the person pays, not a payment to the sender.
+const ASKS_FOR_PROOF = /\b(?:proof|evidence|receipts?|cop(?:y|ies)\s+of|show\s+that)\b/i;
 const RENT_CHARGE = /\brent\s+(?:fees?|charges?)\b/gi;
 const ALWAYS_REAL = /\boverpa\w+|\brepay\w*|\bpa(?:y|id)\s+(?:\w+\s+)?back\b|\brent\b|\bchild\s+support\b/i;
 const HEALTH_CHARGE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|(?:family|parent)\s+(?:fee|charge))\b/i;
-const NAMED_REAL_FEE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|deductibles?|family|parent)\s+(?:fees?|charges?)\b/gi;
+const NAMED_REAL_FEE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|family|parent)\s+(?:fees?|charges?)\b/gi;
 const ENROLLMENT_FEE = /\benrollment\s+(?:fee|charge)\b/gi;
 const CHARGES_ENROLLMENT = /\b(?:chip|medicaid|kidscare|peachcare)\b/i;
 const NAMES_FOOD = new RegExp(String.raw`\b${FOOD}\b`, "i");
@@ -397,7 +399,7 @@ function linksIn(text: string, links: string[]): string[] {
 // $39 premium includes a $25 fee to renew" keeps its fee.
 function chargedFor(clause: string, food: boolean, chargesEnrollment: boolean): string | null {
   let rest = clause.replace(NO_FEE_AT_ALL, " ").replace(RENT_CHARGE, " rent ");
-  let real = ALWAYS_REAL.test(rest);
+  let real = ALWAYS_REAL.test(rest) || ASKS_FOR_PROOF.test(rest);
   if (!food) {
     real ||= HEALTH_CHARGE.test(rest);
     rest = rest.replace(NAMED_REAL_FEE, " ");
@@ -439,7 +441,7 @@ function feeToKeep({ sentences, said }: Reading): string | null {
 }
 
 // Asks no real office makes, or a sender that is not one. A link is not
-// needed for any of these, and the letter's dates are not worth repeating.
+// needed for any of these.
 function clearScam(reading: Reading): ContentFlag | null {
   const { sentences, links, said } = reading;
   const scam = (label: string, match: string): ContentFlag => ({ kind: "scam", label, match });
@@ -448,8 +450,9 @@ function clearScam(reading: Reading): ContentFlag | null {
   const lookalike = said.match(LOOKALIKE_AGENCY);
   if (lookalike) return scam("names an agency that does not exist", lookalike[0]);
   const secret = sentences.find((s) => {
-    const whole = s.clauses.join(" ");
-    return !/\bfax/i.test(whole) && !OFFICE_SENDS.test(whole) && SECRET_BY_MESSAGE.test(whole);
+    // A fax is a real way to send one, and only the clause that says so.
+    const whole = s.clauses.filter((c) => !/\bfax/i.test(c)).join(" ");
+    return !OFFICE_SENDS.test(whole) && SECRET_BY_MESSAGE.test(whole);
   });
   if (secret) return scam("asks for a Social Security number, PIN or password by message", secret.original);
   const fee = feeToKeep(reading);
@@ -510,9 +513,9 @@ function collapseWhitespace(text: string): string {
 
 // Heuristic scam screen over a whole letter, every page together.
 // Returns at most one flag, the clearest. The pipeline turns "scam" into a
-// scam_suspect warning, and that letter keeps no date. "suspect_link" is a
-// link_suspect warning, and the letter keeps its dates so the reply can
-// name them as claims. A printed sender name never exempts a link: it is
+// scam_suspect warning, and "suspect_link" into a link_suspect warning. Mano
+// holds no date from either, and the reply names one only as a claim. A
+// printed sender name never exempts a link: it is
 // unverified evidence. A real agency letter with a plain phone number
 // never matches. These are plain rules on the letter's words. The DNS
 // check in packages/channels only knows hosts already on a blocklist, and

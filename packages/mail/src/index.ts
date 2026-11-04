@@ -847,8 +847,25 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
 
     // A letter flagged as a scam gets the scam warning and nothing that
     // treats its dates as real: no deadline, date to know or deadline
-    // question.
+    // question. The warning keeps the date it states, so a false alarm can
+    // still say it as a claim. A counted date is never named: neither the
+    // date it counts from nor the result is the letter's own deadline.
     if (warnings.some((w) => w.letterId === letterId && w.kind === "scam_suspect")) {
+      const claimed = new Set<string>();
+      let counted = false;
+      for (const d of datesToKnow) if (d.letterId === letterId) claimed.add(d.date);
+      for (const q of questions) {
+        if (q.letterId !== letterId) continue;
+        const candidates = [...(q.candidates ?? []), ...(q.proposal?.others ?? [])];
+        for (const c of candidates) {
+          for (const date of c.dates) claimed.add(date);
+          counted ||= /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i.test(c.sentence);
+        }
+        if (q.proposal) claimed.add(q.proposal.dueDate);
+        counted ||= Boolean(q.proposal?.count);
+      }
+      const claim = counted || claimed.size > 1 ? "several" : [...claimed][0];
+      for (const w of warnings) if (w.letterId === letterId && w.kind === "scam_suspect" && claim) w.claimedDate = claim;
       const drop = <T extends { letterId: string | null }>(list: T[], gone: (item: T) => boolean): void => {
         for (let k = list.length - 1; k >= 0; k--) if (list[k]!.letterId === letterId && gone(list[k]!)) list.splice(k, 1);
       };
