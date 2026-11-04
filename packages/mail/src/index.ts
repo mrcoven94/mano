@@ -109,7 +109,7 @@ import {
 } from "./gate.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
-import { ModelFailure, readingModelFor } from "./model.js";
+import { ModelFailure, failureKindOf, readingModelFor } from "./model.js";
 import type {
   Box,
   Cited,
@@ -433,6 +433,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       warnings.push({
         kind: "model_error",
         message: `Reading failed for a page in ${page.file} (${shortMessage(read.err)}).`,
+        failure: read.err instanceof PageReadFailed ? read.err.kind : failureKindOf(read.err),
         letterId: null,
         citation: null,
       });

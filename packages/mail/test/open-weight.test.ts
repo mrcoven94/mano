@@ -296,6 +296,7 @@ describe("a service failure on the open-weight path is a failed read, never a ba
     const { reading, sent } = await unread([answering(content)]);
     expect(sent).toHaveLength(3);
     expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.failure).toBe("not_a_reading");
   });
 
   it("an answer cut off at the token cap, even one that parses", async () => {
@@ -314,6 +315,7 @@ describe("a service failure on the open-weight path is a failed read, never a ba
     expect(sent).toHaveLength(1);
     expectFailedRead(reading);
     expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/402 \(billing is not set up/);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.failure).toBe("billing");
   });
 
   it("a body that is not JSON", async () => {

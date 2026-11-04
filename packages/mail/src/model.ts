@@ -143,6 +143,41 @@ export interface MetaClientOptions {
   synthetic?: boolean;
 }
 
+// Why a model call failed, in words Mail chose. These reach logs, so
+// nothing from a provider's response can ever become one.
+export type ModelFailureKind =
+  | "bad_request"
+  | "auth"
+  | "billing"
+  | "not_found"
+  | "too_large"
+  | "rate_limited"
+  | "server"
+  | "other_status"
+  | "unreadable_response"
+  | "refused"
+  | "no_answer"
+  | "not_completed"
+  | "timeout"
+  | "no_connection"
+  | "budget"
+  | "other";
+
+const KIND_OF_STATUS: Record<number, ModelFailureKind> = {
+  400: "bad_request",
+  401: "auth",
+  402: "billing",
+  403: "auth",
+  404: "not_found",
+  413: "too_large",
+  422: "bad_request",
+  429: "rate_limited",
+};
+
+function kindOfStatus(status: number): ModelFailureKind {
+  return KIND_OF_STATUS[status] ?? (status >= 500 ? "server" : "other_status");
+}
+
 class RetryableStatus extends Error {
   readonly status: number;
   constructor(status: number) {
@@ -158,17 +193,26 @@ class RetryableStatus extends Error {
 // counts against a file's budget.
 export class ModelFailure extends Error {
   readonly billed: { usage: ResponsesResult["usage"]; model: string } | null;
-  constructor(message: string, billed: ModelFailure["billed"] = null) {
+  readonly kind: ModelFailureKind;
+  constructor(message: string, kind: ModelFailureKind, billed: ModelFailure["billed"] = null) {
     super(message);
+    this.kind = kind;
     this.billed = billed;
   }
 }
 
+export function failureKindOf(err: unknown): ModelFailureKind {
+  if (err instanceof ModelFailure) return err.kind;
+  if (err instanceof RetryableStatus) return kindOfStatus(err.status);
+  if (err instanceof BudgetExceeded) return "budget";
+  return "other";
+}
+
 function safeError(err: unknown): Error {
   if (err instanceof ModelFailure || err instanceof RetryableStatus) return err;
-  if (err instanceof Error && err.name === "AbortError") return new ModelFailure("Model request timed out.");
-  if (err instanceof TypeError) return new ModelFailure("Model request failed: no connection.");
-  return new ModelFailure("Model request failed.");
+  if (err instanceof Error && err.name === "AbortError") return new ModelFailure("Model request timed out.", "timeout");
+  if (err instanceof TypeError) return new ModelFailure("Model request failed: no connection.", "no_connection");
+  return new ModelFailure("Model request failed.", "other");
 }
 
 function isRetryable(err: unknown): boolean {
@@ -240,13 +284,13 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
         clearTimeout(timer);
         await res.body?.cancel().catch(() => undefined);
         if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
-        throw new ModelFailure(failed(res.status));
+        throw new ModelFailure(failed(res.status), kindOfStatus(res.status));
       }
       try {
         return await res.json();
       } catch {
         // A parse error quotes the body it could not read.
-        throw new ModelFailure(`Model response was not readable: ${res.status}`);
+        throw new ModelFailure(`Model response was not readable: ${res.status}`, "unreadable_response");
       } finally {
         clearTimeout(timer);
       }
@@ -267,8 +311,8 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
 // A 200 can still carry no answer. Both are service failures, not a bad
 // photo, and a refusal's own words are never repeated.
 function answerOr(text: string, refused: boolean, billed: ModelFailure["billed"]): string {
-  if (refused) throw new ModelFailure("Model refused the request.", billed);
-  if (text.trim() === "") throw new ModelFailure("Model returned no answer.", billed);
+  if (refused) throw new ModelFailure("Model refused the request.", "refused", billed);
+  if (text.trim() === "") throw new ModelFailure("Model returned no answer.", "no_answer", billed);
   return text;
 }
 
@@ -305,7 +349,7 @@ export class MetaModelClient implements ModelClient {
     const billed = { usage, model: req.model };
     const status = (data as { status?: unknown })?.status;
     if (typeof status === "string" && status !== "completed") {
-      throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`, billed);
+      throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`, "not_completed", billed);
     }
     return { text: answerOr(extractOutputText(data), hasRefusalPart(data), billed), model: req.model, usage, raw: data };
   }
@@ -364,7 +408,7 @@ function openWeightText(data: unknown, billed: ModelFailure["billed"]): string {
   const choice = (Array.isArray(choices) && choices.length === 1 ? choices[0] : null) as { finish_reason?: unknown; message?: { content?: unknown; refusal?: unknown } } | null;
   const message = choice?.message;
   const refused = typeof message?.refusal === "string" && message.refusal.trim() !== "";
-  if (!choice || (choice.finish_reason !== "stop" && !refused)) throw new ModelFailure("Model run not completed.", billed);
+  if (!choice || (choice.finish_reason !== "stop" && !refused)) throw new ModelFailure("Model run not completed.", "not_completed", billed);
   return answerOr(typeof message?.content === "string" ? message.content : "", refused, billed);
 }
 
