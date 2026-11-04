@@ -125,7 +125,7 @@ export class AgentResponder implements Responder {
 
   // Asks the agent for the words in stored voice notes. Any failure is no
   // words: Channels then says it could not listen.
-  async listen(notes: StoredPhoto[], generation: number): Promise<string | null> {
+  async listen(notes: StoredPhoto[], generation: number): Promise<{ text: string; missed: boolean }> {
     try {
       const raw = JSON.stringify({
         handleHash: this.handleHash,
@@ -144,11 +144,11 @@ export class AgentResponder implements Responder {
         },
         body: raw,
       });
-      const data = (await res.json().catch(() => null)) as { text?: unknown } | null;
+      const data = (await res.json().catch(() => null)) as { text?: unknown; missed?: unknown } | null;
       const text = res.ok && typeof data?.text === "string" ? data.text.trim() : "";
-      return text || null;
+      return { text, missed: !text || data?.missed === true };
     } catch {
-      return null;
+      return { text: "", missed: true };
     }
   }
 

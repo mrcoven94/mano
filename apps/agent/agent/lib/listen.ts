@@ -27,7 +27,6 @@ const MAX_NOTES = 5;
 // minutes, as 24 kHz mono 16-bit WAV, and about the same as compressed audio.
 const MAX_WAV_BYTES = 10 * 60 * 48_000 + 44;
 const MAX_COMPRESSED_BYTES = 6_000_000;
-const MAX_TEXT_CHARS = 4_000;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const NO_SPEECH = "NO_SPEECH";
 const LISTEN_PROMPT =
@@ -159,8 +158,9 @@ export async function transcribe(bytes: Uint8Array, mimeType: string, deadline: 
 }
 
 // Channels' signed request to hear a turn's voice notes: their document IDs,
-// the generation and a grant, as a turn carries them. Answers { text }, with
-// "" when there is nothing to pass on.
+// the generation and a grant, as a turn carries them. Answers { text, missed }:
+// every word heard, never trimmed here because Channels checks all of them for
+// a crisis first, and whether any note gave no words.
 export async function handleListen(request: Request, deps: ListenDeps & { secret: string | undefined; engine: Engine | null }): Promise<Response> {
   const raw = new Uint8Array(await request.arrayBuffer());
   const check = verifyRequest(deps.secret, request.headers.get(TIMESTAMP_HEADER), request.headers.get(SIGNATURE_HEADER), raw);
@@ -189,15 +189,18 @@ export async function handleListen(request: Request, deps: ListenDeps & { secret
   if (!engine) return Response.json({ text: "", reason: "engine" }, { status: 503 });
   const deadline = (deps.now ?? Date.now)() + LISTEN_BUDGET_MS;
   const heard: string[] = [];
+  let missed = false;
   for (const doc of documents as { id: string; mimeType: string }[]) {
     try {
       const bytes = await engine.getDocument(doc.id, Math.max(1, deadline - Date.now()));
       const words = bytes ? await transcribe(bytes, doc.mimeType, deadline, deps) : null;
       if (words) heard.push(words);
+      else missed = true;
     } catch (err) {
+      missed = true;
       console.warn(JSON.stringify({ type: "mano_listen_failed", via: "engine", status: err instanceof EngineError ? err.status : null }));
     }
   }
   console.log(JSON.stringify({ type: "mano_listened", notes: documents.length, heard: heard.length }));
-  return Response.json({ text: heard.join("\n").slice(0, MAX_TEXT_CHARS) });
+  return Response.json({ text: heard.join("\n"), missed });
 }

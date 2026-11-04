@@ -162,14 +162,14 @@ describe("Channels asking to hear a turn's notes", () => {
     const { fetchFn } = providers({ meta: metaSays("hello there") });
     const res = await handleListen(signed(asked()), { ...deps({ fetchFn }), secret: SECRET, engine: client() });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ text: "hello there" });
+    expect(await res.json()).toEqual({ text: "hello there", missed: false });
   });
 
   it("refuses a request it cannot verify, and another person's grant", async () => {
     const { calls, fetchFn } = providers({ meta: metaSays("hello there") });
     expect((await handleListen(signed(asked(), "wrong"), { ...deps({ fetchFn }), secret: SECRET, engine: client() })).status).toBe(401);
     const other = await handleListen(signed({ ...asked(), handleHash: "a".repeat(64) }), { ...deps({ fetchFn }), secret: SECRET, engine: client() });
-    expect(await other.json()).toEqual({ text: "" });
+    expect(await other.json()).toEqual({ text: "", missed: true });
     expect(calls).toHaveLength(0);
   });
 
@@ -181,6 +181,26 @@ describe("Channels asking to hear a turn's notes", () => {
     log.mockRestore();
     const down = providers({ meta: new Response("no", { status: 402 }), open: new Response("no", { status: 402 }) });
     const res = await handleListen(signed(asked()), { ...deps({ fetchFn: down.fetchFn }), secret: SECRET, engine: client() });
-    expect(await res.json()).toEqual({ text: "" });
+    expect(await res.json()).toEqual({ text: "", missed: true });
+  });
+
+  it("passes on every word of a long note, so Channels can check all of it for a crisis", async () => {
+    const said = `${"My appointment is on Friday. ".repeat(160)}I want to kill myself`;
+    const { fetchFn } = providers({ meta: metaSays(said) });
+    const res = await handleListen(signed(asked()), { ...deps({ fetchFn }), secret: SECRET, engine: client() });
+    expect(await res.json()).toEqual({ text: said, missed: false });
+  });
+
+  it("with two notes where one fails, keeps the words and says one was missed", async () => {
+    const other = "g0t1i1-0123456789ab";
+    engine.putDocument(personIdFor(HANDLE), other, AUDIO_BYTES);
+    let call = 0;
+    const fetchFn = (async () => (++call === 1 ? metaSays("first note") : new Response("no", { status: 500 }))) as unknown as typeof fetch;
+    const res = await handleListen(signed({ ...asked(), documents: [{ id: DOC, mimeType: "audio/mp4" }, { id: other, mimeType: "audio/mp4" }] }), {
+      ...deps({ fetchFn, env: { META_MODEL_API_KEY: "test-meta" } }),
+      secret: SECRET,
+      engine: client(),
+    });
+    expect(await res.json()).toEqual({ text: "first note", missed: true });
   });
 });

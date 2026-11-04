@@ -112,9 +112,9 @@ export interface Responder {
   // True when it reads the turn's stored photos (the agent). Others only
   // hear that a photo came and was not read.
   readonly readsPhotos?: boolean;
-  // The words in voice notes already stored, or null when nothing could
-  // listen. Others cannot listen at all.
-  listen?(notes: StoredPhoto[], generation: number): Promise<string | null>;
+  // The words in voice notes already stored, all of them, and whether any
+  // note gave none. Others cannot listen at all.
+  listen?(notes: StoredPhoto[], generation: number): Promise<{ text: string; missed: boolean }>;
   respond(turn: TurnInput, hooks?: RespondHooks): Promise<ResponderResult>;
 }
 

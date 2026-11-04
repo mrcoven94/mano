@@ -1107,10 +1107,13 @@ export class ConversationRunner {
       const saved = stored.filter((d) => !isVoiceNote(d.mimeType));
       // What a voice note says is a text like any other, so it goes through
       // the same crisis floor, and the crisis line still goes out first.
-      const heard = voiceNotes.length > 0 ? ((await this.deps.responder.listen?.(voiceNotes, generation)) ?? null) : null;
+      const listened = voiceNotes.length > 0 ? ((await this.deps.responder.listen?.(voiceNotes, generation)) ?? { text: "", missed: true }) : null;
+      const heard = listened?.text || null;
       this.checkGeneration(generation);
-      if (voiceNotes.length > 0) logger.info("voice_note", { handle: this.logHandle(), turn, notes: voiceNotes.length, heard: heard !== null });
+      if (listened) logger.info("voice_note", { handle: this.logHandle(), turn, notes: voiceNotes.length, heard: heard !== null, missed: listened.missed });
       if (heard) {
+        // Only what the agent reads is cut to the cap. The crisis check below
+        // reads every word heard.
         turnText = (turnText ? `${turnText}\n${heard}` : heard).slice(0, TURN_TEXT_CAP);
         if (!crisis) {
           const gate = crisisGate(heard);
@@ -1159,8 +1162,8 @@ export class ConversationRunner {
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...withFormat(answered));
-          // Words came with a voice note nobody could hear: say so after the reply.
-          if (voiceNotes.length > 0 && !heard && !crisis) bubbles.push({ part: Math.max(0, ...bubbles.map((b) => b.part)) + 1, tag: "", text: VOICE_UNHEARD_TEXT });
+          // A note could not be heard, beside words that were: say so after the reply.
+          if (listened?.missed && !crisis) bubbles.push({ part: Math.max(0, ...bubbles.map((b) => b.part)) + 1, tag: "", text: VOICE_UNHEARD_TEXT });
           if (tapback && target && chatId && answered.length > 0) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }

@@ -9,14 +9,14 @@ const CAF = ascii("caff\u0000\u0001\u0000\u0000desc synthetic voice note");
 const M4A = ascii("\u0000\u0000\u0000\u0020ftypM4A \u0000\u0000\u0000\u0000 synthetic");
 
 // A responder that hears what the test says, and records what it was given.
-function hearing(heard: string | null, reply = "Got it, here is what happens next.") {
+function hearing(heard: string | null, reply = "Got it, here is what happens next.", missed = heard === null) {
   const turns: TurnInput[] = [];
   const asked: StoredPhoto[][] = [];
   const responder = Object.assign(new StandInResponder([reply]), {
     readsPhotos: true as const,
     async listen(notes: StoredPhoto[]) {
       asked.push(notes);
-      return heard;
+      return { text: heard ?? "", missed };
     },
   });
   const respond = responder.respond.bind(responder);
@@ -85,6 +85,24 @@ describe("a voice note on the text line", () => {
     expect(turns[0]).toMatchObject({ crisis: true });
     expect(sends[0]).toMatch(/988/);
     expect(sends.filter((s) => s === sends[0])).toHaveLength(1);
+  });
+
+  it("checks every word for a crisis, even past what the agent reads", async () => {
+    const said = `${"My appointment is on Friday. ".repeat(160)}I want to kill myself`;
+    const { responder, turns } = hearing(said);
+    const { sends } = await voiceNote(responder);
+    expect(sends[0]).toMatch(/988/);
+    expect(turns[0]).toMatchObject({ crisis: true });
+    expect(turns[0]!.texts[0]!.length).toBeLessThanOrEqual(4000);
+    expect(turns[0]!.texts[0]).not.toContain("kill myself");
+  });
+
+  it("with one of two notes unheard, answers what it heard and says so", async () => {
+    const { responder, turns } = hearing("my renewal is due friday", undefined, true);
+    const { sends } = await voiceNote(responder);
+    expect(turns[0]!.texts).toEqual(["my renewal is due friday"]);
+    expect(sends.join("\n")).toContain("Got it");
+    expect(sends.at(-1)).toBe(VOICE_UNHEARD_TEXT);
   });
 
   it("says plainly it could not listen when nothing could, without the model", async () => {
