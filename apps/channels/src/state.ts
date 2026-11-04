@@ -271,6 +271,24 @@ export class ChannelStateDO implements DurableObject {
       const chat = url.searchParams.get("chat") ?? "";
       return Response.json({ handleHash: chat ? this.ledger().routeFor(chat) : null });
     }
+    if (url.pathname === "/internal/email-route") {
+      // Which conversation a private email address belongs to. Separate
+      // from the spend ledger: nothing else reads this table.
+      this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS email_routes (token TEXT PRIMARY KEY, handle_hash TEXT NOT NULL)");
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as { token?: unknown; handleHash?: unknown };
+        if (typeof body.token !== "string" || typeof body.handleHash !== "string") return new Response("Bad route.", { status: 400 });
+        this.ctx.storage.sql.exec("INSERT OR REPLACE INTO email_routes (token, handle_hash) VALUES (?, ?)", body.token, body.handleHash);
+        return Response.json({ ok: true });
+      }
+      const token = url.searchParams.get("token") ?? "";
+      if (request.method === "DELETE") {
+        this.ctx.storage.sql.exec("DELETE FROM email_routes WHERE token = ?", token);
+        return Response.json({ ok: true });
+      }
+      const row = this.ctx.storage.sql.exec("SELECT handle_hash FROM email_routes WHERE token = ?", token).toArray()[0] as { handle_hash: string } | undefined;
+      return Response.json({ handleHash: row?.handle_hash ?? null });
+    }
     if (request.method === "POST" && url.pathname === "/internal/seen-check") {
       const body = (await request.json().catch(() => ({}))) as { ids?: unknown };
       const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === "string") : [];

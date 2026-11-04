@@ -13,6 +13,7 @@ export default defineConfig({
           MANO_HANDLE_PEPPER: "test-pepper-not-real",
           ENCRYPTION_KEK_B64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           MANO_TEXT_NUMBER: "+18005550000",
+          MANO_EMAIL_DOMAIN: "inbox.example.test",
           // A closed port: Engine never answers, so a delete stays pending.
           MANO_ENGINE_URL: "http://127.0.0.1:9",
           MANO_ENGINE_CHANNELS_TOKEN: "test-engine-channels-token-not-real",

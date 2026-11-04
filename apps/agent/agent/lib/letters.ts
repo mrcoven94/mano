@@ -13,6 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
+import { isEmailDocument } from "@mano/protocol";
 import { answerReading, readMail, type HeldDeadline, type MailReading, type ModelClient } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
@@ -29,6 +30,7 @@ const HOLD_RESERVE_MS = 5_000;
 
 const UNSAVED = "I could not save your photo, so I have not read it. Please send it again.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
+const EMAIL_FAILED = "I saved that email but could not finish reading it just now. Send me a photo of it, or ask the office to send it again.";
 
 export interface LetterReply {
   // How the reply opens: Mano's words from the letter's cited fields.
@@ -143,9 +145,13 @@ const DOCUMENTS_SHOWN = 5;
 // leaves a remembered fact, so the note points there.
 export function documentsNote(documents: EngineDocument[]): string | null {
   if (documents.length === 0) return null;
-  const lines = documents.slice(0, DOCUMENTS_SHOWN).map((d) => `- ${d.label}: ${d.filing === "fileable" ? "can be attached to a filing" : "cannot be attached to a filing"}.`);
+  const lines = documents.slice(0, DOCUMENTS_SHOWN).map((d) =>
+    isEmailDocument(d.id)
+      ? `- ${d.label}: came by email, so it cannot be attached to a filing or sent.`
+      : `- ${d.label}: ${d.filing === "fileable" ? "can be attached to a filing" : "cannot be attached to a filing"}.`,
+  );
   return [
-    "Photos and files this person sent, which Mano has on file, newest first:",
+    "Photos and files Mano has on file for this person, newest first:",
     ...lines,
     'Each of these arrived, even one Mano could not read, so never say one did not arrive or was not received. What Mano read from a photo is in what you remember, as "From a letter photo". If nothing there comes from it, say it is on file and you could not read it, and never guess what it says.',
   ].join("\n");
@@ -185,6 +191,7 @@ export async function readTextedPhotos(
   if (photos.length === 0) return { text: UNSAVED, read: false };
   const started = Date.now();
   const deadline = deadlineAt - HOLD_RESERVE_MS;
+  const emailed = photos.some((photo) => isEmailDocument(photo.id));
   let text: string;
   let read = false;
   try {
@@ -196,8 +203,12 @@ export async function readTextedPhotos(
       if (bytes) files.push({ bytes, mimeType: photo.mimeType, name: photo.id });
     }
     if (files.length === 0) throw new Error("No stored photo.");
+    // A part of an email that did not come back is a part not read.
+    if (emailed && files.length < photos.length) {
+      for (const file of files) if (!file.mimeType.includes("truncated=")) file.mimeType += "; truncated=yes";
+    }
     const reading = await Promise.race([
-      readMail(files, { personId: engine.personId, synthetic: false, model: until(model, deadline) }),
+      readMail(files, { personId: engine.personId, synthetic: false, model: until(model, deadline), wholeEmail: emailed }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline + 2_000 - Date.now())).unref?.()),
     ]);
     if (!reading) throw new Error("Reading timed out.");
@@ -207,7 +218,7 @@ export async function readTextedPhotos(
     const answer = answerReading(reading);
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt), markLetters(engine, reading, deadlineAt)]);
-    text = [answer.text, ...held].join(" ");
+    text = [!read && emailed ? EMAIL_FAILED : answer.text, ...held].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
@@ -216,7 +227,7 @@ export async function readTextedPhotos(
     console.log(JSON.stringify({ type: "mano_letters_read", photos: files.length, letters: reading.letters.length, held: answer.deadlines.length, asked: reading.questions.map((q) => q.kind), failed: reading.warnings.flatMap((w) => (w.failure ? [w.failure] : [])), latencyMs: Date.now() - started }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
-    text = FAILED;
+    text = emailed ? EMAIL_FAILED : FAILED;
   }
   return { text, read };
 }

@@ -74,3 +74,6 @@ MANO_REACTIONS_ENABLED = "true"
 #   photos in the person's Engine documents and removes a deleted
 #   conversation's agent state) and MANO_ENGINE_SEND_SECRET (verifies
 #   Engine's reminder deliveries on /internal/agent-send only)
+# Email inbox: MANO_EMAIL_DOMAIN (plain var, such as inbox.example.com).
+#   Set it only once Email Routing sends that domain's mail to this Worker
+#   (src/email.ts); until then Mano offers no address and refuses all mail.

@@ -1,4 +1,4 @@
-import { canonicalJson } from "@mano/protocol";
+import { canonicalJson, isEmailDocument } from "@mano/protocol";
 import { sha256Hex, bytesToBase64 } from "../hash.js";
 import { checkLinkSafety, extractHttpUrls, type LinkBlockReason } from "../link-safety.js";
 import { approvalWindow, evaluatePolicy } from "./policy.js";
@@ -713,6 +713,12 @@ export class ActionGateway {
       return { status: "blocked", reason: "Policy blocks this action." };
     }
 
+    // Anyone can email a person's address, so what came that way is never
+    // sent, whichever path asks. It is not offered as a question at all.
+    if (req.documentId && isEmailDocument(req.documentId)) {
+      this.store.audit({ event: "gateway.block", type: req.type, reason: "email_document" });
+      return { status: "blocked", reason: "A document that came by email cannot be sent." };
+    }
     const [blockedLink, docRead] = await this.linksAndDocument(req);
     if (!docRead.ok) return docRead.result;
     if (blockedLink) return this.linkBlocked(blockedLink);

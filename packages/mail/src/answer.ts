@@ -189,6 +189,7 @@ const CHECK_WITH_OFFICE = "Check with your office, at a phone number or office y
 const CONFIRMED_THEN_TELL = "If they confirm it, tell me and I will remind you.";
 const claimOf = (iso: string): string => `The letter claims a deadline of ${spoken(iso)}, and I have not confirmed it.`;
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
+const TRUNCATED = "I could not read all of this email, so I did not save a date from it. Ask the office for the dates.";
 const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
 const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?";
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
@@ -267,6 +268,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(`It asks you to send: ${listOf(send)}.`);
   if (warnings.some((w) => w.kind === "instruction_in_content")) lines.push(PLANTED);
+  if (reading.questions.some((q) => q.letterId === letter.id && q.kind === "text_truncated")) lines.push(TRUNCATED);
   lines.push(OFFICIAL);
   // The question goes last, so the reply ends on the one thing to answer.
   if (ask) lines.push(ask);
@@ -286,7 +288,9 @@ export function answerReading(reading: MailReading): MailAnswer {
   const answers = read.map((letter) => letterAnswer(reading, letter));
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `Letter ${i + 1}. ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
-  if (missed) paragraphs.push("I could not read part of what you sent. Send that photo again if it had another letter.");
+  // A letter that already says not all of it was read has said this.
+  const said = reading.questions.some((q) => q.kind === "text_truncated");
+  if (missed && !said) paragraphs.push("I could not read part of what you sent. Send that photo again if it had another letter.");
   return {
     outcome: "read",
     text: paragraphs.join("\n\n"),

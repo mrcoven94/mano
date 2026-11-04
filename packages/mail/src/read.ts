@@ -4,7 +4,7 @@
 // reference number when that is unambiguous, otherwise with one small
 // model call over the page summaries.
 
-import { ModelFailure, failureKindOf, readingModelFor, type ModelClient, type ModelFailureKind, type ResponsesResult } from "./model.js";
+import { ModelFailure, failureKindOf, readingModelFor, type ModelClient, type ModelContent, type ModelFailureKind, type ResponsesResult } from "./model.js";
 import { clampBox } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -138,6 +138,8 @@ const READ_SYSTEM =
   "When the page is too blurry, dark or cut off to read, set readable false and say what is wrong.";
 
 const READ_USER = "Read this page of mail and extract its fields.";
+const READ_TEXT_USER =
+  "This page of mail is an email's text, between the email tags, not an image. Extract its fields, copying each one exactly from the text, with [0, 0, 1000, 1000] for every box.";
 
 function toBox(v: unknown): Box | null {
   if (!Array.isArray(v) || v.length < 4) return null;
@@ -303,8 +305,73 @@ export class PageReadFailed extends Error {
   }
 }
 
-export async function readPage(
+export function readPage(
   pageJpeg: Buffer,
+  model: ModelClient,
+  opts: { synthetic: boolean; maxAttempts?: number; deadline?: number },
+): Promise<PageExtraction> {
+  return readContent(
+    [
+      { type: "input_text", text: READ_USER },
+      { type: "input_image", image_url: `data:image/jpeg;base64,${pageJpeg.toString("base64")}`, detail: "high" },
+    ],
+    model,
+    opts,
+  );
+}
+
+// An email's text is its own page: there is nothing to box, so every field
+// the model names is boxed to the whole page, and the transcription is the
+// text itself. The model cannot add words, since a field not found in the
+// text is dropped by verifyExtraction like any other.
+export const WHOLE_PAGE: Box = { ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 };
+
+export async function readTextPage(
+  text: string,
+  model: ModelClient,
+  opts: { synthetic: boolean; maxAttempts?: number; deadline?: number },
+): Promise<PageExtraction> {
+  const page = await readContent(
+    [
+      { type: "input_text", text: READ_TEXT_USER },
+      { type: "input_text", text: `<email>\n${text.replace(/<\/email/gi, "< /email")}\n</email>` },
+    ],
+    model,
+    opts,
+  );
+  const boxed = (field: FieldBox): FieldBox => ({ text: field.text, box: field.text ? WHOLE_PAGE : null });
+  const extra = page.extraLetter;
+  return {
+    ...page,
+    fullText: text,
+    sender: boxed(page.sender),
+    program: boxed(page.program),
+    subject: boxed(page.subject),
+    asked: page.asked.map(boxed),
+    deadlines: page.deadlines.map(boxed),
+    consequence: boxed(page.consequence),
+    referenceNo: boxed(page.referenceNo),
+    noticeDate: boxed(page.noticeDate),
+    phones: page.phones.map(boxed),
+    links: page.links.map(boxed),
+    addresses: page.addresses.map(boxed),
+    pageMarker: boxed(page.pageMarker),
+    extraLetter: extra && {
+      sender: boxed(extra.sender),
+      program: boxed(extra.program),
+      subject: boxed(extra.subject),
+      asked: extra.asked.map(boxed),
+      deadlines: extra.deadlines.map(boxed),
+      referenceNo: boxed(extra.referenceNo),
+      noticeDate: boxed(extra.noticeDate),
+      phones: extra.phones.map(boxed),
+      links: extra.links.map(boxed),
+    },
+  };
+}
+
+async function readContent(
+  content: ModelContent[],
   model: ModelClient,
   opts: { synthetic: boolean; maxAttempts?: number; deadline?: number },
 ): Promise<PageExtraction> {
@@ -331,13 +398,7 @@ export async function readPage(
         store: false,
         input: [
           { role: "system", content: [{ type: "input_text", text: READ_SYSTEM }] },
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: READ_USER },
-              { type: "input_image", image_url: `data:image/jpeg;base64,${pageJpeg.toString("base64")}`, detail: "high" },
-            ],
-          },
+          { role: "user", content },
         ],
         text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
         // Two stacked letters need room for both transcriptions.

@@ -1,7 +1,8 @@
 // mano-channels: the only part of Mano that talks to a messaging
 // provider. Webhook ingress verifies and enqueues; the queue consumer
 // routes events to one ConversationDO per handle; a cron reconciles
-// anything the webhook missed through the same queue.
+// anything the webhook missed through the same queue. The email handler
+// takes letters sent to a person's private address (email.ts).
 import { ENGINE_SEND_SIGNATURE_HEADER, ENGINE_SEND_TIMESTAMP_HEADER, verifyEngineSend } from "@mano/protocol";
 import {
   ATTACHMENT_RETENTION_MS,
@@ -20,6 +21,7 @@ import {
 } from "@mano/channels";
 import type { Env } from "./env.js";
 import { globalStateStub } from "./conversation.js";
+import { handleEmail } from "./email.js";
 import { R2FileStore, type FileStore } from "./files.js";
 
 export { ConversationDO } from "./conversation.js";
@@ -441,6 +443,10 @@ export default {
       return Response.json({ ok: true });
     }
     return new Response("Not found.", { status: 404 });
+  },
+
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+    await handleEmail(message, env, globalStateStub(env));
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {

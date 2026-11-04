@@ -12,6 +12,8 @@
 //   PATCH /documents/:id  { kind, generation } what Mail found it to be;
 //                         404 when no such document, 409 when a delete
 //                         moved past the generation
+import { isEmailDocument } from "@mano/protocol";
+
 import { AgentStateInputError, currentGeneration, isGeneration } from "./agents/agent-state.js";
 import { CURRENT_GENERATION } from "./gateway/sql-store.js";
 import type { DocumentFiling, Executor } from "./gateway/types.js";
@@ -118,7 +120,7 @@ export function listDocuments(sql: SqlExec, timeZone: string, executor: Pick<Exe
       kind: r.kind,
       mediaType: r.media_type,
       receivedAt: r.received_at,
-      label: `the ${noun} you sent on ${dayIn(r.received_at, timeZone)}`,
+      label: `the ${noun} ${isEmailDocument(r.id) ? "that came by email" : "you sent"} on ${dayIn(r.received_at, timeZone)}`,
       generation: Number(r.generation),
       sizeBytes,
       filing: executor.documentFiling?.({ mediaType: r.media_type, sizeBytes }) ?? "fileable",

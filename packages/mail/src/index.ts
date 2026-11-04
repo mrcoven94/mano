@@ -17,6 +17,10 @@
 // returns the recorded stand-in, which only answers explicitly
 // recorded requests and fails closed otherwise.
 //
+// A text/plain file (an email's words) skips decoding and segmenting: it is
+// one page whose transcription is the text itself, and every step after
+// that is the same as for a photo.
+//
 // With MANO_MODEL_PROVIDER=openrouter and OPENROUTER_API_KEY, every page
 // is read instead by Meta's open-weight Muse Spark Open on zero-retention
 // endpoints, for use while the Meta Model API is down. SAM 3.1 runs only
@@ -85,6 +89,8 @@ import {
   groupWithModel,
   PageReadFailed,
   readPage,
+  readTextPage,
+  WHOLE_PAGE,
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
@@ -140,6 +146,8 @@ export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, t
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 
 const MAX_FILES = 10;
+// What stands in for the crop of a page that was never an image.
+const TEXT_PAGE_IMAGE: NormalizedImage = { buffer: Buffer.alloc(0), width: 1000, height: 1000 };
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const VIDEO_FPS = 1;
@@ -156,6 +164,8 @@ interface PipelinePage {
   file: string;
   crop: Box;
   image: NormalizedImage;
+  // Set on a page that is an email's text; image is then a stand-in.
+  text?: string;
   frameTimeMs: number;
   rotationDegrees: number;
   extraction: PageExtraction | null;
@@ -165,6 +175,8 @@ interface PipelinePage {
 
 export async function readMail(files: InputFile[], opts: ReadMailOptions): Promise<MailReading> {
   const started = Date.now();
+  // Marked by whoever made the file, in its type: image/png; truncated=yes.
+  const cutFiles = new Set(files.filter((f) => /;\s*truncated=yes\b/i.test(f.mimeType)).map((f) => f.name));
   validateArgs(files, opts);
   const modelCalls: ModelCallStat[] = [];
   const warnings: Warning[] = [];
@@ -223,6 +235,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         prompt: `Could not use ${file.name}: send a photo (JPEG, PNG, HEIC) or a short video instead.`,
         citation: null,
       });
+      continue;
+    }
+    if (kind === "text") {
+      pages.push({ order: pages.length, file: file.name, crop: WHOLE_PAGE, image: TEXT_PAGE_IMAGE, text: new TextDecoder().decode(file.bytes), frameTimeMs: 0, rotationDegrees: 0, extraction: null, readFailed: false, dropped: [] });
       continue;
     }
     if (kind === "video" && file.bytes.length > MAX_VIDEO_BYTES) {
@@ -388,11 +404,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   const reads = await mapPool(pages, PAGE_READS_AT_ONCE, async (page): Promise<PageRead> => {
     if (overBudget(page.file)) return { kind: "skipped" };
     try {
-      const readBuffer = await downscaleForModel(page.image);
-      const extraction = await readPage(readBuffer, opts.model, {
-        synthetic: opts.synthetic,
-        deadline: deadlineFor(page.file),
-      });
+      const readOpts = { synthetic: opts.synthetic, deadline: deadlineFor(page.file) };
+      const extraction =
+        page.text !== undefined
+          ? await readTextPage(page.text, opts.model, readOpts)
+          : await readPage(await downscaleForModel(page.image), opts.model, readOpts);
       addUsage(page.file, extraction.usage);
       return { kind: "read", extraction };
     } catch (err) {
@@ -468,6 +484,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       pages.push({ order: pages.length, file: page.file, crop: page.crop, image: page.image, frameTimeMs: page.frameTimeMs, rotationDegrees: page.rotationDegrees, extraction: extra, readFailed: false, dropped });
     }
   }
+
+  // Read here, before any letter adds a question of its own.
+  const partUnread =
+    opts.wholeEmail === true &&
+    (questions.some((q) => q.letterId === null && q.kind !== "video_truncated") || pages.some((p) => p.readFailed || (p.extraction !== null && !p.extraction.readable)));
 
   // Group readable pages into letters. Unreadable and failed pages each
   // stand alone so they can carry their own question.
@@ -581,6 +602,14 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (pageReason) {
       reasons.push(pageReason);
       ownQuestion.add(pageReason);
+    }
+    // The same for a file from an email not read whole: what is missing may
+    // cancel or move a date in what is here.
+    if (partUnread || members.some((m) => cutFiles.has(m.file))) {
+      const reason = "not all of this email could be read";
+      reasons.push(reason);
+      ownQuestion.add(reason);
+      ask({ kind: "text_truncated", letterId, prompt: "Not all of this email could be read. Ask the office for the dates.", citation: null });
     }
 
     // A proposal is high confidence only when all of these hold across

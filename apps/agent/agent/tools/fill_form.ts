@@ -9,6 +9,7 @@
 // Engine files it through the action gateway and the reply carries the
 // confirmation number.
 import { defineTool, type ToolContext } from "eve/tools";
+import { isEmailDocument } from "@mano/protocol";
 import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
@@ -90,7 +91,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     // start_form_draft attaches a document on file; a fill takes only one
     // the profile names, which needs Mail to have read it. Asking again
     // for a photo already on file would never end.
-    if (filled.missing.name === "proof" && form === FORMS["food-renewal"] && (await engine.listDocuments()).some((d) => d.filing === "fileable")) {
+    if (filled.missing.name === "proof" && form === FORMS["food-renewal"] && (await engine.listDocuments()).some((d) => d.filing === "fileable" && !isEmailDocument(d.id))) {
       return { status: "unavailable", sent: false, note: "The renewal can go with a document Mano already has on file. Prepare it with start_form_draft from the person's answers." };
     }
     const note =

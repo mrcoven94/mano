@@ -612,3 +612,42 @@ describe("LAP-747: corrections and spacing", () => {
     expect(portal.posts[0]!.household.phone).toBe("253 555 0100");
   });
 });
+
+describe("a document that came by email", () => {
+  const EMAIL = "email-g0-0123456789abcdef01234567-0";
+
+  it("is never attached to a filing: with nothing else on file, it asks for a photo", async () => {
+    const pdf = new TextEncoder().encode("%PDF-1.4 synthetic");
+    photoOnFile(EMAIL, pdf);
+    const out = (await draft("turn_emailproof1")) as { status: string; field?: string; question?: string };
+    expect(out.status).toBe("needs_answer");
+    expect(out.field).toBe("proof");
+    expect(engine.approvals()).toEqual([]);
+  });
+
+  it("is passed over for an older photo the person sent", async () => {
+    const pdf = new TextEncoder().encode("%PDF-1.4 synthetic");
+    photoOnFile("photo-own-3", pdf, Date.now() - 60_000);
+    photoOnFile(EMAIL, pdf);
+    const out = (await draft("turn_emailproof2")) as { status: string };
+    expect(out.status).not.toBe("needs_answer");
+    expect(frozenDocument()).toBe("photo-own-3");
+  });
+
+  it("is not named in the question that asks for proof", async () => {
+    photoOnFile(EMAIL, new TextEncoder().encode("not a kind the portal takes"));
+    const out = (await draft("turn_emailproof3")) as { question?: string };
+    expect(out.question).not.toContain("came by email");
+    expect(out.question).not.toContain("kind of file");
+  });
+
+  it("is not taken from a profile value either", () => {
+    const profile = {
+      person: { address: {} },
+      household: [],
+      programs: [],
+      income: [{ id: "i1", amount: { value: "100", source: "document", documentId: EMAIL } }],
+    } as unknown as Profile;
+    expect(fillFrom(FORMS["food-renewal"], profile, fields).documentId).toBeNull();
+  });
+});

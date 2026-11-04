@@ -56,6 +56,9 @@ export interface Env {
   // Verifies Engine's reminder deliveries on /internal/agent-send only.
   MANO_ENGINE_SEND_SECRET?: string;
   MANO_ENGINE_CHANNELS_TOKEN?: string;
+  // The domain of the person's private email addresses, such as
+  // inbox.example.com. Unset, Mano offers no address and refuses all mail.
+  MANO_EMAIL_DOMAIN?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

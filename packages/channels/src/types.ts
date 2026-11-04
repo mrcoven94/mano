@@ -21,6 +21,9 @@ export interface EventAttachment {
   mediaType?: string;
   size?: number;
   name?: string;
+  // Already in the person's Engine documents (a file from an email), so
+  // the turn does not download it. Never set from a provider event.
+  stored?: { id: string; mimeType: string };
 }
 
 export interface EventGroup {

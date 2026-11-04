@@ -11,6 +11,7 @@ import shareCase from "../agent/tools/share_case.js";
 import stopSharing from "../agent/tools/stop_sharing.js";
 import { DefiniteFailureError, TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
 import { recordDocumentRequest } from "../../engine/src/case-sharing.js";
+import { RENEWAL_PAGE, RENEWAL_TEXT, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -38,6 +39,7 @@ let engine: EngineDouble;
 let grant: string;
 let modelRuns: number;
 let generation: number;
+let mailModel: TurnDeps["mailModel"];
 
 function signed(path: string, body: Record<string, unknown>): Request {
   const raw = JSON.stringify(body);
@@ -67,7 +69,7 @@ function deps(): TurnDeps {
     engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch }),
     runAgent: model as TurnDeps["runAgent"],
     // A photo the sharing path does not take would need a reading.
-    mailModel: { generate: async () => { throw new Error("no reading in this test"); } } as never,
+    mailModel: mailModel ?? ({ generate: async () => { throw new Error("no reading in this test"); } } as never),
   };
 }
 
@@ -380,3 +382,96 @@ class RefusingOffice implements Executor {
     return { found: false };
   }
 }
+
+describe("a letter that came by email while an office waits on a document", () => {
+  const EMAIL = "email-g0-0123456789abcdef01234567-0";
+  const words = (text: string) => new TextEncoder().encode(text);
+  const open = async () => {
+    mailModel = undefined;
+    await say("I want my caseworker to see my renewal");
+    await say("YES");
+    request();
+  };
+  const emailTurn = async (mimeType: string, attachmentCount = 1, extra: { id: string; mimeType: string }[] = []) => {
+    turnNumber += 1;
+    const res = await handleTurn(
+      signed("/channels/mano/turn", {
+        turnId: `turn_sharing${String(turnNumber).padStart(4, "0")}`,
+        generation,
+        handleHash: HANDLE,
+        grant,
+        receivedAt: Date.now(),
+        texts: [],
+        attachmentCount,
+        documents: [{ id: EMAIL, mimeType }, ...extra],
+      }),
+      deps(),
+    );
+    return (await res.json()) as Body;
+  };
+
+  for (const [kind, bytes, mimeType] of [
+    ["a photo", PHOTO, "image/png"],
+    ["its words", words(RENEWAL_TEXT), "text/plain"],
+  ] as const) {
+    it(`does not start a question that sends ${kind}, and says what the request is`, async () => {
+      await open();
+      engine.putDocument(PERSON, EMAIL, bytes);
+      const before = engine.approvals().length;
+
+      const reply = await emailTurn(mimeType);
+      expect(reply.status).not.toBe("waiting_approval");
+      expect(engine.approvals()).toHaveLength(before);
+      expect(reply.text).not.toContain("Reply YES");
+      expect(reply.text).toContain(`Separately, ${OFFICE} asked for your pay stub. Nothing from this email went to them.`);
+
+      expect((await say("YES")).status).not.toBe("waiting_approval");
+      expect((await shares()).active[0]!.openRequests).toHaveLength(1);
+    });
+  }
+
+  it("is read like any letter, the deadline saved", async () => {
+    await open();
+    mailModel = recordedReader([RENEWAL_PAGE]);
+    engine.putDocument(PERSON, EMAIL, words(RENEWAL_TEXT));
+    const reply = await emailTurn("text/plain");
+    expect(reply.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
+    expect(reply.text).toContain("Separately,");
+  });
+
+  it("goes through the scam screen", async () => {
+    await open();
+    mailModel = recordedReader([RENEWAL_PAGE]);
+    engine.putDocument(PERSON, EMAIL, words(`${RENEWAL_TEXT}\nReply to this email with your Social Security number to keep your benefits.`));
+    const reply = await emailTurn("text/plain");
+    expect(reply.text).toContain("looks like a scam");
+    expect(reply.status).not.toBe("waiting_approval");
+  });
+
+  it("is never counted as a photo the person sent", async () => {
+    await open();
+    engine.putDocument(PERSON, EMAIL, PHOTO);
+    engine.putDocument(PERSON, "photo-own-1", OTHER_PHOTO);
+    const before = engine.approvals().length;
+    const reply = await emailTurn("image/png", 2, [{ id: "photo-own-1", mimeType: "image/png" }]);
+    expect(reply.text).not.toContain("You sent");
+    expect(engine.approvals()).toHaveLength(before);
+  });
+
+  it("leaves the person's own next photo able to answer the request, after their yes", async () => {
+    await open();
+    engine.putDocument(PERSON, EMAIL, PHOTO);
+    await emailTurn("image/png");
+    engine.putDocument(PERSON, "photo-own-2", OTHER_PHOTO);
+    const asked = await say(null, "photo-own-2");
+    expect(asked.status).toBe("waiting_approval");
+    expect(JSON.parse(engine.approvals().at(-1)!.requestJson).documentId).toBe("photo-own-2");
+  });
+
+  it("says nothing of a request when none is open", async () => {
+    mailModel = undefined;
+    engine.putDocument(PERSON, EMAIL, PHOTO);
+    const reply = await emailTurn("image/png");
+    expect(reply.text).not.toContain("Separately");
+  });
+});

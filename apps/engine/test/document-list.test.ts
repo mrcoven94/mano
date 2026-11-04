@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
+import { mintSessionToken } from "../src/auth.js";
 
 // The person's documents as Engine lists them to the agent: every file
 // Channels stored for this conversation, newest first, with when it
@@ -11,6 +12,7 @@ import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 const AGENT_TOKEN = "test-agent-token-not-real";
 const CHANNELS_TOKEN = "test-channels-token-not-real";
 const GRANT_SECRET = "test-handle-grant-secret-not-real";
+const SESSION_SECRET = "test-session-secret-not-real";
 
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
 const JPEG = [0xff, 0xd8, 0xff, 0xe0, 4, 5, 6];
@@ -61,6 +63,29 @@ async function list(h: string): Promise<Listed[]> {
 const SENT_ON = /^the (photo|letter|PDF|file) you sent on (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}$/;
 
 describe("the person's document list", () => {
+  it("keeps the email prefix for Channels: a person's own upload cannot claim it", async () => {
+    const h = handle("email-prefix");
+    const person = personIdForHandle(h);
+    const token = await mintSessionToken({ kind: "person", sub: person }, SESSION_SECRET);
+    const upload2 = (id: string) =>
+      SELF.fetch(`https://engine.test/api/persons/${person}/documents`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ id, name: id, contentB64: b64(new TextEncoder().encode("%PDF-1.4 synthetic")) }),
+      });
+    const refused = await upload2("email-proof");
+    expect(refused.status).toBe(400);
+    expect((await upload2("proof-1")).status).toBe(200);
+    expect((await list(h)).map((d) => d.id)).toEqual(["proof-1"]);
+  });
+
+  it("names a document that came by email as that, never as one the person sent", async () => {
+    const h = handle("email-label");
+    expect((await upload(h, "email-g0-0123456789abcdef01234567-0", new TextEncoder().encode("%PDF-1.4 synthetic"))).status).toBe(200);
+    const [doc] = await list(h);
+    expect(doc!.label).toMatch(/^the PDF that came by email on /);
+  });
+
   it("lists every stored document newest first, with when it arrived, its media type and a plain label", async () => {
     const h = handle("list-order");
     for (const [id, bytes] of [["g0t1i0-first1", PNG], ["g0t2i0-second", PDF], ["g0t3i0-third1", HEIC], ["g0t4i0-fourth", JPEG]] as const) {

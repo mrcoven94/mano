@@ -152,6 +152,8 @@ export interface RunnerDeps {
   responder: Responder;
   // The person's Engine documents, where texted photos are stored.
   documents: DocumentStore | null;
+  // What email took of the same day's bytes (email.ts keeps that count).
+  emailBytesToday?: (day: string) => number;
   // Makes a JPEG copy of a HEIC, HEIF or WebP photo. Null keeps the
   // original, and the reply asks for a screenshot instead.
   photoConverter?: PhotoConverter | null;
@@ -233,6 +235,33 @@ export function receiptChatMatches(rowChatId: string | null, receiptChatId: stri
 // so every reply goes back to the chat its own inputs came from. Items
 // with no chat fall back to the conversation's last known chat; items
 // addressed only by handle form their own turn, sent channel-scoped.
+// A turn stores and reads at most MAX_ATTACHMENTS_PER_TURN files, so a batch
+// with more runs as more turns and none is left unread. A cut comes only
+// before a message's first piece, which is the one holding its files, and
+// one message over the limit stays whole. An email always gets a turn of its
+// own: it is not the person's, so it never shares one with their words, a YES
+// or a photo they sent.
+export function chunkByFiles(
+  items: import("./store.js").PendingInbound[],
+  cap: number = MAX_ATTACHMENTS_PER_TURN,
+): import("./store.js").PendingInbound[][] {
+  const fromEmail = (item: import("./store.js").PendingInbound) => item.attachments.some((a) => a.stored);
+  const chunks: import("./store.js").PendingInbound[][] = [];
+  let count = 0;
+  let email = false;
+  for (const item of items) {
+    const files = item.attachments.length;
+    if (chunks.length === 0 || fromEmail(item) !== email || (files > 0 && count > 0 && count + files > cap)) {
+      chunks.push([]);
+      count = 0;
+      email = fromEmail(item);
+    }
+    chunks.at(-1)!.push(item);
+    count += files;
+  }
+  return chunks;
+}
+
 export function partitionByChat(
   pending: import("./store.js").PendingInbound[],
   fallbackChatId: string | null,
@@ -718,7 +747,7 @@ export class ConversationRunner {
             }
             store.setPendingCrisis(asks.map((p) => p.eventId), crisis);
           }
-          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
+          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP).flatMap((c) => chunkByFiles(c))) {
             const items = chunk.map((item) => ({ ...item, crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;
@@ -1485,6 +1514,10 @@ export class ConversationRunner {
     const saved: StoredPhoto[] = [];
     let unfileable = false;
     for (const [index, attachment] of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN).entries()) {
+      if (attachment.stored) {
+        saved.push(attachment.stored);
+        continue;
+      }
       // A replay keeps what an earlier attempt chose for this file.
       const chosen = store.attachmentChoice(turn, index);
       if (chosen?.state === "stored" && chosen.generation === generation) {
@@ -1500,7 +1533,7 @@ export class ConversationRunner {
       }
       const meta = store.meta();
       const byteDay = dayKeyFor(nowMs());
-      const usedToday = meta.byteDayKey === byteDay ? meta.byteDayCount : 0;
+      const usedToday = (meta.byteDayKey === byteDay ? meta.byteDayCount : 0) + (this.deps.emailBytesToday?.(byteDay) ?? 0);
       if (usedToday + MAX_ATTACHMENT_BYTES > HANDLE_BYTES_DAILY) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;
@@ -1863,7 +1896,15 @@ export class ConversationRunner {
   // closed, opted out, deleted) is a handled 200. noReplay: the provider
   // gets one try, and a send not accepted answers failed instead of being
   // replayed, on an alarm or otherwise.
-  async sendAgentText(opts: { key: string; text: string; generation: number; noReplay?: boolean }): Promise<{
+  async sendAgentText(opts: {
+    key: string;
+    text: string;
+    generation: number;
+    noReplay?: boolean;
+    // Set when a STOP or a close since then must cancel this text, even if
+    // the person has come back. Checked right before each bubble.
+    epoch?: number;
+  }): Promise<{
     sent: boolean;
     reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted" | "refused" | "failed";
     duplicate?: boolean;
@@ -1912,7 +1953,16 @@ export class ConversationRunner {
       const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: opts.noReplay ? NO_REPLAY_TAG : "agent" }));
       this.checkGeneration(generation);
       // Agent texts carry no reactions, so the epoch is only passed along.
-      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, this.store.meta().decorationEpoch);
+      // With no await between the check and the provider call in sendBubble.
+      for (const part of opts.epoch === undefined ? [bubbles] : bubbles.map((b) => [b])) {
+        if (opts.epoch !== undefined && this.store.meta().decorationEpoch !== opts.epoch) {
+          await this.deps.spend.release(reserveKey);
+          store.finishAgentSend(opts.key, nowMs(), "refused");
+          logger.info("agent_send_cancelled", { handle: this.logHandle(), turn });
+          return { sent: false, reason: "closed" };
+        }
+        await this.sendBubbles(turn, part, chatId, to, 0, generation, this.store.meta().decorationEpoch);
+      }
       this.checkSendsResolved(turn, generation);
       // Sent only when the provider accepted every bubble; a refusal or a
       // definite failure is final and reported as not sent.

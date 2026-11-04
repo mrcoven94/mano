@@ -175,7 +175,7 @@ import {
 import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
-import { SANDBOX_ORG_ID } from "@mano/protocol";
+import { SANDBOX_ORG_ID, isEmailDocument } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
 import {
@@ -747,6 +747,10 @@ export default {
         };
         if (typeof name !== "string" || typeof contentB64 !== "string" || (id !== undefined && typeof id !== "string")) {
           return Response.json({ error: "Body needs a name and contentB64." }, { status: 400 });
+        }
+        // The prefix says a document came by email, so only Channels may use it.
+        if (id !== undefined && isEmailDocument(id) && service !== "channels") {
+          return Response.json({ error: "That document ID is reserved." }, { status: 400 });
         }
         const generation = writeGeneration(service, rawGeneration);
         if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
