@@ -12,7 +12,9 @@ Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026
 
 The whole renewal runs on your machine with `pnpm judge`, on synthetic data, with each step labeled real or simulated.
 
-On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 3, 2026). Muse Glimmer checks actions on our own GPU. Computer use calls Meta's hosted API, so it does not run on production while the 402 lasts. A texted photo is read on Muse Spark Open too, with on-device paper detection in place of SAM 3.1; that path has been tested against a stubbed provider and not yet confirmed live. The whole renewal has not been confirmed on the current production build.
+On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 4, 2026). Muse Glimmer checks actions on our own GPU. Computer use calls Meta's hosted API, so it does not run on production while the 402 lasts. [PR 152](https://github.com/mrcoven94/mano/pull/152) would move it to Muse Spark Open and is still open. A texted photo is read on Muse Spark Open too, with on-device paper detection in place of SAM 3.1. Reading letters and keeping a person's answers on their profile are deployed and not confirmed live on a model. The whole renewal has not been confirmed on the current production build.
+
+A plain letter usually gets a question that names the date, not a held deadline. Mano holds a date as fact only when the letter's wording leaves nothing in doubt, and the check in `packages/mail/src/gate.ts` stops on most wording around a date. The synthetic letter in `pnpm judge` does hold its date. A scam letter gets the warning first, and a single date in it appears only as the letter's claim, to check with the office.
 
 ## Run Maria's renewal in one command
 
@@ -43,44 +45,44 @@ Every model Mano calls at runtime is a Meta model. Seven spine steps below call 
 | Crisis check, before the agent, on one short health question that the keyword floor flags | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis | Left out |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
 | Finding the letter in the photo | SAM 3.1, or none during the 402 (on-device paper detection, plain code) | Meta's hosted API, or Mano's own code | Deployed, on-device during the 402, not confirmed live | Live with your key, else a recording |
-| Reading the letter into cited fields | Muse Spark 1.3, or Muse Spark Open during the 402 | Meta's hosted API, or OpenRouter, zero-retention endpoints only | Deployed, on Muse Spark Open during the 402, not confirmed live | Live with your key, else a recording |
+| Reading the letter into cited fields | Muse Spark 1.3, or Muse Spark Open during the 402 | Meta's hosted API, or OpenRouter, zero-retention endpoints only | Deployed, on Muse Spark Open during the 402, not confirmed live on a model | Live with your key, else a recording |
 | Filling the form with Mano's computer | Muse Spark 1.3 computer use | Meta's hosted API, driving a desktop on Modal | Not running, 402 | Stand-in |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes | Recording |
-| Holding the one deadline | None, plain code | `packages/mail/src/gate.ts` | Waits on the reading | Real |
-| Drafting the renewal from the profile and the letter | None for the form table, the agent turn above calls it | `apps/agent/agent/lib/forms.ts` | Deployed, not confirmed end to end | Real form table |
+| Holding the one deadline | None, plain code | `packages/mail/src/gate.ts` | Deployed. A plain letter usually gets a question naming the date | Real |
+| Drafting the renewal from the profile and the letter | None for the form table, the agent turn above calls it | `apps/agent/agent/lib/forms.ts` | Deployed, with answers kept on the profile, not confirmed live on a model | Real form table |
 | Maria's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Deployed, no filing confirmed on this build | Real code, scripted yes |
 | Reminder the day before her interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed | Not in this run |
 
 The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`). The same two settings send Mail's page reads to the same model with the same pin (`packages/mail/src/model.ts`), and SAM 3.1 is not called on that path.
 
-These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
+These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
 
 ## Live versus in progress
 
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | c6edc52 success 2026-11-04 |
-| Sandbox portal | live | https://sandbox.withmano.com/ | c6edc52 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | c6edc52 success 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | c6edc52 success 2026-11-04 |
+| Site | live | https://withmano.com | ee85e48 success 2026-11-04 |
+| Sandbox portal | live | https://sandbox.withmano.com/ | 9ae4296 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | fa899d4 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | fa899d4 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
 
 `node scripts/status.mjs` generates this table from each health URL and the latest deploy. A daily workflow warns when this copy is stale.
 
-The site labels these pieces coming soon, and none of them is live:
+The site labels these pieces coming soon. This is what is true of each one today:
 
 | Piece | True today |
 | --- | --- |
-| Mano's own email inbox | Code is in [PR 149](https://github.com/mrcoven94/mano/pull/149), and stays off until email routing is turned on |
-| Daily check for new help | Code is in [PR 150](https://github.com/mrcoven94/mano/pull/150) |
-| Waiting on hold | Engine side is in [PR 146](https://github.com/mrcoven94/mano/pull/146), against a fake provider. It places no real call |
-| Faxes and mailed letters | Code is in [PR 144](https://github.com/mrcoven94/mano/pull/144), faxing only our own number and mailing only in a provider's test mode |
-| Sharing a case with a caseworker | Code is in [PR 155](https://github.com/mrcoven94/mano/pull/155) |
-| Mano on the web | Code is in [PR 148](https://github.com/mrcoven94/mano/pull/148) |
-| iPhone app | [PR 148](https://github.com/mrcoven94/mano/pull/148) prepares the build, which still needs the maintainer's Apple account |
+| Mano's own email inbox | Not on `main`. The code is in [PR 149](https://github.com/mrcoven94/mano/pull/149), which is still open |
+| Daily check for new help | On `main`, with sends off behind `MANO_DAILY_CHECK_SENDS`, so it texts no one |
+| Waiting on hold | On `main` and off in production ([Engine's health page](https://engine.withmano.com/health) shows `calls: off`). It has only a fake provider, with no real provider code, and has placed no real call |
+| Faxes and mailed letters | On `main` and off in production (the same page shows `fax: off` and `mail: off`). Faxes go only to our own number and letters only through a provider's test mode. No fax has been sent, and nothing has been mailed |
+| Sharing a case with a caseworker | On `main`. It ran on production with a synthetic person and a played model, with no real text and no live model |
+| Mano on the web | Live at [app.withmano.com](https://app.withmano.com). Sign-in codes reach only verified addresses until email sending is on. It does not yet share memory with a person's texts |
+| iPhone app | The build is prepared and has not been made. It needs the maintainer's Apple account |
 
 The estimate page in the spine in `AGENTS.md` is not built.
 
@@ -90,13 +92,13 @@ All of this was written from October 26, 2026 onward, except what [Prior work](#
 
 ```mermaid
 flowchart LR
-    resident[Person: text line] --> agent[Personal agent]
+    resident[Person: text line or web app] --> agent[Personal agent]
     agent --> mail[Mail and deadlines]
     agent --> forms[Forms and renewals]
     agent --> gateway[Action gateway: decide, approve, act]
     gateway --> portal[Sandbox agency portal]
-    gateway --> letters[Mailed letters, provider test mode only, nothing is mailed]
-    gateway --> fax[Fax to our own number only, not run live yet]
+    gateway --> letters[Mailed letters: off in production, provider test mode only]
+    gateway --> fax[Fax: off in production, our own number only]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
     gateway --> guardian[Guardian: Muse Glimmer]
@@ -107,7 +109,7 @@ flowchart LR
 | `apps/channels` | The text line on Cloudflare Workers: iMessage and SMS webhooks, one conversation per handle, and the plain answer when the agent cannot answer |
 | `apps/agent` | The agent on Eve by Vercel: reads each text, keeps a profile, proposes actions through Engine, and fills out forms |
 | `apps/engine` | The system of record on Cloudflare: one Durable Object per person, encrypted files in R2, deadlines, approvals, and the action gateway |
-| `packages/mail` | Turns a photo into letters, cited fields and one deadline, or asks a question when the date is in doubt |
+| `packages/mail` | Turns a photo into letters and cited fields, then holds one deadline or asks a question that names the date. It also screens for scams |
 | `packages/computer` | The screenshot and mouse loop for Mano's computer. It fills forms and never files them |
 | `packages/guardian` | Muse Glimmer on one Modal GPU, plus the local rules Engine runs first |
 | `packages/persona` | Mano's voice, the voice guard, and the crisis floor that always names 988 and 911 |
