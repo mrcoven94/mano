@@ -265,6 +265,8 @@ interface Transport {
   timeoutMs: number;
   maxRetries: number;
   fetchFn: typeof fetch;
+  // Set on Modal's route: a redirect must not carry a person's pages to another host.
+  redirect?: RequestRedirect;
 }
 
 function transportFrom(opts: { apiKey: string; timeoutMs?: number; maxRetries?: number; fetchFn?: typeof fetch }): Transport {
@@ -290,6 +292,7 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
     const timer = setTimeout(() => controller.abort(), Math.min(transport.timeoutMs, remaining));
     try {
       const res = await transport.fetchFn(url, {
+        ...(transport.redirect ? { redirect: transport.redirect } : {}),
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -470,6 +473,7 @@ export class OpenWeightModelClient implements ModelClient {
     const url = modalChatUrl(opts.modalUrl);
     if (!url) throw new Error("A Modal endpoint URL must be https on Modal's own domain.");
     this.route = { url, model: MODAL_OPEN_WEIGHT_MODEL, pin: {} };
+    this.transport = { ...this.transport, redirect: "error" };
   }
 
   async responses(req: ResponsesRequest, opts: CallOptions = {}): Promise<ResponsesResult> {

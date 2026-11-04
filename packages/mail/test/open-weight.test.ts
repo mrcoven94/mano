@@ -74,6 +74,17 @@ describe("which client createModelClient builds", () => {
     expect(model.live).toBe(true);
   });
 
+  it("refuses a redirect on Modal's route, and leaves OpenRouter's as it was", async () => {
+    const seen: Array<RequestRedirect | undefined> = [];
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      seen.push(init.redirect);
+      return completion(RENEWAL_PAGE);
+    }) as unknown as typeof fetch;
+    await createModelClient(MODAL, { synthetic: true, fetchFn }).responses({ model: "muse-spark-1.3", input: "Read this." });
+    await createModelClient(ENV, { synthetic: true, fetchFn }).responses({ model: "muse-spark-1.3", input: "Read this." });
+    expect(seen).toEqual(["error", undefined]);
+  });
+
   it("is off by default: Modal settings alone change nothing", () => {
     const { MANO_MODEL_PROVIDER: _chosen, ...settings } = MODAL;
     expect(createModelClient({ ...settings, META_MODEL_API_KEY: "k" })).toBeInstanceOf(MetaModelClient);

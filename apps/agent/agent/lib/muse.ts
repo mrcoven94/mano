@@ -272,6 +272,9 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
       };
 }
 
+// On Modal's route a redirect must not carry a person's words to another host.
+const refuseRedirects: typeof fetch = (input, init) => globalThis.fetch(input, { ...init, redirect: "error" });
+
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
   const route = selectModelRoute(opts);
   if (route.name === "modal" && !route.apiKey) throw new Error("Modal is chosen but its settings are incomplete.");
@@ -280,6 +283,7 @@ export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageM
     baseURL: route.baseURL,
     apiKey: route.apiKey || "missing-key",
     includeUsage: true,
+    ...(route.name === "modal" ? { fetch: refuseRedirects } : {}),
   });
   const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);
   const model = wrapLanguageModel({

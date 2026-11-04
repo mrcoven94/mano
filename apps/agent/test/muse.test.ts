@@ -225,9 +225,11 @@ describe("OpenRouter switch", () => {
     vi.stubEnv("MODAL_PROXY_TOKEN", "wk-test.ws-test");
     const urls: string[] = [];
     let authorization: string | null = null;
+    let redirect: RequestRedirect | undefined;
     vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
       urls.push(String(url));
       authorization = new Headers(init?.headers).get("authorization");
+      redirect = init?.redirect;
       bodies.push(JSON.parse(String(init?.body ?? "{}")));
       return completion();
     });
@@ -236,6 +238,7 @@ describe("OpenRouter switch", () => {
     expect(modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
     expect(urls[0]).toBe("https://example--ep-test-server.us-west.modal.direct/v1/chat/completions");
     expect(authorization).toBe("Bearer wk-test.ws-test");
+    expect(redirect).toBe("error");
     expect(bodies[0].model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
     expect(bodies[0].reasoning).toEqual({ effort: "low" });
     expect(bodies[0].provider).toBeUndefined();
