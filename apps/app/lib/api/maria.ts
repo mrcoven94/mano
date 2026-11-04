@@ -44,8 +44,11 @@ export interface DemoWords {
   deadlinesReply(count: number): string;
   approvalsReply(pending: number): string;
   renewalDeadline: { title: string; detail: string };
+  renewalDeadlineApproved: { title: string; detail: string };
+  renewalDeadlineDeclined: { title: string; detail: string };
   electricDeadline: { title: string; detail: string };
   paystubDeadline: { title: string; detail: string };
+  paystubDeadlineDone: { title: string; detail: string };
   grantPurpose: string;
   grantScope: string[];
 }
@@ -77,8 +80,11 @@ export const DEMO_WORDS: Record<Language, DemoWords> = {
         ? "Nothing is waiting for your approval right now."
         : `You have ${pending} thing${pending === 1 ? "" : "s"} waiting in Approvals. Each one shows exactly what will be sent before you approve it.`,
     renewalDeadline: { title: "SNAP renewal due", detail: "Springfield County, case R-1042. Your filled renewal is waiting in Approvals." },
+    renewalDeadlineApproved: { title: "SNAP renewal", detail: "Springfield County, case R-1042. You approved the filled renewal, so it is no longer waiting on you." },
+    renewalDeadlineDeclined: { title: "SNAP renewal due", detail: "Springfield County, case R-1042. You said no to the filled renewal, so nothing was sent. The due date still stands." },
     electricDeadline: { title: "Electricity bill, $84.20", detail: "Springfield Light and Power, account ending 4471." },
     paystubDeadline: { title: "Send the county a pay stub", detail: "Springfield County asked for a pay stub from the last 30 days for case R-1042." },
+    paystubDeadlineDone: { title: "Send the county a pay stub", detail: "Mano sent your pay stub to Springfield County for case R-1042." },
     grantPurpose: "Your SNAP renewal, case R-1042",
     grantScope: ["case documents", "deadlines"],
   },
@@ -112,8 +118,11 @@ export const DEMO_WORDS: Record<Language, DemoWords> = {
           ? "Tiene 1 cosa esperando en la pestaña Aprobar. Muestra exactamente lo que se enviará antes de que usted la apruebe."
           : `Tiene ${pending} cosas esperando en la pestaña Aprobar. Cada una muestra exactamente lo que se enviará antes de que usted la apruebe.`,
     renewalDeadline: { title: "Vence la renovación de SNAP", detail: "Condado de Springfield, caso R-1042. Su renovación ya llena está esperando en la pestaña Aprobar." },
+    renewalDeadlineApproved: { title: "Renovación de SNAP", detail: "Condado de Springfield, caso R-1042. Usted aprobó la renovación ya llena, así que ya no espera su respuesta." },
+    renewalDeadlineDeclined: { title: "Vence la renovación de SNAP", detail: "Condado de Springfield, caso R-1042. Usted dijo que no a la renovación ya llena, así que no se envió nada. La fecha límite sigue en pie." },
     electricDeadline: { title: "Factura de electricidad, $84.20", detail: "Springfield Light and Power, cuenta que termina en 4471." },
     paystubDeadline: { title: "Enviar un talón de pago al condado", detail: "El condado de Springfield pidió un talón de pago de los últimos 30 días para el caso R-1042." },
+    paystubDeadlineDone: { title: "Enviar un talón de pago al condado", detail: "Mano envió su talón de pago al condado de Springfield para el caso R-1042." },
     grantPurpose: "Su renovación de SNAP, caso R-1042",
     grantScope: ["documentos del caso", "fechas límite"],
   },

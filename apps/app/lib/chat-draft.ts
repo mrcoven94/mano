@@ -23,3 +23,19 @@ export function takeChatDraft(token: string): string | null {
 export function changeDraft(about: string, purpose: string, ask: string): string {
   return `${about} "${purpose}": ${ask} `;
 }
+
+// A deadline card's "Photograph your pay stub": the chat opens its mail
+// panel for that paper, once, under the same session rule as a draft.
+export type MailAsk = "pay-stub";
+
+let heldAsk: { token: string; ask: MailAsk } | null = null;
+
+export function holdMailAsk(token: string, ask: MailAsk): void {
+  heldAsk = { token, ask };
+}
+
+export function takeMailAsk(token: string): MailAsk | null {
+  const waiting = heldAsk;
+  heldAsk = null;
+  return waiting && waiting.token === token ? waiting.ask : null;
+}

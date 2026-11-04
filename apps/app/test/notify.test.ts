@@ -43,6 +43,14 @@ describe("syncReminders", () => {
     expect(schedule).toHaveBeenCalledTimes(1);
   });
 
+  it("puts the approval's ID in the data and never in the words", async () => {
+    schedule.mockClear();
+    await syncReminders("en", clientWithApproval(), session, () => true);
+    const content = schedule.mock.calls[0]?.[0].content;
+    expect(content?.data).toEqual({ kind: "approval", approvalId: "appr-1" });
+    expect(`${content?.title} ${content?.body}`).not.toContain("appr-1");
+  });
+
   it("schedules nothing when the fetch outlived its session", async () => {
     cancelAll.mockClear();
     schedule.mockClear();

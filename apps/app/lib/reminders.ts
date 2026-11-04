@@ -1,7 +1,8 @@
 // Reminder planning, with no notification dependencies: one item per
 // pending approval at its remind time, one per open deadline due
 // within 48 hours, a day before it hits (or a minute from now when the
-// deadline is closer than that). notify.ts applies the plan.
+// deadline is closer than that). notify.ts applies the plan. Also what a
+// reminder carries for its tap, and where that tap goes.
 
 import type { Approval, Deadline } from "./api/types";
 
@@ -24,4 +25,21 @@ export function planReminders(approvals: Approval[], deadlines: Deadline[], nowM
     items.push({ fireAt: dayBefore > nowMs ? dayBefore : nowMs + 60_000, kind: "deadline", id: deadline.id });
   }
   return items;
+}
+
+// The approval's opaque ID travels in the notification's data, never in
+// its words.
+export function reminderData(item: ReminderItem): { kind: "approval"; approvalId: string } | { kind: "deadline" } {
+  return item.kind === "approval" ? { kind: "approval", approvalId: item.id } : { kind: "deadline" };
+}
+
+export type NotificationRoute = "/(tabs)/deadlines" | "/(tabs)/approvals" | { pathname: "/approvals/[id]"; params: { id: string } };
+
+// A reminder scheduled before it carried an ID, or any other notification,
+// opens the list.
+export function notificationRoute(data: unknown): NotificationRoute {
+  const { kind, approvalId } = (data ?? {}) as { kind?: unknown; approvalId?: unknown };
+  if (kind === "deadline") return "/(tabs)/deadlines";
+  if (typeof approvalId === "string" && approvalId.length > 0) return { pathname: "/approvals/[id]", params: { id: approvalId } };
+  return "/(tabs)/approvals";
 }

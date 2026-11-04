@@ -58,6 +58,17 @@ describe("strings", () => {
     expect(es.codeNotSent).toMatch(/No pudimos enviar/);
   });
 
+  it("keeps the working line from claiming the mail was sent or read", () => {
+    expect(en.workingMail).not.toMatch(/\b(sent|read|reading|received)\b/i);
+    expect(es.workingMail).not.toMatch(/\b(envi[óe]|envió|leyendo|leí|recibi)/i);
+  });
+
+  it("keeps the receipt's next step from promising what an office will do", () => {
+    expect(en.receiptNext).toMatch(/cannot promise/);
+    expect(es.receiptNext).toMatch(/no puede prometer/);
+    expect(`${en.receiptNext} ${es.receiptNext}`).not.toMatch(/will (approve|answer|reply|decide)|aprobará|responderá/i);
+  });
+
   it("resolves both languages", () => {
     expect(stringsFor("en").send).toBe("Send");
     expect(stringsFor("es").send).toBe("Enviar");
