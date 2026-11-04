@@ -24,7 +24,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
 import { deleteAsync } from "expo-file-system/legacy";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
+import { Btn, DemoBanner, EmptyView, LiveRegion, LoadingView, Title } from "../../components/ui";
+import { attachToggleLabel, voiceRecordLabel } from "../../lib/a11y-labels";
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
@@ -73,10 +74,12 @@ function Bubble({ message, queuedLabel, approval }: { message: ChatMessage; queu
 
 function WorkingBubble({ text }: { text: string }) {
   return (
-    <View style={styles.bubbleRow} accessibilityLiveRegion="polite" aria-live="polite">
+    <View style={styles.bubbleRow}>
       <View style={[styles.bubble, styles.bubbleTheirs, styles.working]}>
         <ActivityIndicator size="small" color={colors.muted} />
-        <Text style={[type.body, styles.textTheirs, styles.flexShrink]}>{text}</Text>
+        <LiveRegion message={text} style={styles.flexShrink}>
+          <Text style={[type.body, styles.textTheirs]}>{text}</Text>
+        </LiveRegion>
       </View>
     </View>
   );
@@ -407,6 +410,8 @@ export default function Chat() {
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) throw new PermissionDeniedError("microphone");
+      // record() throws until the recorder is prepared.
+      await recorder.prepareToRecordAsync();
       recorder.record();
       setVoiceUri(null);
       setRecording(true);
@@ -472,14 +477,16 @@ export default function Chat() {
         <View style={styles.header}>
           <Title>{s.agentTitle}</Title>
           {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
-          {offlineNote ? (
+          <LiveRegion message={offlineNote ? s.offline : null}>
             <View style={styles.offline}>
               <Text style={styles.offlineText}>{s.offline}</Text>
             </View>
-          ) : null}
+          </LiveRegion>
           {heldCount > 0 ? (
             <View style={styles.offline}>
-              <Text style={styles.offlineText}>{s.heldNote}</Text>
+              <LiveRegion message={s.heldNote}>
+                <Text style={styles.offlineText}>{s.heldNote}</Text>
+              </LiveRegion>
               <View style={styles.retry}>
                 <Btn title={s.retry} onPress={() => void retryHeld()} busy={sending} />
               </View>
@@ -566,7 +573,7 @@ export default function Chat() {
 
         {voiceUri ? (
           <View style={styles.voicePreview}>
-            <Pressable onPress={playVoice} style={styles.iconBtn} accessibilityRole="button" accessibilityLabel={s.voiceSent}>
+            <Pressable onPress={playVoice} style={styles.iconBtn} accessibilityRole="button" accessibilityLabel={s.voicePlay}>
               <Ionicons name={voicePlaying ? "pause-outline" : "play-outline"} size={22} color={colors.text} />
             </Pressable>
             <Text style={[type.small, styles.voiceName]} numberOfLines={1}>
@@ -604,7 +611,7 @@ export default function Chat() {
               onPress={toggleRecord}
               style={[styles.attachBtn, recording && styles.recording]}
               accessibilityRole="button"
-              accessibilityLabel={s.attachVoice}
+              accessibilityLabel={voiceRecordLabel(recording, s)}
             >
               <Ionicons name="mic-outline" size={20} color={recording ? colors.alert : colors.text} />
               <Text style={styles.attachText}>{recording ? s.recording : s.attachVoice}</Text>
@@ -613,9 +620,11 @@ export default function Chat() {
         ) : null}
 
         {note ? (
-          <View style={styles.crisisNotice} accessibilityRole="alert">
+          <View style={styles.crisisNotice}>
             <View style={styles.flex}>
-              <Text style={type.small}>{note.text}</Text>
+              <LiveRegion urgent message={note.text}>
+                <Text style={type.small}>{note.text}</Text>
+              </LiveRegion>
               {note.opensSettings ? (
                 <Pressable onPress={() => void Linking.openSettings().catch(() => undefined)} accessibilityRole="button" style={styles.approvalLink}>
                   <Text style={styles.approvalLinkText}>{s.openSettings}</Text>
@@ -629,8 +638,10 @@ export default function Chat() {
         ) : null}
 
         {crisisNotice ? (
-          <View style={styles.crisisNotice} accessibilityRole="alert">
-            <Text style={[type.body, styles.flex]}>{crisisNotice.text}</Text>
+          <View style={styles.crisisNotice}>
+            <LiveRegion urgent message={crisisNotice.text} style={styles.flex}>
+              <Text style={type.body}>{crisisNotice.text}</Text>
+            </LiveRegion>
             <Pressable
               onPress={() => setCrisisSettled((current) => new Set([...current, crisisNotice.id]))}
               style={styles.iconBtn}
@@ -649,7 +660,9 @@ export default function Chat() {
               onPress={() => setAttachOpen((v) => !v)}
               style={styles.iconBtn}
               accessibilityRole="button"
-              accessibilityLabel={s.mailTitle}
+              accessibilityLabel={attachToggleLabel(attachOpen, s)}
+              accessibilityState={{ expanded: attachOpen }}
+              aria-expanded={attachOpen}
             >
               <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
             </Pressable>
@@ -739,7 +752,7 @@ const styles = StyleSheet.create({
     minHeight: tapTarget,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: colors.border2,
+    borderColor: colors.fieldBorder,
     borderRadius: radius.md,
     paddingHorizontal: 14,
     paddingVertical: 10,
