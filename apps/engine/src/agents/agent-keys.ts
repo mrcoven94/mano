@@ -5,6 +5,8 @@ import type { Env } from "../env.js";
 // stub (a namespace lookup no caller can forge), cached in the receiver's
 // agent_keys table. No key from inside a message is ever trusted.
 
+const AGENT_ID = /^(person|org):([A-Za-z0-9_-]+)$/;
+
 function bytesToB64(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
@@ -31,7 +33,7 @@ export async function importAgentPrivateKey(jwk: JsonWebKey): Promise<CryptoKey>
 // Resolves an agent ID ("person:<id>" or "org:<id>") to its public key by
 // asking the authoritative stub. Returns null for unknown IDs or errors.
 export async function resolveAgentKey(env: Env, agentId: string): Promise<string | null> {
-  const match = /^(person|org):([A-Za-z0-9_-]+)$/.exec(agentId);
+  const match = AGENT_ID.exec(agentId);
   if (!match) return null;
   const [, kind, name] = match;
   try {

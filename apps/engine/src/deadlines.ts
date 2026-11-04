@@ -76,6 +76,12 @@ const MAX_KEY = 256;
 const MAX_DOCUMENT_ID = 128;
 const MAX_AHEAD_DAYS = 731;
 const DEADLINE_ID = /^dl-[0-9a-f]{32}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const CLOCK_HH_MM = /^(\d{2}):(\d{2})$/;
+const NON_ALPHANUMERIC = /[^a-z0-9]/g;
+const CONTROL_CHAR_RUN = /[\u0000-\u001f\u007f]+/g;
+const WHITESPACE_RUN = /\s+/g;
+const DEADLINE_PATH = /^\/deadlines\/([^/]+)$/;
 
 // The program names a nudge may use. Replaced by the Programs catalog
 // once it lands.
@@ -178,7 +184,7 @@ function dateMs(date: string): number {
 }
 
 function isIsoDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
   return new Date(dateMs(value)).toISOString().slice(0, 10) === value;
 }
 
@@ -234,7 +240,7 @@ export interface NudgeTime {
 }
 
 export function nudgeTimeOf(env: { MANO_NUDGE_TIME?: string }): NudgeTime {
-  const match = /^(\d{2}):(\d{2})$/.exec(env.MANO_NUDGE_TIME ?? "");
+  const match = CLOCK_HH_MM.exec(env.MANO_NUDGE_TIME ?? "");
   if (match) {
     const hour = Number(match[1]);
     const minute = Number(match[2]);
@@ -292,7 +298,7 @@ function monthDay(date: string): string {
 }
 
 function knownProgram(program: string | null): string | null {
-  const key = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const key = (t: string) => t.toLowerCase().replace(NON_ALPHANUMERIC, "");
   return program ? (KNOWN_PROGRAMS.find((p) => key(p) === key(program)) ?? null) : null;
 }
 
@@ -333,7 +339,7 @@ function object(raw: unknown): Record<string, unknown> {
 }
 
 function text(value: unknown, field: string, max: number): string {
-  const cleaned = typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim() : "";
+  const cleaned = typeof value === "string" ? value.replace(CONTROL_CHAR_RUN, " ").replace(WHITESPACE_RUN, " ").trim() : "";
   if (!cleaned || cleaned.length > max) throw new AgentStateInputError(`${field} must be 1 to ${max} characters.`);
   return cleaned;
 }
@@ -443,8 +449,11 @@ interface Row {
   updated_at_ms: number;
 }
 
+const DEADLINE_COLUMNS =
+  "id, title, due_date, program, kind, source_json, status, revision, previous_due_date, time_zone, created_at_ms, updated_at_ms";
+
 function row(sql: SqlExec, id: string): Row | null {
-  return (sql.exec("SELECT * FROM deadlines WHERE id = ?", id).toArray()[0] as Row | undefined) ?? null;
+  return (sql.exec(`SELECT ${DEADLINE_COLUMNS} FROM deadlines WHERE id = ?`, id).toArray()[0] as Row | undefined) ?? null;
 }
 
 function view(sql: SqlExec, r: Row): Deadline {
@@ -478,7 +487,7 @@ function view(sql: SqlExec, r: Row): Deadline {
 }
 
 export function listDeadlines(sql: SqlExec): Deadline[] {
-  const rows = sql.exec("SELECT * FROM deadlines ORDER BY status != 'open', due_date, id").toArray() as Row[];
+  const rows = sql.exec(`SELECT ${DEADLINE_COLUMNS} FROM deadlines ORDER BY status != 'open', due_date, id`).toArray() as Row[];
   return rows.map((r) => view(sql, r));
 }
 
@@ -787,7 +796,7 @@ export async function routeDeadlines(
   rest: string,
   readBody: () => Promise<unknown>,
 ): Promise<Response | null> {
-  const one = rest.match(/^\/deadlines\/([^/]+)$/);
+  const one = rest.match(DEADLINE_PATH);
   if (rest !== "/deadlines" && !one) return null;
   try {
     if (rest === "/deadlines") {

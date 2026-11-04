@@ -11,8 +11,15 @@
 const SCREEN = "Simulated: a screen drawn by the stand-in for Mano's computer, not a screenshot of a real fill.";
 const YES = "Simulated: Maria is synthetic, and this run scripted her YES.";
 
+const HTML_SPECIAL_RE = /[&<>"']/g;
+const MAIN_OPEN_RE = /<main>/;
+const YES_LINE_RE = /(<\/h1><p>[^<]*<\/p>)/;
+const STEP_LINE_RE = /(<li><p>\d+\. [^<]*<\/p>)/g;
+const FILLED_FORM_RE = /(<h2>The filled form<\/h2>)/;
+const JUDGE_LABEL_RE = /<div class="judge-label">[\s\S]*?<\/div>/g;
+
 function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+  return text.replace(HTML_SPECIAL_RE, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 const label = (text: string) => `<div class="judge-label"><p><strong>${escapeHtml(text)}</strong></p></div>`;
@@ -24,13 +31,13 @@ export function labelReplayPage(html: string, simulated: string[]): string {
     `Maria is synthetic. These parts of the run were simulated:</p><ul>${simulated.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>`;
   let steps = 0;
   const out = html
-    .replace(/<main>/, () => `<main>${banner}`)
-    .replace(/(<\/h1><p>[^<]*<\/p>)/, (m) => `${m}${label(YES)}`)
-    .replace(/(<li><p>\d+\. [^<]*<\/p>)/g, (m) => {
+    .replace(MAIN_OPEN_RE, () => `<main>${banner}`)
+    .replace(YES_LINE_RE, (m) => `${m}${label(YES)}`)
+    .replace(STEP_LINE_RE, (m) => {
       steps += 1;
       return `${m}${label(SCREEN)}`;
     })
-    .replace(/(<h2>The filled form<\/h2>)/, (m) => `${m}${label(SCREEN)}`);
+    .replace(FILLED_FORM_RE, (m) => `${m}${label(SCREEN)}`);
   const added = out.split('<div class="judge-label">').length - 1;
   if (!out.includes(banner) || !out.includes(label(YES)) || steps === 0) {
     throw new Error("The replay page has no place for the judge run's labels.");
@@ -43,5 +50,5 @@ export function labelReplayPage(html: string, simulated: string[]): string {
 
 // Engine's page as it was before labelReplayPage, for tests.
 export function withoutJudgeLabels(html: string): string {
-  return html.replace(/<div class="judge-label">[\s\S]*?<\/div>/g, "");
+  return html.replace(JUDGE_LABEL_RE, "");
 }

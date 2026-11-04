@@ -5,6 +5,7 @@ import { sha256Hex } from "./hash.js";
 // Approvals resolve document bytes through here, never from the caller.
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/;
+const GENERATION_PREFIX = /^g(\d+)\//;
 
 export function documentsPrefix(personId: string): string {
   if (!ID_PATTERN.test(personId)) throw new Error("Person and document IDs must be slug-safe.");
@@ -68,7 +69,7 @@ export async function sweepDocuments(files: R2Bucket, personId: string, keepFrom
     const gone = listed.objects
       .map((o) => o.key)
       .filter((key) => {
-        const m = key.slice(prefix.length).match(/^g(\d+)\//);
+        const m = key.slice(prefix.length).match(GENERATION_PREFIX);
         return !m || Number(m[1]) < keepFrom;
       });
     if (gone.length > 0) await files.delete(gone);

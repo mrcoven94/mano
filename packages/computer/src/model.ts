@@ -30,6 +30,8 @@ export interface FetchModelOptions {
 
 const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
 
+const TRAILING_SLASH_RE = /\/$/;
+
 /** Responses API over fetch. Sends store:false so nothing is kept server-side. */
 export class FetchModelClient implements ModelClient {
   private baseUrl: string;
@@ -39,7 +41,7 @@ export class FetchModelClient implements ModelClient {
   private extraBody: Readonly<Record<string, unknown>>;
 
   constructor(options: FetchModelOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.baseUrl = options.baseUrl.replace(TRAILING_SLASH_RE, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.retryDelaysMs = options.retryDelaysMs ?? [1000, 2000, 4000];

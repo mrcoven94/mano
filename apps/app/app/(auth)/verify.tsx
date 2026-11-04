@@ -10,6 +10,9 @@ import { useStrings } from "../../lib/i18n";
 import { pendingSignIn, setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
 
+const SIX_DIGITS = /^\d{6}$/;
+const NON_DIGITS = /[^\d]/g;
+
 export default function Verify() {
   const s = useStrings();
   const router = useRouter();
@@ -24,7 +27,7 @@ export default function Verify() {
   const { email, challengeId } = pending;
 
   const submit = async (): Promise<void> => {
-    if (!/^\d{6}$/.test(code.trim())) {
+    if (!SIX_DIGITS.test(code.trim())) {
       setError(s.invalidCode);
       return;
     }
@@ -54,7 +57,7 @@ export default function Verify() {
         <Field
           label={s.codeLabel}
           value={code}
-          onChangeText={(v) => setCode(v.replace(/[^\d]/g, "").slice(0, 6))}
+          onChangeText={(v) => setCode(v.replace(NON_DIGITS, "").slice(0, 6))}
           placeholder={s.codePlaceholder}
           keyboardType="number-pad"
           maxLength={6}

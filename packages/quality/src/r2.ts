@@ -31,8 +31,12 @@ function signingKey(secret: string, date: string, region: string): Buffer {
   return hmac(kService, "aws4_request");
 }
 
+const ISO_SEPARATORS_RE = /[-:]/g;
+const ISO_MILLIS_RE = /\.\d{3}Z$/;
+const LEADING_SLASHES_RE = /^\/+/;
+
 function amzDate(d: Date): string {
-  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return d.toISOString().replace(ISO_SEPARATORS_RE, "").replace(ISO_MILLIS_RE, "Z");
 }
 
 // Signs an S3 request over the given header set. Extra headers exist for the
@@ -81,20 +85,20 @@ export function signS3Get(opts: {
 }
 
 export function privateObjectUrl(creds: R2Creds, key: string): string {
-  const clean = key.replace(/^\/+/, "");
+  const clean = key.replace(LEADING_SLASHES_RE, "");
   const encoded = clean.split("/").map((seg) => encodeURIComponent(seg)).join("/");
   return `https://${creds.accountId}.r2.cloudflarestorage.com/${creds.bucket ?? PRIVATE_BUCKET}/${encoded}`;
 }
 
 export function signedPrivateGet(creds: R2Creds, key: string, date = new Date()): SignedGet {
   const url = privateObjectUrl(creds, key);
-  const host = new URL(url).host;
+  const { host, pathname } = new URL(url);
   const { authorization, amzDate: stamp } = signS3Get({
     accessKeyId: creds.accessKeyId,
     secretAccessKey: creds.secretAccessKey,
     region: creds.region ?? "auto",
     host,
-    path: new URL(url).pathname,
+    path: pathname,
     date,
   });
   return {

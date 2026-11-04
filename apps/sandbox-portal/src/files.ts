@@ -43,8 +43,10 @@ export type TrackedOwner =
   | { kind: "session"; sessionId: string }
   | { kind: "submission"; scope: string; key: string };
 
+const DRAFT_KEY_PREFIX = /^drafts\/([^/]+)\//;
+
 export function trackedOwner(r2key: string): TrackedOwner {
-  const draft = /^drafts\/([^/]+)\//.exec(r2key);
+  const draft = DRAFT_KEY_PREFIX.exec(r2key);
   if (draft?.[1]) return { kind: "session", sessionId: draft[1] };
   if (r2key.startsWith("submissions/")) {
     // submissions/<scope>/<key>/<index>-<sha256>; the key itself may hold slashes.

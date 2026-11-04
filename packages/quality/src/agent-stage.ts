@@ -78,7 +78,10 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
 // apps/agent/agent/lib/muse.ts; a test keeps the two equal).
 export const AGENT_MODEL_ID = "muse-spark-1.3";
 
-const family = (id: string) => id.replace(/-contributor$/i, "").toLowerCase();
+const CONTRIBUTOR_SUFFIX_RE = /-contributor$/i;
+const JUDGE_PREFIX_RE = /^judge:/;
+
+const family = (id: string) => id.replace(CONTRIBUTOR_SUFFIX_RE, "").toLowerCase();
 
 // The agent stage's judge: MANO_MODEL_AGENT_JUDGE_ID when set (a Standard
 // Meta model other than the agent's), otherwise the bench judge. If that is
@@ -86,7 +89,7 @@ const family = (id: string) => id.replace(/-contributor$/i, "").toLowerCase();
 export function agentJudgeFromEnv(env: NodeJS.ProcessEnv): { judge: JudgeClient; models: { agent: string; fallback: string; judge: string }; selfJudged: boolean } {
   const fallback = env.MANO_MODEL_BENCH_ID ?? "";
   const own = env.MANO_MODEL_AGENT_JUDGE_ID ?? "";
-  if (/-contributor$/i.test(own)) throw new Error("the agent's judge must run on a Standard model ID, not a -contributor one");
+  if (CONTRIBUTOR_SUFFIX_RE.test(own)) throw new Error("the agent's judge must run on a Standard model ID, not a -contributor one");
   let judge: JudgeClient;
   if (own && env.META_MODEL_API_KEY) {
     judge = new MetaJudge(new MetaModelClient(own, env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL, env.META_MODEL_API_KEY));
@@ -94,7 +97,7 @@ export function agentJudgeFromEnv(env: NodeJS.ProcessEnv): { judge: JudgeClient;
     const client = judgeClientFromEnv(env);
     judge = client.live ? new MetaJudge(client) : new FakeJudge();
   }
-  const judgeId = judge.id.replace(/^judge:/, "");
+  const judgeId = judge.id.replace(JUDGE_PREFIX_RE, "");
   const selfJudged = [AGENT_MODEL_ID, fallback].filter(Boolean).some((m) => family(m) === family(judgeId));
   return { judge, models: { agent: AGENT_MODEL_ID, fallback, judge: judgeId }, selfJudged };
 }

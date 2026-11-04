@@ -8,9 +8,12 @@ export interface KeyValue {
   remove(key: string): Promise<void>;
 }
 
+const SAFE_KEY = /^[A-Za-z0-9._-]+$/;
+const LOCAL_HOSTNAME = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+
 // Dots, never colons: SecureStore rejects keys with colons.
 export function assertSafeKey(key: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(key)) throw new Error(`Unsafe storage key: ${key}`);
+  if (!SAFE_KEY.test(key)) throw new Error(`Unsafe storage key: ${key}`);
 }
 
 export const STORE_PREFIX = "mano.";
@@ -72,7 +75,7 @@ function defaultJar(): CookieJar {
 
 function cookieSecure(): boolean {
   if (typeof location === "undefined") return true;
-  return !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  return !LOCAL_HOSTNAME.test(location.hostname);
 }
 
 // Web session jar. One cookie per key, Secure (except localhost) and
