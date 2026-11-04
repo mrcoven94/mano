@@ -13,7 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
-import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
+import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords, type DeadlineProposal, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
@@ -32,7 +32,21 @@ export interface LetterReply {
   text: string;
   // Whether a letter was read (false: unread, failed, or not stored).
   read: boolean;
+  // The one date this reply asks the person to confirm, when it asks.
+  offer?: DateOffer;
 }
+
+// A date Mano named and asked about, kept with the turn that asked: the
+// deadline to hold on a yes, built by Mail as it builds one it trusts, and
+// the sentence that asked. Kept as a memory note on the person's own record,
+// so a deletion takes it, under a prefix that never reaches the model.
+export interface DateOffer {
+  ask: string;
+  held: HeldDeadline;
+}
+const OFFER_NOTE = "date-offer:";
+// A yes this much later is not an answer to that text.
+const OFFER_TTL_MS = 24 * 60 * 60_000;
 
 // Every model call stops at the turn's own deadline, so a slow reading
 // ends early with a question instead of running past the reply.
@@ -234,6 +248,7 @@ export async function readTextedPhotos(
   const deadline = deadlineAt - HOLD_RESERVE_MS;
   let text: string;
   let read = false;
+  let offer: DateOffer | null = null;
   try {
     const files = [];
     for (const photo of photos) {
@@ -256,6 +271,7 @@ export async function readTextedPhotos(
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt), rememberPayStubs(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");
+    offer = dateOffer(reading, language(), dayBehind(receivedAt), text);
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
@@ -265,6 +281,76 @@ export async function readTextedPhotos(
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
     text = ANSWER_WORDS[language()].failed;
+    offer = null;
   }
-  return { text, read };
+  return { text, read, ...(offer ? { offer } : {}) };
+}
+
+// The offer in a reply, or null: exactly one date question, on a date only,
+// and the reply ends on it, so a yes can only answer that. A scam or link
+// warning never says this sentence, so it never gets here. Mail builds the
+// deadline by reading the letter again as if that one date were confirmed.
+function dateOffer(reading: MailReading, language: ReplyLanguage, today: string | undefined, text: string): DateOffer | null {
+  const w = ANSWER_WORDS[language];
+  const named = reading.questions.flatMap((question) => {
+    if (question.kind !== "confirm_deadline") return [];
+    const dates = new Set([...(question.proposal ? [question.proposal.dueDate] : []), ...(question.candidates ?? []).flatMap((c) => c.dates)]);
+    if (dates.size !== 1) return [];
+    const date = [...dates][0]!;
+    const ask = w.askDate(w.date(date));
+    return text.includes(ask) ? [{ question, date, ask }] : [];
+  });
+  if (named.length !== 1 || !text.endsWith(named[0]!.ask)) return null;
+  const { question, date, ask } = named[0]!;
+  const citation = question.proposal?.citation ?? question.candidates?.find((c) => c.citation)?.citation ?? null;
+  const sentence = question.proposal?.quote ?? question.candidates?.[0]?.sentence;
+  if (!citation || !sentence || !question.letterId) return null;
+  const proposal: DeadlineProposal = question.proposal
+    ? { ...question.proposal, confidence: "high" }
+    : { letterId: question.letterId, sentence, quote: sentence, citation, dueDate: date, obligation: "other", confidence: "high", count: null, reasons: [], others: [] };
+  const confirmed = { ...reading, questions: reading.questions.map((q) => (q === question ? { ...q, proposal } : q)) };
+  const held = answerReading(confirmed, language, today).deadlines.find((d) => d.letterId === question.letterId && d.dueDate === date);
+  return held ? { ask, held } : null;
+}
+
+// Replaces any earlier offer. A failed write only means a yes asks again.
+export async function keepOffer(engine: PersonEngine, offer: DateOffer, askedAt: string): Promise<void> {
+  try {
+    await dropOffers(engine);
+    await engine.addMemory(`${OFFER_NOTE}${JSON.stringify({ held: offer.held, askedAt })}`);
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_date_offer_failed", status: err instanceof EngineError ? err.status : null }));
+  }
+}
+
+function isOfferNote(content: string): boolean {
+  return content.startsWith(OFFER_NOTE);
+}
+
+async function dropOffers(engine: PersonEngine): Promise<void> {
+  for (const row of await engine.listMemory()) if (isOfferNote(row.content)) await engine.deleteMemory(row.id);
+}
+
+// The date Mano asked about in this person's last turn, or null. Only the
+// turn right before this one counts, so a yes to anything else saves nothing.
+export async function offerBefore(engine: PersonEngine, previousReceivedAt: string | null, nowMs: number): Promise<HeldDeadline | null> {
+  if (!previousReceivedAt) return null;
+  try {
+    const row = (await engine.listMemory()).filter((r) => isOfferNote(r.content)).at(-1);
+    if (!row) return null;
+    const { held, askedAt } = JSON.parse(row.content.slice(OFFER_NOTE.length)) as { held: HeldDeadline; askedAt: string };
+    const at = Date.parse(askedAt);
+    return at === Date.parse(previousReceivedAt) && nowMs - at <= OFFER_TTL_MS ? held : null;
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_date_offer_failed", err: err instanceof Error ? err.name : "unknown" }));
+    return null;
+  }
+}
+
+// A yes to the date Mano named: holds exactly that deadline, through the same
+// write as a date Mano trusts, so reminders follow. The words say what happened.
+export async function confirmOffer(engine: PersonEngine, held: HeldDeadline, askedAt: string, deadlineAt: number, language: ReplyLanguage): Promise<string> {
+  const [line] = await hold(engine, [held], askedAt, deadlineAt, ANSWER_WORDS[language]);
+  await dropOffers(engine).catch(() => console.warn(JSON.stringify({ type: "mano_date_offer_failed", step: "drop" })));
+  return line!;
 }

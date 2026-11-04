@@ -5,6 +5,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { presentationHash, renderQuestion } from "../agent/lib/pending.js";
 import { heldOf, initialSettleState, reduceSettleEvent } from "../agent/lib/settle.js";
+import { letterPhoto, pageJson, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import remind from "../agent/tools/remind.js";
 import fillForm from "../agent/tools/fill_form.js";
@@ -1446,6 +1447,97 @@ describe("turn timing log", () => {
     expect(Object.keys(entry.engine)).toEqual(expect.arrayContaining(["POST /turns", "POST /approvals/supersede", "GET /profile", "GET /approvals"]));
     expect(entry.engine["POST /turns"][0]).toBe(1);
     expect(line).not.toMatch(/heard about|turn_time/);
+  });
+});
+
+describe("a date question and an approval question at once", () => {
+  const DOC = "g0t1i0-0123456789ab";
+  const askingPage = (deadlines: { text: string; box_2d: number[] }[], text: string) =>
+    pageJson({
+      full_text: text,
+      sender: { text: null, box_2d: null },
+      program: { text: null, box_2d: null },
+      subject: { text: "SNAP renewal notice", box_2d: [40, 60, 70, 400] },
+      asked: [],
+      deadlines,
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+    });
+  const ONE_DATE = askingPage([{ text: "Due November 15, 2026", box_2d: [80, 60, 100, 300] }], "SNAP renewal notice\n\nDue November 15, 2026");
+  const TWO_DATES = askingPage(
+    [{ text: "Due November 15, 2026", box_2d: [80, 60, 100, 300] }, { text: "Or due November 20, 2026", box_2d: [110, 60, 130, 300] }],
+    "SNAP renewal notice\n\nDue November 15, 2026\n\nOr due November 20, 2026",
+  );
+
+  async function photo(turnId: string, page: string, opts: { texts?: string[]; fetchFn?: typeof fetch } = {}) {
+    engine.putDocument(personIdFor(HANDLE), DOC, new Uint8Array(await letterPhoto()));
+    const request = signedAt("/channels/mano/turn", { turnId, generation: 0, handleHash: HANDLE, grant: grants.get(HANDLE), receivedAt: Date.now(), texts: opts.texts ?? [], attachmentCount: 1, documents: [{ id: DOC, mimeType: "image/jpeg" }] });
+    const client = opts.fetchFn ? engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: opts.fetchFn }) : engineClient();
+    const runAgent = async () => ({ status: "replied" as const, text: "It is a renewal letter.", reason: "stop" });
+    return send(request, deps({ mailModel: recordedReader([page]), engine: client, runAgent }));
+  }
+  const filed = () => engine.approvals().filter((a) => a.status !== "pending" && a.status !== "rejected");
+
+  it("a yes after the approval was asked last goes to the approval, and holds no date", async () => {
+    const asked = await photo("turn_clash_00001", ONE_DATE);
+    expect(asked.body.text).toMatch(/Is that the date you need to meet\?$/);
+    const ask = await send(turn("turn_clash_00002", "Please file my renewal"));
+    expect(ask.body.status).toBe("waiting_approval");
+    expect((await send(turn("turn_clash_00003", "YES"))).body.text).toMatch(/^Done/);
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("a yes after the date was asked last holds the date, files nothing, and shows the approval again", async () => {
+    const ask = await send(turn("turn_clash_00011", "Please file my renewal"));
+    expect(ask.body.status).toBe("waiting_approval");
+    expect((await photo("turn_clash_00012", ONE_DATE)).body.text).toMatch(/Is that the date you need to meet\?$/);
+    const yes = await send(turn("turn_clash_00013", "YES"));
+    expect(yes.body.text).toMatch(/^I saved November 15, 2026 to your deadlines\./);
+    expect(engine.deadlineCalls.map((c) => c.body.dueDate)).toEqual(["2026-11-15"]);
+    expect(filed()).toHaveLength(0);
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.approvalId).toBe(ask.body.approvalId);
+    // That question is the last thing asked now, so a yes to it files it, once.
+    expect((await send(turn("turn_clash_00014", "YES"))).body.text).toMatch(/^Done/);
+    expect(filed()).toHaveLength(1);
+  });
+
+  it("a no about the date closes nothing", async () => {
+    const ask = await send(turn("turn_clash_00021", "Please file my renewal"));
+    await photo("turn_clash_00022", ONE_DATE);
+    await send(turn("turn_clash_00023", "no"));
+    expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("a yes after a letter asked which of its dates files nothing", async () => {
+    const ask = await send(turn("turn_clash_00031", "Please file my renewal"));
+    expect((await photo("turn_clash_00032", TWO_DATES)).body.text).toMatch(/\?$/);
+    const yes = await send(turn("turn_clash_00033", "YES"));
+    expect(yes.body.text).not.toMatch(/^Done/);
+    expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
+    expect(filed()).toHaveLength(0);
+  });
+
+  it("a yes after a photo with words, whose reply asked about the date, files nothing", async () => {
+    const ask = await send(turn("turn_clash_00051", "Please file my renewal"));
+    await photo("turn_clash_00052", ONE_DATE, { texts: ["and this letter?"] });
+    const yes = await send(turn("turn_clash_00053", "YES"));
+    expect(yes.body.text).not.toMatch(/^Done/);
+    expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
+    expect(filed()).toHaveLength(0);
+  });
+
+  it("when the question cannot be unhooked from the approval, the photo's reply asks nothing", async () => {
+    await send(turn("turn_clash_00041", "Please file my renewal"));
+    const refusing = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      /pending-approval/.test(new URL(String(input)).pathname) && init?.method === "DELETE" ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init)) as typeof fetch;
+    const asked = await photo("turn_clash_00042", ONE_DATE, { fetchFn: refusing });
+    expect(asked.body.text).not.toMatch(/\?/);
+    expect((await send(turn("turn_clash_00043", "YES"))).body.text).toMatch(/^Done/);
+    expect(engine.deadlineCalls).toHaveLength(0);
   });
 });
 

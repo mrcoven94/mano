@@ -18,7 +18,7 @@
 // instead of doing anything twice.
 import { createHash } from "node:crypto";
 
-import { REPLY_LANGUAGES, createModelClient, type ModelClient, type ReplyLanguage } from "@mano/mail";
+import { ANSWER_WORDS, REPLY_LANGUAGES, createModelClient, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
@@ -26,7 +26,7 @@ import { profileDataBlock, readProfileView } from "./profile.js";
 import { decisionLanguage, parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine, type ProfileView } from "./engine.js";
 import { detectLanguage, keepLanguage, languageFromProfile, shouldKeep } from "./language.js";
-import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
+import { LETTER_RULES, confirmOffer, documentsContext, keepOffer, letterBlock, offerBefore, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
 import { answerRequestWithPhoto } from "./sharing.js";
 import type { HoldResult } from "./propose.js";
@@ -384,11 +384,38 @@ async function decideTurn(
   return unshown;
 }
 
+// Makes the approval question shown earlier unanswerable until it is shown
+// again. The draft still waits. False when that could not be confirmed.
+async function unhookApproval(engine: PersonEngine): Promise<boolean> {
+  try {
+    const { pointer } = await engine.getPending();
+    if (pointer) await engine.clearPointer(pointer.approvalId);
+    return true;
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_unhook_failed", status: err instanceof EngineError ? err.status : null }));
+    return false;
+  }
+}
+
+// The reply to a saved date, followed by the approval question still waiting,
+// which is then the last thing asked and answerable once Channels reports it.
+async function withWaitingQuestion(engine: PersonEngine, line: string, language: ReplyLanguage): Promise<TurnResponse> {
+  try {
+    const { latest } = await engine.getPending();
+    const approval = latest ? (await engine.listApprovals()).find((a) => a.id === latest.approvalId && a.status === "pending") : undefined;
+    const question = approval ? (presentable(approval, language) ?? presentable(approval)) : null;
+    if (approval && question) return { httpStatus: 200, body: { status: "waiting_approval", text: `${line}\n\n${question}`, approval: question, approvalId: approval.id } };
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_reshow_failed", status: err instanceof EngineError ? err.status : null }));
+  }
+  return reply(line);
+}
+
 async function runTurn(
   deps: TurnDeps,
   engine: PersonEngine,
   body: TurnBody,
-  turn: { firstReceivedAt: string; created: boolean },
+  turn: { firstReceivedAt: string; created: boolean; previousReceivedAt: string | null },
   deadlineMs: number,
   clock: TurnClock,
 ): Promise<TurnResponse> {
@@ -412,8 +439,15 @@ async function runTurn(
   const language = (): ReplyLanguage => decisionLanguage(said) ?? detected ?? languageFromProfile(viewNow?.profile.person.language?.value) ?? "en";
   // Closing replaced drafts is retried at every turn until it lands.
   await clock.time("close", () => closeReplaced(engine));
-  if (decision) {
-    await Promise.race([viewRead, new Promise((resolve) => setTimeout(resolve, LANGUAGE_WAIT_MS).unref?.())]);
+  // A yes or no binds to the question asked last. When that was the date Mano
+  // named, no approval can take this answer: only a typed yes holds the date,
+  // and anything else asks again.
+  const offered = body.attachmentCount === 0 && !body.crisis ? await offerBefore(engine, turn.previousReceivedAt, turnAtMs) : null;
+  if (decision) await Promise.race([viewRead, new Promise((resolve) => setTimeout(resolve, LANGUAGE_WAIT_MS).unref?.())]);
+  if (offered && decision === "yes") {
+    return clock.time("confirm", async () => withWaitingQuestion(engine, await confirmOffer(engine, offered, turn.previousReceivedAt!, deadlineMs, language()), language()));
+  }
+  if (decision && !offered) {
     const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision, OUTCOME_WORDS[language()], deadlineMs));
     if (decided) return decided;
   }
@@ -433,6 +467,7 @@ async function runTurn(
 
   const context: string[] = [];
   if (crisis) context.push(CRISIS_LINE);
+  if (offered) context.push(`Mano just asked this person whether ${offered.dueDate} is the date they need to meet, and this message is not a plain yes, so no date was saved. If it does not settle that, ask plainly which date their letter says they need to meet. Do not save a date from the letter yourself.`);
   if (body.spoken) context.push(HEARD_RULES);
   // A texted photo is read first and answered in this same reply. With no
   // words that answer is the whole reply; the crisis line still leads
@@ -441,7 +476,14 @@ async function runTurn(
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, tracedMailModel(deps.mailModel ?? defaultMailModel(), body.handleHash), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS, language);
-    if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) return reply(letter.text);
+    // A letter's answer that asks a question takes the next yes, so no approval
+    // shown earlier may. If that cannot be undone, it asks nothing.
+    if (letter.text.includes("?") && !(await unhookApproval(engine))) return reply(ANSWER_WORDS[language()].failed);
+    if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) {
+      // Only when this is the whole reply does it end on the question.
+      if (letter.offer) await keepOffer(engine, letter.offer, turn.firstReceivedAt);
+      return reply(letter.text);
+    }
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
@@ -562,12 +604,12 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   }
   engine.onCall = clock.engineCall;
 
-  let turn: { firstReceivedAt: string; created: boolean };
+  let turn: { firstReceivedAt: string; created: boolean; previousReceivedAt: string | null };
   let starts: boolean;
   try {
     const recorded = await clock.time("ledger", () => recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString()));
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
-    turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
+    turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created, previousReceivedAt: recorded.previousReceivedAt };
     starts = conversationStarts(recorded);
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
