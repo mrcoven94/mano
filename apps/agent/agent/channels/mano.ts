@@ -11,6 +11,7 @@ import { glimmerCheckerFromEnv } from "@mano/guardian";
 
 import { handleDeleted } from "../lib/deletion.js";
 import { engineFromEnv } from "../lib/engine.js";
+import { selectModelRoute } from "../lib/muse.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
 import { AgentMarks } from "../lib/timings.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
@@ -39,6 +40,7 @@ export default defineChannel({
       handleTurn(request, {
         secret: process.env.MANO_AGENT_SECRET,
         engine: engineFromEnv(),
+        modelId: selectModelRoute().modelId,
         warmGuardian: () => warmGuardian(),
         background: (work) => waitUntil(work),
         async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context, deadlineMs, timings }) {
