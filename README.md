@@ -161,7 +161,7 @@ A scam letter gets the warning first, and a single date in it appears only as th
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 535fae5 success 2026-11-04 |
+| Site | live | https://withmano.com | 03d56cf success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
 | Engine | live | https://engine.withmano.com/health | 535fae5 success 2026-11-04 |
 | Channels | live | https://text.withmano.com/health | 535fae5 success 2026-11-04 |
