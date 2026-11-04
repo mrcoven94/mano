@@ -88,9 +88,12 @@ export function heldBack(turnId: string, approvalId: string): boolean {
   return HELD_BACK.has(`a:${approvalId}`) || HELD_BACK.has(`t:${turnId}`);
 }
 
+const KEY_GENERATION_PREFIX = /^agent:g\d+:/;
+const KEY_DRAFT_SUFFIX = /:d\d+$/;
+
 // The turn a drafted approval came from, read from its key (see proposalKey).
 function turnOf(idempotencyKey: string): string {
-  return idempotencyKey.replace(/^agent:g\d+:/, "").replace(/:d\d+$/, "");
+  return idempotencyKey.replace(KEY_GENERATION_PREFIX, "").replace(KEY_DRAFT_SUFFIX, "");
 }
 
 // The one check before an approval question is shown or counted as shown:
