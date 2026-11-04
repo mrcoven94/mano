@@ -188,6 +188,9 @@ describe("the daily check", () => {
     expect(posts).toEqual([]);
     await alarmsAt(h, at(2, 9, 0, zone));
     expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:NY:snap"]);
+    // That morning's own check does not add another text on top of it.
+    await alarmsAt(h, at(2, 9, 30, zone));
+    expect(posts).toHaveLength(1);
   });
 
   it("after STOP, Channels refuses, nothing is retried and the program is not raised again", async () => {
@@ -268,6 +271,19 @@ describe("the daily check", () => {
     await alarmsAt(h, at(1, 9, 30, PACIFIC));
     expect(posts).toEqual([]);
     expect(await checkTimes(h)).toEqual([]);
+  });
+
+  it("the alarm that wakes an evicted agent still runs the check that is due", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = await personIn("ao-wake", "CA");
+    // A wake runs onStart before the alarm's jobs, and a request can land first.
+    setClock(at(1, 9, 30, PACIFIC));
+    await runInDurableObject(stubFor(h), (instance) => (instance as PersonAgent).onStart());
+    expect((await patch(h, { "person.language": "English" })).status).toBe(200);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:CA:snap"]);
+    expect(await checkTimes(h)).toEqual([at(2, 9, 30, PACIFIC)]);
   });
 
   it("a lost schedule comes back when the agent next starts", async () => {

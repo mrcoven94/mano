@@ -19,7 +19,7 @@
 // program was raised: it is never planned again, whatever became of it, and
 // after a conversation delete the new generation starts over. A run plans at
 // most one text, and none while an earlier one is waiting or one was planned
-// today, so three new programs are three days of one text, not three at once.
+// or sent today, so three new programs are three days of one text, not three at once.
 //
 // The check runs at the nudge time (MANO_NUDGE_TIME) in the zone of the
 // person's state. Right before each handoff the text is checked again: with
@@ -102,9 +102,12 @@ export function planHelpText(sql: SqlExec, profile: Profile, generation: number,
   if (generation !== currentGeneration(sql)) return null;
   const today = localDate(nowMs, timeZone);
   const earlier = sql
-    .exec("SELECT id, status, created_at_ms FROM reminders WHERE substr(id, 1, ?) = ?", HELP_PREFIX.length, HELP_PREFIX)
-    .toArray() as { id: string; status: string; created_at_ms: number }[];
-  const busy = earlier.some((r) => ["scheduled", "claimed", "sending"].includes(r.status) || localDate(Number(r.created_at_ms), timeZone) === today);
+    .exec("SELECT id, status, created_at_ms, finished_at_ms FROM reminders WHERE substr(id, 1, ?) = ?", HELP_PREFIX.length, HELP_PREFIX)
+    .toArray() as { id: string; status: string; created_at_ms: number; finished_at_ms: number | null }[];
+  // Finished counts too: a text held overnight goes the morning after it was planned.
+  const busy = earlier.some(
+    (r) => ["scheduled", "claimed", "sending"].includes(r.status) || localDate(Number(r.finished_at_ms ?? r.created_at_ms), timeZone) === today,
+  );
   if (busy) return null;
   const raised = new Set(earlier.map((r) => r.id));
   for (const match of helpMatches(profile)) {

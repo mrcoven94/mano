@@ -792,24 +792,30 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   // Keeps one check scheduled at the person's next nudge time while the flag
-  // is on, and none while it is off. Serialized like the delivery wake-up.
+  // is on, and none while it is off. Serialized like the delivery wake-up. A
+  // check already due is left to run, because a wake runs onStart before the
+  // alarm's jobs: only the run itself (justRan) moves on to the next day.
   private alwaysOnChain: Promise<void> = Promise.resolve();
-  armAlwaysOnCheck(): Promise<void> {
-    const run = this.alwaysOnChain.then(() => this.moveAlwaysOnCheck());
+  armAlwaysOnCheck(justRan = false): Promise<void> {
+    const run = this.alwaysOnChain.then(() => this.moveAlwaysOnCheck(justRan));
     this.alwaysOnChain = run.catch(() => {});
     return run;
   }
 
-  private async moveAlwaysOnCheck(): Promise<void> {
+  private async moveAlwaysOnCheck(justRan: boolean): Promise<void> {
     const { on, timeZone } = await this.alwaysOnSetting();
-    const atMs = on ? nextCheckAt(timeZone, Date.now(), nudgeTimeOf(this.env)) : null;
+    const nowMs = Date.now();
+    const atMs = on ? nextCheckAt(timeZone, nowMs, nudgeTimeOf(this.env)) : null;
     let kept = false;
     for (const schedule of await this.listSchedules()) {
       if (schedule.callback !== "runAlwaysOnCheck") continue;
-      if (!kept && atMs !== null && schedule.time * 1000 === atMs) kept = true;
+      const timeMs = schedule.time * 1000;
+      if (!kept && atMs !== null && (timeMs === atMs || (timeMs <= nowMs && !justRan))) kept = true;
       else await this.cancelSchedule(schedule.id);
     }
-    if (atMs !== null && !kept) await this.schedule(new Date(atMs), "runAlwaysOnCheck", {});
+    // This method keeps the one row itself, so a dedupe by callback could only
+    // land on the row that is running.
+    if (atMs !== null && !kept) await this.schedule(new Date(atMs), "runAlwaysOnCheck", {}, { idempotent: false });
   }
 
   // The scheduled callback. Plans at most one text and hands it to the
@@ -825,7 +831,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store.audit({ event: "always_on.text_planned", reminderHash: await auditDigest(planned) });
       await this.armReminderWakeup();
     } finally {
-      await this.armAlwaysOnCheck();
+      await this.armAlwaysOnCheck(true);
     }
   }
 
