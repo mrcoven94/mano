@@ -81,14 +81,17 @@ const MOVES_THE_DATE = new RegExp(
 const REVERSES = /^(?:do\s+not|don['’]t|never)\b[^.]*:$|^instead\b/i;
 // "If we do not hear from you by" is the date to meet. "You must not return it by" is not.
 const NEGATION = /\b(?:not|never|cannot)\b|n['’]t\b/i;
-const CONDITION = /\b(?:if|unless|without|until|or)\b/i;
+// A condition clause, whose own negation is the date to meet, and an "unless" that
+// a negation leads into: "we cannot keep it open unless you respond by".
+const CONDITION_CLAUSE = /\b(?:if|without|until)\b[^,;]*/g;
+const UNLESS_LEADS_IN = /\bunless\b[^,;]*$/i;
 const NOT_NEEDED_AFTER = /\bnot\s+(?:required|needed|necessary)\b/i;
 const CUT_FROM_LONGER = /[\d/-]$/;
 const RUNS_ON = /^(?:\d|[/-]\d)/;
 const YEAR_AFTER = /^,?\s*['’]?\d{2,4}\b(?!:)/;
 const HAS_YEAR = /\d{4}|\d[/-]\d{1,2}[/-]\d{2}$/;
 const ABOUT_AN_INTERVIEW = /\b(?:interview|appointment)\b/i;
-const COUNTED = /\b(?:within|in)\s+\S+\s+(?:\w+\s+)?(?:days?|weeks?|months?)\b/i;
+const COUNTED = /\b(?:within|in)\s+(?:\S+\s+){1,4}?(?:days?|weeks?|months?)\b|\b\d+\s+(?:\w+\s+)?(?:days?|weeks?|months?)\s+(?:after|from|of|following)\b/i;
 const PROOF_OF_PAYMENT = /\b(?:proof|copy|copies|receipt|evidence)\s+of\b/i;
 const LIST_MARKER = /^[-*•]\s*/;
 const WHITESPACE_RUN = /\s+/g;
@@ -139,7 +142,7 @@ function checked(date: string, sentence: string, letterText: string, noticeIso: 
     const at = printedAt(text, written);
     if (at < 0 || COUNTED.test(text) || NOT_NEEDED_AFTER.test(text.slice(at))) return null;
     const before = text.slice(0, at);
-    if (NEGATION.test(before) && !CONDITION.test(before)) return null;
+    if (NEGATION.test(before.replace(CONDITION_CLAUSE, "")) && !UNLESS_LEADS_IN.test(before)) return null;
     const verdict = gateSentence(source, noticeIso);
     if (verdict.kind === "ask" && verdict.count) return null;
   }
