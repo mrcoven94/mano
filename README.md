@@ -52,7 +52,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Reading a letter into cited fields | Muse Spark Open | The same route and backup | Running |
 | Finding the letter in the photo | SAM 3.1 | Meta's API | Not running, 402. On-device paper detection (plain code) takes its place |
 | Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Muse Voice Transcribe is not running, 402. The backup is deployed and not confirmed live |
-| Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Computer fill on production: not confirmed yet. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
+| Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Running: three unbroken production runs, below. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
@@ -67,7 +67,19 @@ At this commit, the first reply names a date only when every sentence the rule s
 
 A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). That is merged and not confirmed on production yet.
 
-### Filling a form on layouts it has not seen
+### Mano's computer on production
+
+Three unbroken production runs at 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian allowing the filing at the yes:
+
+| Confirmation | Total time |
+| --- | --- |
+| SR-YZSXQYBF | 76.6 s |
+| SR-KQSBQYV4 | 95.4 s |
+| SR-VRAQZQYY | 83.4 s |
+
+The sandbox portal holds all three filings. The fill, Guardian's answer and the times come from the lead's run output, which is not published. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+
+### Local measurement, not production: layouts it has not seen
 
 The model reads screenshots and clicks points on the screen. It does not read the page's structure. Counting every fill at the words in [PR 175](https://github.com/mrcoven94/mano/pull/175), 41 of 43 were fully correct. The table is one good run from that PR, with a synthetic person, in local Chromium at 1280 by 800, against the sandbox portal on local `wrangler dev`, on Muse Spark Open on a Modal Shared Endpoint, at the agent's limits of 25 steps and 60 seconds. Correct fields are read back from the draft the portal saved.
 
@@ -84,7 +96,7 @@ The model reads screenshots and clicks points on the screen. It does not read th
 | scramble e2d135b5 | 7 of 7 | 9.4 s | 4 |
 | scramble 11ca5a59 | 7 of 7 | 12.0 s | 5 |
 
-The 2 misses of the 43 are on scramble 026f6136, an accordion layout, which stopped at the step limit in 2 of its 5 fills and saved nothing, for a cause we do not know. This is a local measurement and says nothing about the hosted desktop.
+The 2 misses of the 43 are on scramble 026f6136, an accordion layout, which stopped at the step limit in 2 of its 5 fills and saved nothing, for a cause we do not know. This measures local Chromium and says nothing about the hosted desktop or production.
 
 ## What was built during the hackathon
 
@@ -129,7 +141,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 - On unseen wording, Mano does not tell a person the deadline. The held-out result above is the measure of it. The synthetic letter in `pnpm judge` does hold its date, so that run does not show this.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 of 11 planted instructions in the held-out test, which ran no Guardian. Guardian has no held-out number of its own.
-- Computer fill on production is not confirmed. The hosted desktop is unmeasured against the local table above, and a fill has no model backup.
+- Computer fill on production rests on the three runs above, which skip the text line and the reminder, on one portal layout. The hosted desktop is not measured on unseen layouts, and a fill has no model backup.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
@@ -147,10 +159,10 @@ A scam letter gets the warning first, and a single date in it appears only as th
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | bedd340 success 2026-11-04 |
+| Site | live | https://withmano.com | 535fae5 success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | cc29936 success 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | cc29936 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | 535fae5 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | 535fae5 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
@@ -197,9 +209,9 @@ Three parts are simulated even with a key. Guardian's verdict is recorded, becau
 - `modal`, with `MODAL_ENDPOINT_URL` and `MODAL_PROXY_TOKEN`, sends turns, page reads and form fills to `meta-models/Muse-Spark-Open-816B-A42B` on a Modal Shared Endpoint. No request carries a pin on this route (see the November 4 entry in `docs/decisions.md`). With a setting missing or a URL off Modal's domain, it calls no model and does not fall back.
 - With `OPENROUTER_API_KEY` set as well, a turn or page read that times out, gets a 429 or 5xx, or loses its connection goes to `meta/muse-spark-open` on OpenRouter, and a log line with fixed words says which route answered. A form fill has no backup.
 - `openrouter`, with `OPENROUTER_API_KEY`, sends the same work to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight.
-- With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`.
+- With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. That route is unavailable today, because Meta answers 402.
 
-On either open-weight route, SAM 3.1 is not called. A fill has no hosted computer tool, so it never raises a safety check. The text line's own settings are in `apps/channels/wrangler.toml`, and production's plain answer and crisis check back up to OpenRouter.
+On either open-weight route, SAM 3.1 is not called. A fill has no hosted computer tool, so it never raises a safety check. The text line's own settings are in `apps/channels/wrangler.toml`. Its backup is OpenRouter only for now.
 
 Guardian scales to zero when idle, and a check fails closed after 10 seconds. A check that finds Guardian cold refuses with "try again in a few minutes" and leaves it starting. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` with `min_containers` set to 1.
 
