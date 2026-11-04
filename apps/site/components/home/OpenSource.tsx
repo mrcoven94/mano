@@ -48,7 +48,7 @@ const RUN: Line[] = [
 const FACTS: [icon: string, title: string, text: string][] = [
   ["check", "Consent is a record.", "Every share names who, why and until when, and can be taken back."],
   ["clipboard", "Every action is logged first.", "Mano decides, writes it down, then acts. If anything is unclear, it stops."],
-  ["code", "Runs without our accounts.", "Every part works locally with stand-ins, so you can try it today."],
+  ["code", "Runs without our accounts.", "pnpm judge runs the renewal on your machine with no key, login or account."],
 ];
 
 const TABS = [["consent", "Consent"], ["log", "Action log"], ["run", "Run it"]] as const;

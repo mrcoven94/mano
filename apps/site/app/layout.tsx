@@ -15,7 +15,7 @@ const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: 
 export const metadata: Metadata = {
   metadataBase: new URL("https://withmano.com"),
   title: { default: "Mano", template: "%s | Mano" },
-  description: "Mano is AI that helps you pay rent, get food benefits, keep the lights on, afford medicine and find child care. It finds the help, fills out the forms and keeps it coming.",
+  description: "Text Mano a photo of your renewal letter. It reads the letter, tracks the deadline and files the renewal after your yes. Mano is free in this demo and files only on a practice portal.",
   openGraph: { siteName: "Mano", type: "website" },
 };
 

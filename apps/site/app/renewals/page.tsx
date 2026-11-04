@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import Faq from "@/components/Faq";
 import InView from "@/components/InView";
 import Mascot from "@/components/Mascot";
@@ -13,7 +12,7 @@ import { SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/lib/site";
 import "./renewals.css";
 
 const title = "Keep your benefits: renewals";
-const description = "Your renewal letter came. Text Mano a photo of it. Mano reads the date, asks before it holds it, reminds you and fills out the form, and nothing is sent without your yes.";
+const description = "Your renewal letter came. Text Mano a photo of it. Mano reads the date, asks before it holds it, reminds you and fills out the form. Nothing is sent without your yes, and in this demo it goes only to a practice portal.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/renewals" }, openGraph: { title, description } };
 
@@ -34,9 +33,10 @@ const PROMISES: [string, string][] = [
 ];
 
 const faqs: [string, string][] = [
-  ["Does Mano cost anything?", "Keeping your help is always free. Reading your letters, holding dates, reminders and renewals have no limits and need no card. Pricing on the home page shows what Plus adds."],
-  ["Do I need an app?", `No. Text Mano at ${SMS_NUMBER} from any phone that can text. Mano on the web is coming soon.`],
-  ["Is it safe to give Mano my Social Security number?", "Mano never asks for it through a link. When a form needs it, the form goes out only after you see it and say yes. If a text or letter asks for it at a link, send it to Mano first and it will check."],
+  ["Does Mano cost anything?", "No. Mano is free in this demo, with no card and no sign up."],
+  ["Does Mano file with a real office?", "No. Today Mano files only on a practice portal. If you have a real renewal due, you still need to send it to your office yourself."],
+  ["Do I need an app?", `No. Text Mano at ${SMS_NUMBER} from any phone that can text.`],
+  ["Is it safe to give Mano my Social Security number?", "Mano never asks for it through a link. If a text or letter asks for it at a link, send it to Mano first and it will check."],
   ["Will Mano send anything without asking me?", "No. Mano shows you who it is for, why and the exact pages, and waits for your yes. If anything changes after that, it asks again."],
 ];
 
@@ -48,13 +48,13 @@ export default function Renewals() {
       <div className="h-hero rw-hero">
         <div className="wrap rw-hero-grid">
           <div className="rw-hero-copy">
-            <h1>Your renewal is due. <mark className="rw-phrase">Keep your benefits coming.</mark></h1>
-            <p className="h-lede">Food benefits, health coverage, help with the power bill. Text Mano a photo of the letter.</p>
+            <h1>Your renewal is due. <mark className="rw-phrase">Text Mano a photo of the letter.</mark></h1>
+            <p className="h-lede">Mano reads it, tracks the deadline and fills out your food benefits renewal. In this demo it files on a practice portal, not a real office.</p>
             <div className="btn-row h-ctas">
               <TextMano className="btn btn-primary btn-lg" align="start" />
               <a className="btn btn-ghost btn-lg" href="#letter">How it works</a>
             </div>
-            <p className="h-note">Keeping your help is always free. No card, no sign up. Just text.</p>
+            <p className="h-note">Mano is free in this demo. No card, no sign up.</p>
           </div>
           <div className="rw-hero-art">
             <Mascot tile wave tone="orange" size={72} className="rw-hero-mascot" />
@@ -170,26 +170,13 @@ export default function Renewals() {
         </div>
       </section>
 
-      <section className="rw-price" aria-labelledby="rw-price-h">
-        <div className="wrap">
-          <div className="rw-price-card">
-            <Mascot tile wave tone="orange" size={64} className="rw-price-mascot" />
-            <div>
-              <h2 id="rw-price-h">Keeping your help is free. Always.</h2>
-              <p className="lede">Reading your letters, holding dates, reminders and renewals are free, with no limits and no card.</p>
-            </div>
-            <Link className="btn btn-ghost btn-lg" href="/#pricing">See Free and Plus</Link>
-          </div>
-        </div>
-      </section>
-
       <Faq items={faqs} />
 
       <section id="get-mano" className="h-close" aria-labelledby="close-h">
         <div className="wrap">
           <Mascot tile wave tone="orange" size={88} className="close-mascot" />
           <h2 id="close-h">Don&rsquo;t let one letter end your help.</h2>
-          <p className="lede">Text Mano a photo of your renewal letter. It will find the date and start on it tonight.</p>
+          <p className="lede">Text Mano a photo of your renewal letter. It will find the date and tell you what happens next.</p>
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">
             <TextMano className="btn btn-primary btn-lg" />

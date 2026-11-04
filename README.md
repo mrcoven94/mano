@@ -72,7 +72,7 @@ These parts are not Meta model calls: the keyword crisis floor that every text p
 
 `node scripts/status.mjs` generates this table from each health URL and the latest deploy. A daily workflow warns when this copy is stale.
 
-The site labels these pieces coming soon. This is what is true of each one today:
+The site does not offer these pieces. This is what is true of each one today:
 
 | Piece | True today |
 | --- | --- |
