@@ -1,4 +1,5 @@
 import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker } from "@mano/guardian";
+import type { TryEvent } from "@mano/protocol";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
 import { boundFetch } from "../fetch.js";
@@ -60,12 +61,18 @@ type GuardianOptions = ConstructorParameters<typeof GlimmerModelChecker>[0];
 // success response behind it is Guardian being unavailable, not Guardian
 // refusing, so it is marked unavailable. Each check gets its own model
 // client, so concurrent checks never share what they observed.
+export type GuardianTrace = (event: TryEvent) => void;
+const GUARDIAN_MODEL_NAME = "muse-glimmer-30b";
+const GUARDIAN_RUNS_ON = "Our GPU on Modal";
+
 export class GuardianChecker implements Checker {
   private readonly warmer: GlimmerModelChecker;
 
   constructor(
     private readonly rules: Checker,
     private readonly options: GuardianOptions,
+    // Told each model call and verdict, for the judge demo's panel.
+    private readonly trace?: GuardianTrace,
   ) {
     this.warmer = new GlimmerModelChecker(options);
   }
@@ -78,13 +85,22 @@ export class GuardianChecker implements Checker {
     const guardian = new GlimmerModelChecker({
       ...this.options,
       fetchImpl: async (...args) => {
-        const response = await send(...args);
-        answered = response.ok;
-        return response;
+        const at = Date.now();
+        try {
+          const response = await send(...args);
+          answered = response.ok;
+          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: String(response.status) });
+          return response;
+        } catch (err) {
+          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: "no answer" });
+          throw err;
+        }
       },
     });
+    const at = Date.now();
     const [model] = await Promise.all([guardian.check(input), this.warmer.warm()]);
     const problems = [...local.problems, ...model.problems];
+    this.trace?.({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at });
     if (model.verdict === "block") return answered ? { verdict: "block", problems } : { verdict: "block", problems, unavailable: true };
     return { verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict, problems };
   }
@@ -96,7 +112,7 @@ export class GuardianChecker implements Checker {
 // to 7.5 seconds, and the agent gives Engine 15 seconds per call.
 export function gatewayChecker(
   setting: CheckerSetting,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; trace?: GuardianTrace } = {},
 ): Pick<GatewayOptions, "checker" | "checkerTimeoutMs"> {
   switch (setting.kind) {
     case "local-rules":
@@ -111,7 +127,7 @@ export function gatewayChecker(
         timeoutMs,
         ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}),
       };
-      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian), checkerTimeoutMs: timeoutMs + 1000 };
+      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian, opts.trace), checkerTimeoutMs: timeoutMs + 1000 };
     }
   }
 }

@@ -31,6 +31,7 @@ import { answerRequestWithPhoto } from "./sharing.js";
 import type { HoldResult } from "./propose.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
+import { tracedMailModel } from "./try-trace.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
@@ -418,7 +419,7 @@ async function runTurn(
   // The reading reaches the model only as data in the person's own turn.
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
-    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
+    letter = await readTextedPhotos(engine, body.documents, tracedMailModel(deps.mailModel ?? defaultMailModel(), body.handleHash), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
     if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) return reply(letter.text);
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;

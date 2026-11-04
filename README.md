@@ -16,6 +16,10 @@ On production, you can text Mano at (801) 920-3370. The conversation runs on Met
 
 A plain letter usually gets a question that names the date, not a held deadline. The check in `packages/mail/src/gate.ts` holds a date only when the letter has one deadline sentence, in wording it allows, and no other date, and because it reads one sentence at a time it has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program. The synthetic letter in `pnpm judge` does hold its date. A scam letter gets the warning first, and a single date in it appears only as the letter's claim, to check with the office.
 
+## Try it on the web, no login
+
+[withmano.com/try](https://withmano.com/try) runs preset synthetic letters through the deployed agent, Engine, Guardian and sandbox portal, with buttons only, and lists every model call beside the steps. It is off unless `MANO_TRY` is `on` in `apps/engine/wrangler.toml`, and it needs the model account to be working. When the daily cap is spent it says so.
+
 ## Run Maria's renewal in one command
 
 You need Node 24 or newer and pnpm 10. No key, login or account is needed. From a fresh clone:

@@ -57,6 +57,7 @@
 //                                              version the fill was bound to; else 404
 //   POST /webhooks/calls                       the phone company's call events, signature checked by the
 //                                              provider (src/calls); 404 until a provider is set up
+//   /try/*                                     the judge demo, preset letters and buttons only (src/try/routes.ts)
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -170,10 +171,12 @@ import {
   getSessionSecret,
   mintSessionToken,
   mintWsTicket,
+  secretsEqual,
   sessionConfigured,
 } from "./auth.js";
 import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
+import { tryRoute } from "./try/routes.js";
 import { base64ToBytes } from "./hash.js";
 import { SANDBOX_ORG_ID } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
@@ -191,6 +194,7 @@ import { parseDocumentMark } from "./documents.js";
 import { createCallServices } from "./calls/provider.js";
 
 export { PersonAgent, OrgAgent };
+export { TryLedger } from "./try/ledger.js";
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
 export * from "./gateway/types.js";
 export { checkLinkSafety } from "./link-safety.js";
@@ -303,13 +307,6 @@ async function readCappedJson(
   } catch {
     return { ok: false, response: Response.json({ error: "Invalid JSON." }, { status: 400 }) };
   }
-}
-
-function secretsEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 function bearerToken(request: Request): string | null {
@@ -534,7 +531,7 @@ async function fillReplayResponse(env: Env, pathname: string): Promise<Response>
 
 let loggedStartup = false;
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!loggedStartup) {
       loggedStartup = true;
@@ -543,6 +540,8 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") return Response.json({ ok: healthOk(env), live: liveStatus(env) });
+
+    if (url.pathname.startsWith("/try/")) return tryRoute(request, env, (inner) => worker.fetch(inner, env));
 
     if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
@@ -924,3 +923,5 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+export default worker;
