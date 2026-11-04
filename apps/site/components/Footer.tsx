@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { REPO_URL, SMS_HREF, SMS_NUMBER } from "@/lib/site";
+import { ISSUES_URL, REPO_URL, SMS_HREF, SMS_NUMBER } from "@/lib/site";
 import Mascot from "./Mascot";
 
 export default function Footer() {
@@ -27,9 +27,9 @@ export default function Footer() {
             <nav aria-label="Teams">
               <p className="foot-h">Teams</p>
               <ul>
-                <li><Link href="/government">Government offices</Link></li>
-                <li><Link href="/organizations">Nonprofits</Link></li>
-                <li><Link href="/partners">Outside services</Link></li>
+                <li><Link href="/government">For government</Link></li>
+                <li><Link href="/organizations">For nonprofits</Link></li>
+                <li><Link href="/partners">For partners</Link></li>
               </ul>
             </nav>
             <nav aria-label="Open source">
@@ -37,7 +37,7 @@ export default function Footer() {
               <ul>
                 <li><a href={REPO_URL}>Source code</a></li>
                 <li><a href={`${REPO_URL}/blob/main/LICENSE`}>MIT license</a></li>
-                <li><a href="mailto:hello@withmano.com">hello@withmano.com</a></li>
+                <li><a href={ISSUES_URL}>GitHub issues</a></li>
               </ul>
             </nav>
           </div>

@@ -80,6 +80,12 @@ export default function Home() {
             <Link className="btn btn-ghost btn-lg" href="/how-it-works">How Mano works</Link>
           </div>
           {!SMS_IS_PLACEHOLDER && <TextQr />}
+          <nav className="close-links" aria-label="Mano for teams">
+            <Link href="/government">For government</Link>
+            <Link href="/organizations">For nonprofits</Link>
+            <Link href="/partners">For partners</Link>
+            <Link href="/how-it-works#open-source">For developers</Link>
+          </nav>
         </div>
       </section>
     </div>

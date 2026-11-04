@@ -127,6 +127,11 @@ describe("code checks what the reader says against the letter", () => {
     ["a clipped quote that drops never", "Never send your form by November 20, 2026.", "send your form by November 20, 2026.", "November 20, 2026"],
     ["a shortened date that drops a past year", "Your packet was needed by November 20, 2025.", "Your packet was needed by November 20", "November 20"],
     ["a shortened numeric date", "Your packet was needed by 11/20/2025.", "Your packet was needed by 11/20", "11/20"],
+    ["a negation with an or in it", "You must not return the form or payment by November 20, 2026.", "You must not return the form or payment by November 20, 2026.", "November 20, 2026"],
+    ["a negation after an or", "You may call or write, but do not return your form by November 20, 2026.", "You may call or write, but do not return your form by November 20, 2026.", "November 20, 2026"],
+    ["a negation after a condition", "If you moved, do not return your form by November 20, 2026.", "If you moved, do not return your form by November 20, 2026.", "November 20, 2026"],
+    ["a count that opens with more words", "Send your form within the next 14 days after November 20, 2026.", "Send your form within the next 14 days after November 20, 2026.", "November 20, 2026"],
+    ["a count with no within", "Send your form 14 days after November 20, 2026.", "Send your form 14 days after November 20, 2026.", "November 20, 2026"],
     ["a date cut from a longer number", "Your packet is needed by 11/20/2026.", "Your packet is needed by 11/20/2026.", "1/20/2026"],
   ])("%s names none", async (_name, written, quote, date) => {
     const { text: said, named } = await reply(`${HEAD}${written}`, [{ date, sentence: quote }]);
@@ -137,6 +142,11 @@ describe("code checks what the reader says against the letter", () => {
   it("an if-not negation is the date to meet, even when the quote is clipped", async () => {
     const written = "If we do not hear from you by November 14, 2026, your coverage ends.";
     expect((await reply(`${HEAD}${written}`, [{ date: "November 14, 2026", sentence: "hear from you by November 14, 2026" }])).named).toEqual(["November 14, 2026"]);
+  });
+
+  it("a negation that is the cost of missing the date still names it", async () => {
+    const written = "We cannot keep your case open unless you respond by November 14, 2026.";
+    expect((await reply(`${HEAD}${written}`, [{ date: "November 14, 2026", sentence: written }])).named).toEqual(["November 14, 2026"]);
   });
 
   it("a date with no year on the letter still resolves from the notice date", async () => {
@@ -328,5 +338,54 @@ describe("a document whose dates are not duties", () => {
   it("a due date on it still makes it a letter", async () => {
     const reading = await readStub("Harbor Co-op Grocery\nNet pay $850.00\nYour renewal is due November 20, 2026.");
     expect(answerReading(reading).text).not.toMatch(/^This looks like a pay stub/);
+  });
+});
+
+// Some answers come back with every box null. Every field then fails its
+// citation check, and the letter loses what it asks for along with its sender.
+describe("an answer with no boxes at all is read again", () => {
+  const LETTER = `${HEAD}Send your pay stub by November 20, 2026.`;
+  const asked = "Send your pay stub";
+  const answer = (box: number[] | null): string =>
+    JSON.stringify({
+      readable: true,
+      readability_note: null,
+      full_text: LETTER,
+      sender: { text: "Orrivane County Household Assistance Office", box_2d: box },
+      program: NIL,
+      subject: NIL,
+      asked: [{ text: asked, box_2d: box }],
+      deadlines: [],
+      dates_to_meet: [{ date: "November 20, 2026", sentence: "Send your pay stub by November 20, 2026.", for: "documents" }],
+      other_dates: [],
+      consequence: NIL,
+      reference_no: NIL,
+      notice_date: { text: NOTICE, box_2d: box },
+      phones: [],
+      links: [],
+      addresses: [],
+      page_marker: NIL,
+    });
+  const readWith = async (answers: string[]) => readMail([{ bytes: await letterPhoto(), mimeType: "image/jpeg", name: "letter.jpg" }], { personId: "synthetic", synthetic: true, model: recordedReader(answers) });
+  const BOX = [300, 60, 340, 900];
+
+  it("keeps what the letter asks for when the next answer has boxes", async () => {
+    const reading = await readWith([answer(null), answer(BOX)]);
+    expect(reading.letters[0]!.fields.asked.map((a) => a.value)).toEqual([asked]);
+    expect(reading.letters[0]!.fields.sender?.value).toBe("Orrivane County Household Assistance Office");
+  });
+
+  it("keeps the last answer when none has boxes: the fields go, the date stays a question", async () => {
+    const reading = await readWith([answer(null), answer(null), answer(null)]);
+    expect(reading.letters[0]!.fields.asked).toEqual([]);
+    expect(answerReading(reading).deadlines).toEqual([]);
+    expect(answerReading(reading).text).toContain("November 20, 2026");
+  });
+
+  it("does not read again when any field has a box", async () => {
+    const one = JSON.parse(answer(null));
+    one.sender.box_2d = BOX;
+    const reading = await readWith([JSON.stringify(one)]);
+    expect(reading.letters[0]!.fields.sender?.value).toBe("Orrivane County Household Assistance Office");
   });
 });

@@ -56,6 +56,7 @@ export default function TextMano({
       const left = wrap.current.getBoundingClientRect().left + p.offsetLeft - (align === "center" ? p.offsetWidth / 2 : 0);
       const room = document.documentElement.clientWidth - 16;
       p.style.setProperty("--tm-dx", `${Math.max(16 - left, Math.min(0, room - left - p.offsetWidth))}px`);
+      if (p.closest(".menu-panel")) p.scrollIntoView({ block: "nearest" });
     };
     place();
     window.addEventListener("resize", place);

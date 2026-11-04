@@ -473,6 +473,23 @@ describe("a run", () => {
     });
   });
 
+  it("runs Mano's reply through the text line's voice guard, and leaves the panel's model names alone", async () => {
+    const res = await start("scam", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    await call(`/try/runs/${runId}/next`, { method: "POST", body: "{}" }, () => ({ status: "replied", text: "That message is a scam \u2014 don't do what it says." }), seen);
+    const reply = (await eventsOf(runId)).find((e) => e.kind === "reply") as { text: string };
+    expect(reply.text).not.toContain("\u2014");
+    expect(reply.text).toContain("scam");
+    const report = await tryRoute(
+      new Request("https://engine.test/try/report", { method: "POST", headers: { authorization: "Bearer test-agent-token-not-real", "content-type": "application/json" }, body: JSON.stringify({ handleHash: seen.turns[0]!.handleHash, model: { model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Mano's turn", ms: 1, status: "ok", state: "live" } }) }),
+      env,
+      self,
+    );
+    expect(report.status).toBe(204);
+    expect((await eventsOf(runId)).some((e) => e.kind === "model" && e.model === "meta/muse-spark-open")).toBe(true);
+  });
+
   it("asks again when Mano answers with no question this demo knows", async () => {
     const res = await start("maria", uniqueSession(), uniqueIp());
     const { runId } = (await res.json()) as { runId: string };
