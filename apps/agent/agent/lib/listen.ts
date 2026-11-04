@@ -124,9 +124,15 @@ async function openWeightWords(audio: Uint8Array, format: string, key: string, f
     console.warn(JSON.stringify({ type: "mano_listen_failed", via: "open_weight", status: res.status }));
     return null;
   }
-  const data = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
-  const words = data.choices?.[0]?.message?.content;
-  if (typeof words !== "string") return null;
+  const data = (await res.json()) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] };
+  const choice = data.choices?.[0];
+  const words = choice?.message?.content;
+  // Cut off before the end means a crisis sentence may be what was lost, so
+  // only a finished transcript counts as heard.
+  if (typeof words !== "string" || choice?.finish_reason !== "stop") {
+    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "open_weight", finish: typeof choice?.finish_reason === "string" ? choice.finish_reason : null }));
+    return null;
+  }
   const said = words.trim();
   return said === NO_SPEECH ? "" : said;
 }

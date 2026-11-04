@@ -30,7 +30,7 @@ function providers(answers: { meta?: Response | Error; open?: Response | Error }
 }
 
 const metaSays = (transcript: string) => Response.json({ sessionId: "s", transcript, audioDurationMs: 1000, turns: [] });
-const openSays = (content: string) => Response.json({ choices: [{ message: { content } }] });
+const openSays = (content: string, finish_reason: string | null = "stop") => Response.json({ choices: [{ message: { content }, finish_reason }] });
 const toWav = async () => WAV_BYTES;
 
 function deps(over: Partial<ListenDeps> & { fetchFn: typeof fetch }): ListenDeps {
@@ -81,6 +81,11 @@ describe("hearing a voice note", () => {
     expect(await transcribe(AUDIO_BYTES, "audio/mp4", deadline(), deps({ fetchFn: none.fetchFn, env: {} }))).toBeNull();
     expect(await transcribe(AUDIO_BYTES, "application/octet-stream", deadline(), deps({ fetchFn: none.fetchFn }))).toBeNull();
     expect(none.calls).toHaveLength(0);
+  });
+
+  it.each(["length", "content_filter", null])("a transcript that ended with finish reason %s counts as not heard", async (finish) => {
+    const { fetchFn } = providers({ meta: new Response("no", { status: 402 }), open: openSays("My appointment is on Friday and", finish) });
+    expect(await transcribe(AUDIO_BYTES, "audio/mp4", deadline(), deps({ fetchFn }))).toBeNull();
   });
 
   it("a note with no speech is no words, not a failure", async () => {
@@ -189,6 +194,12 @@ describe("Channels asking to hear a turn's notes", () => {
     const { fetchFn } = providers({ meta: metaSays(said) });
     const res = await handleListen(signed(asked()), { ...deps({ fetchFn }), secret: SECRET, engine: client() });
     expect(await res.json()).toEqual({ text: said, missed: false });
+  });
+
+  it("a cut-off transcript reaches Channels as missed, with none of its words", async () => {
+    const { fetchFn } = providers({ meta: new Response("no", { status: 402 }), open: openSays("My appointment is on Friday and", "length") });
+    const res = await handleListen(signed(asked()), { ...deps({ fetchFn }), secret: SECRET, engine: client() });
+    expect(await res.json()).toEqual({ text: "", missed: true });
   });
 
   it("with two notes where one fails, keeps the words and says one was missed", async () => {
