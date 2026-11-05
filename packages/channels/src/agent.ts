@@ -16,6 +16,7 @@ import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 import { boundFetch } from "./fetch.js";
 import { PHOTO_UNREAD_TEXT, ResponderFailed, type ModelUsage, type Responder, type ResponderResult, type StoredPhoto, type TurnInput } from "./responder.js";
 import { splitBubbles } from "./bubbles.js";
+import { splitTapback } from "@mano/persona";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
 const TRAILING_SLASH_RE = /\/$/;
@@ -200,13 +201,18 @@ export class AgentResponder implements Responder {
         };
       }
       if (res.ok && (data?.status === "replied" || data?.status === "waiting_approval") && text) {
+        // A plain reply may open with a REACT line (LAP-986). A question
+        // waiting on approval keeps its exact text and carries no reaction.
+        const split = data.status === "replied" ? splitTapback(text) : { tapback: null, text };
+        const body = split.text || text;
         const result: ResponderResult = {
-          text,
-          bubbles: splitBubbles(text),
+          text: body,
+          bubbles: splitBubbles(body),
           inputChars,
           outputChars: text.length,
           model: "agent",
           attempts: 1,
+          tapback: split.text ? split.tapback : null,
         };
         if (data.status === "waiting_approval" && typeof data.approvalId === "string" && typeof data.approval === "string") {
           result.presentation = { approvalId: data.approvalId, approval: data.approval };
