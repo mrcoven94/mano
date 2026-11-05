@@ -34,7 +34,7 @@ function weighted(r: RunReport, pick: (s: RunReport["suites"][string]) => number
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <section id="results" className={`wrap ${styles.page}`} aria-labelledby="results-h">
-      <h2 id="results-h" className={styles.title}>Results from the nightly test</h2>
+      <h2 id="results-h" className={styles.title}>How Mano is tested every night</h2>
       {children}
     </section>
   );
@@ -166,6 +166,12 @@ export default async function QualityResults() {
 
   return (
     <Shell>
+      <p className={styles.intro}>
+        Every night Mano answers {latest.caseCount} made-up letters, texts and questions using the real model. A second
+        model scores each answer from 1 to 5 for being helpful, accurate, plain and warm. Hard checks catch anything
+        unsafe, such as acting on a scam letter or setting a deadline a letter never gave. New code cannot ship if it does
+        worse than the last good run.
+      </p>
       <p className={styles.runline}>
         Nightly run of {day(latest.startedAt)}, {latest.caseCount} synthetic cases
         {latest.gitSha ? `, commit ${latest.gitSha.slice(0, 7)}` : ""}.{" "}
@@ -246,6 +252,26 @@ export default async function QualityResults() {
           />
         ) : null}
       </div>
+
+      <section className={styles.section} style={{ padding: 0 }}>
+        <h2>Speed: Meta&rsquo;s open-weight model against the Meta Model API</h2>
+        <p>The same renewal, run on production on November 4, 2026. Mano runs on the open-weight model today. Closing this gap is our next speed goal.</p>
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr><th>Step</th><th>Muse Spark Open on Modal</th><th>Muse Spark 1.3 on the Meta Model API</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Read the letter</td><td>4.9 s</td><td>28 s</td></tr>
+              <tr><td>Each form-filling step</td><td>about 2 s</td><td>6 to 13 s</td></tr>
+              <tr><td>Whole renewal</td><td>Filed, 8 of 8 checks, 1:32</td><td>Stopped before the form was filled</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <details className={styles.more}>
+      <summary>Every number from this run</summary>
 
       <section className={styles.section} style={{ padding: 0 }}>
         <h2>By suite</h2>
@@ -402,6 +428,7 @@ export default async function QualityResults() {
           {suites.length > live.length ? ` Suites on a stand-in: ${suites.filter((s) => !liveNames.includes(s)).map((s) => SUITE_NAMES[s] ?? s).join(", ")}.` : ""}
         </p>
       </section>
+      </details>
     </Shell>
   );
 }
