@@ -389,7 +389,7 @@ export default function TryDemo() {
           <p className="lede">Mano is a text line that helps people keep their public benefits. Pick a test below and it runs now, on Meta&rsquo;s models, for Maria, a made-up person. You see every step and every model call as it happens. No login.</p>
           <div className="try-start">
             <a href="#try-criteria-h">How Mano meets the judging criteria</a>
-            <a href="#results">How Mano is tested every night</a>
+            <a href="#results">Evals: how Mano is tested every night</a>
           </div>
         </header>
 
