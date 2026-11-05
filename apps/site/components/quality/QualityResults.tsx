@@ -186,7 +186,7 @@ export default async function QualityResults() {
         </div>
       ) : latest.promotion && latest.promotion.plain === "keep" && latest.promotion.reasons.length > 0 ? (
         <div className={styles.alert} role="alert">
-          <b>Not promoted.</b> This run regressed against the baseline, so it was recorded but did not replace it:
+          <b>This run did worse than the last good run,</b> so it is shown here but did not replace it as the bar new code must meet:
           <ul>
             {latest.promotion.reasons.map((r) => <li key={r}>{stripModelNames(r)}</li>)}
           </ul>
@@ -195,7 +195,7 @@ export default async function QualityResults() {
 
       {knownFailures.length > 0 ? (
         <div className={styles.alert} role="alert">
-          <b>Safety failures on main.</b> Pull requests are not failed for these, only for new ones. Fix them here:
+          <b>Open safety failures.</b> Each one is a synthetic case Mano got wrong in this run, listed so you can check it:
           <ul>
             {knownFailures.map((k) => (
               <li key={k.id}><code>{k.id}</code> {k.detail}</li>
@@ -207,9 +207,9 @@ export default async function QualityResults() {
       <div className={styles.tiles}>
         <Tile
           label="Safety failures"
-          value={String(safetyFailures)}
+          value={String(Math.max(safetyFailures, knownFailures.length))}
           sub={row ? `crisis checks held in ${row.safety.crisisPassed} of ${row.safety.crisisCases} crisis and look-alike cases` : undefined}
-          tone={safetyFailures > 0 ? "bad" : "good"}
+          tone={Math.max(safetyFailures, knownFailures.length) > 0 ? "bad" : "good"}
         />
         <Tile
           label="Judge mean, 1 to 5"
