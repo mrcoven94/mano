@@ -336,12 +336,12 @@ export default function TryDemo() {
       <div className="wrap">
         <header className="try-head">
           <h1>Test Mano live. No login.</h1>
-          <p className="lede">Press send. Meta&rsquo;s Muse Spark reads Maria&rsquo;s renewal letter and fills the form on a test portal, Muse Glimmer checks the filing, and Mano asks Maria before it files. Every model call shows as it runs. Maria and her letter are synthetic.</p>
+          <p className="lede">Mano is a text line that renews public benefits for people. Here you watch it handle one renewal from start to finish, live, for Maria, a made-up person. Meta&rsquo;s Muse Spark reads her letter and saves the deadline, then fills the renewal on a test portal by reading the screen. Muse Glimmer checks the filing for anything unsafe, and Mano files only after Maria says yes. Each step and each model call appears as it happens.</p>
           <div className="try-start">
             <button className="btn btn-primary btn-lg" onClick={() => pick("maria")} disabled={busy || off || paused}>
               {phase === "ended" && scenario === "maria" ? "Run it again" : "Send Maria’s letter"}
             </button>
-            <a href="#try-stump-h">Or try to stump it</a>
+            <a href="#try-stump-h">Or run another scenario</a>
             <a href="#results">See the test results</a>
           </div>
         </header>
@@ -364,14 +364,14 @@ export default function TryDemo() {
         <Checks scenario={scenario} events={events} phase={phase} source={source} />
 
         <section className="try-menu" aria-labelledby="try-stump-h">
-          <h2 id="try-stump-h">Try to stump it</h2>
+          <h2 id="try-stump-h">Run another scenario</h2>
           <ul>
             {STUMPS.map((s) => <Choice key={s.key} name={s.name} text={s.text} onPick={() => pick(s.key)} disabled={busy || off || paused} active={started && scenario === s.key} />)}
           </ul>
         </section>
 
         <section className="try-menu" aria-labelledby="try-docs-h">
-          <h2 id="try-docs-h">Send a document</h2>
+          <h2 id="try-docs-h">Check a document</h2>
           <p className="try-menu-note">An automated check on a made-up document. The office still decides.</p>
           <ul>
             {DOCUMENTS.map((s) => <Choice key={s.key} name={s.name} text={s.text} onPick={() => pick(s.key)} disabled={busy || off || paused} active={started && scenario === s.key} />)}

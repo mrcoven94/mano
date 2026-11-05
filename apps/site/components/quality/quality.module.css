@@ -41,3 +41,7 @@
 .empty{margin-top:12px;font-size:.92rem}
 details.more summary{cursor:pointer;margin-top:12px;font-size:.9rem;color:var(--pen)}
 @media (max-width:640px){.page{padding-top:24px}.tile .value{font-size:1.4rem}}
+
+.intro{margin-top:14px;font-size:1.05rem;line-height:1.55;max-width:70ch}
+.more{margin-top:48px}
+.more > summary{cursor:pointer;font-weight:600;font-size:1.05rem;color:var(--pen)}
