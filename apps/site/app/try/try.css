@@ -156,3 +156,11 @@
 @media (prefers-reduced-motion:reduce){
   .try *,.try *::before,.try *::after{animation:none !important;transition:none !important}
 }
+
+/* Pick a test: the full renewal leads, the harder tests follow. */
+.try-menu-top{margin-top:28px}
+.try-choice-primary{grid-column:1/-1}
+.try-choice-primary .try-choice{background:var(--text);color:#fff;padding:20px 22px}
+.try-choice-primary .try-choice b{font-size:1.15rem}
+.try-choice-primary .try-choice span{color:rgba(255,255,255,.78)}
+.try-choice-primary .try-choice:hover:not(:disabled){background:#000}

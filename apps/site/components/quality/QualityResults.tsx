@@ -218,11 +218,11 @@ export default async function QualityResults() {
           tone={Math.max(safetyFailures, knownFailures.length) > 0 ? "bad" : "good"}
         />
         <Tile
-          label="Judge mean, 1 to 5"
+          label="Answer quality, 1 to 5"
           value={score(weighted(latest, (s) => s.judgeMean))}
           sub={`helpful ${score(traits.helpful)}, accurate ${score(traits.accurate)}, plain ${score(traits.plain)}, warm ${score(traits.warm)}`}
         />
-        <Tile label="Hard checks passed" value={pct1(weighted(latest, (s) => s.hardCheckPassRate))} sub="share of live answers that pass every check" />
+        <Tile label="Answers with no broken rule" value={pct1(weighted(latest, (s) => s.hardCheckPassRate))} sub="share of answers that pass every hard check" />
         <Tile
           label="Time to first text"
           value={row ? secs(row.latency.firstTextP50Ms) : "n/a"}
@@ -270,16 +270,14 @@ export default async function QualityResults() {
         </div>
       </section>
 
-      <details className={styles.more}>
-      <summary>Every number from this run</summary>
-
       <section className={styles.section} style={{ padding: 0 }}>
-        <h2>By suite</h2>
+        <h2>By type of test</h2>
+        <p>Each row is one kind of test. Chat questions and texts are everyday messages, letters are photos of benefits letters, safety cases try to get Mano to do something harmful, and personas are made-up people with different needs. Judge scores are from a second model, from 1 to 5.</p>
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>Suite</th>
+                <th>Type of test</th>
                 <th>Live cases</th>
                 <th>Hard checks</th>
                 <th>Judge</th>
@@ -316,7 +314,8 @@ export default async function QualityResults() {
       </section>
 
       <section className={styles.section} style={{ padding: 0 }}>
-        <h2>Trends</h2>
+        <h2>Night by night</h2>
+        <p>Each point is one nightly run. Rising answer scores and falling safety failures mean Mano is getting better. A dip shows where a change made it worse.</p>
         <p>{history.length} nightly run(s). Only answers from live code are plotted.</p>
         <div className={styles.charts}>
           <Chart title="Hard checks passed" now={`latest ${pct1(weighted(latest, (s) => s.hardCheckPassRate))}`} labels={labels} min={0} max={1} format={pct} series={trendSeries(history, liveNames, (s) => s.hardCheckPassRate)} />
@@ -378,7 +377,8 @@ export default async function QualityResults() {
       </section>
 
       <section className={styles.section} style={{ padding: 0 }}>
-        <h2>Lowest-scored answers</h2>
+        <h2>The weakest answers</h2>
+        <p>The answers the grading model scored lowest this run, with its reason. This is where we work next.</p>
         <p>The live answers the judge scored lowest in this run, exactly as they would be sent.</p>
         {!casesConnected ? (
           <p className={styles.empty}>Per-case results are not connected.</p>
@@ -403,7 +403,8 @@ export default async function QualityResults() {
       </section>
 
       <section className={styles.section} style={{ padding: 0 }}>
-        <h2>Failed checks</h2>
+        <h2>Answers that failed a hard check</h2>
+        <p>A hard check is a rule an answer must never break, like quoting a deadline the letter does not have. The first three are shown.</p>
         <p>{casesConnected ? `${failed.length} live answer(s) failed at least one hard check.` : ""}</p>
         {!casesConnected ? (
           <p className={styles.empty}>Per-case results are not connected.</p>
@@ -415,7 +416,7 @@ export default async function QualityResults() {
       </section>
 
       <section className={styles.section} style={{ padding: 0 }}>
-        <h2>What did not run live</h2>
+        <h2>What did not run on the real model</h2>
         {standins.length === 0 ? <p className={styles.empty}>Everything ran live.</p> : (
           <ul className={styles.labels}>
             {standins.map((s) => <li key={s}>{s}</li>)}
@@ -428,7 +429,6 @@ export default async function QualityResults() {
           {suites.length > live.length ? ` Suites on a stand-in: ${suites.filter((s) => !liveNames.includes(s)).map((s) => SUITE_NAMES[s] ?? s).join(", ")}.` : ""}
         </p>
       </section>
-      </details>
     </Shell>
   );
 }
@@ -450,11 +450,11 @@ function FailedList({ cases }: { cases: StaffCaseRow[] }) {
   );
   return (
     <div className={styles.cases}>
-      {cases.slice(0, 10).map(item)}
-      {cases.length > 10 ? (
+      {cases.slice(0, 3).map(item)}
+      {cases.length > 3 ? (
         <details className={styles.more}>
-          <summary>{cases.length - 10} more</summary>
-          <div className={styles.cases}>{cases.slice(10).map(item)}</div>
+          <summary>Show {cases.length - 3} more</summary>
+          <div className={styles.cases}>{cases.slice(3).map(item)}</div>
         </details>
       ) : null}
     </div>
