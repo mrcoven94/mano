@@ -86,7 +86,7 @@ function Criteria() {
   return (
     <section className="try-criteria" aria-labelledby="try-criteria-h">
       <h2 id="try-criteria-h">For the judges</h2>
-      <p className="try-criteria-stage"><b>Stage one.</b> Mano fits Build for Your World: it keeps people from losing help over a missed letter. It runs on Meta&rsquo;s open-weight models, Muse Spark Open and Muse Glimmer, and on the Meta Model API, Muse Spark 1.3, Muse Wonder and SAM 3.1. All of it was built during the hackathon.</p>
+      <p className="try-criteria-stage"><b>Stage one.</b> Mano fits Build for Your World: it keeps people from losing help over a missed letter. It runs on Meta&rsquo;s open-weight models, Muse Spark Open and Muse Glimmer, and on the Meta Model API, Muse Spark 1.3, Muse Wonder and SAM 3.1. Mano was built during the hackathon. The lists of benefit offices come from Front Door, David&rsquo;s earlier product, as the README says.</p>
       <ul>
         {CRITERIA.map((c) => (
           <li key={c.title}>
