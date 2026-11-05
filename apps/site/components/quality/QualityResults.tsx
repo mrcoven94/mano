@@ -34,7 +34,7 @@ function weighted(r: RunReport, pick: (s: RunReport["suites"][string]) => number
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <section id="results" className={`wrap ${styles.page}`} aria-labelledby="results-h">
-      <h2 id="results-h" className={styles.title}>How Mano is tested every night</h2>
+      <h2 id="results-h" className={styles.title}>Evals: how Mano is tested every night</h2>
       {children}
     </section>
   );

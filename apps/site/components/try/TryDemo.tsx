@@ -86,7 +86,7 @@ function Criteria() {
   return (
     <section className="try-criteria" aria-labelledby="try-criteria-h">
       <h2 id="try-criteria-h">For the judges</h2>
-      <p className="try-criteria-stage"><b>Stage one.</b> Mano fits Build for Your World: it keeps people from losing help over a missed letter. It runs on Meta&rsquo;s open-weight models, Muse Spark Open and Muse Glimmer, and on the Meta Model API, Muse Spark 1.3, Muse Wonder and SAM 3.1. All of it was built during the hackathon.</p>
+      <p className="try-criteria-stage"><b>Stage one.</b> Mano fits Build for Your World: it keeps people from losing help over a missed letter. It runs on Meta&rsquo;s open-weight models, Muse Spark Open and Muse Glimmer, and on the Meta Model API, Muse Spark 1.3, Muse Wonder and SAM 3.1. Everything in this repository was built during the hackathon. Front Door, an earlier product by the same author, is not used.</p>
       <ul>
         {CRITERIA.map((c) => (
           <li key={c.title}>
@@ -389,7 +389,7 @@ export default function TryDemo() {
           <p className="lede">Mano is a text line that helps people keep their public benefits. Pick a test below and it runs now, on Meta&rsquo;s models, for Maria, a made-up person. You see every step and every model call as it happens. No login.</p>
           <div className="try-start">
             <a href="#try-criteria-h">How Mano meets the judging criteria</a>
-            <a href="#results">How Mano is tested every night</a>
+            <a href="#results">Evals: how Mano is tested every night</a>
           </div>
         </header>
 
