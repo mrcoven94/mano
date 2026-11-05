@@ -56,6 +56,50 @@ const NAMES: Record<TryScenario, string> = {
   ...Object.fromEntries([...STUMPS, ...DOCUMENTS].map((s) => [s.key, s.name])),
 } as Record<TryScenario, string>;
 
+const REPO = "https://github.com/mrcoven94/mano";
+
+/* The judging rubric, answered in Mano's own terms, each with where to check it. */
+const CRITERIA: { title: string; text: string; link: { href: string; label: string } }[] = [
+  {
+    title: "Impact, 30%",
+    text: "Mano is for people renewing food and health benefits. 25 million people lost Medicaid in 2023 and 2024, and 69% of them lost it over paperwork. In January 2027 adults in Medicaid expansion start renewing every six months. Mano reads the letter, holds the date and files the renewal after a yes, by text, with no app and no login.",
+    link: { href: "/", label: "The numbers and sources" },
+  },
+  {
+    title: "Use of Meta AI tooling, 25%",
+    text: "Five Meta models, each doing real work. Muse Spark Open reads letters and fills forms by looking at screenshots, on a portal it has no integration with. Muse Glimmer, on our own GPU, checks every action before it runs. Muse Spark 1.3 answers the nightly test on the Meta Model API, Muse Wonder grades it, and SAM 3.1 finds the letter in a photo.",
+    link: { href: "#results", label: "Speed of each route, measured" },
+  },
+  {
+    title: "Technical depth and execution, 20%",
+    text: "A yes covers one exact document, so a single changed byte stops the filing. Text inside a letter is treated as information, never as an order. Every change is tested against the last good nightly run, and a held-out test was run twice with both results published.",
+    link: { href: `${REPO}/blob/main/docs/decisions.md`, label: "Every decision and why" },
+  },
+  {
+    title: "Demo, 25%",
+    text: "Everything on this page runs live on the deployed product as you watch. Pick any test above. From a clone, pnpm judge runs the same renewal with no key, or live with your own Meta key.",
+    link: { href: REPO, label: "The repository" },
+  },
+];
+
+function Criteria() {
+  return (
+    <section className="try-criteria" aria-labelledby="try-criteria-h">
+      <h2 id="try-criteria-h">For the judges</h2>
+      <p className="try-criteria-stage"><b>Stage one.</b> Mano fits Build for Your World: it keeps people from losing help over a missed letter. It runs on Meta&rsquo;s open-weight models, Muse Spark Open and Muse Glimmer, and on the Meta Model API, Muse Spark 1.3, Muse Wonder and SAM 3.1. All of it was built during the hackathon.</p>
+      <ul>
+        {CRITERIA.map((c) => (
+          <li key={c.title}>
+            <b>{c.title}</b>
+            <span>{c.text}</span>
+            <a href={c.link.href}>{c.link.label}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 const REFUSED = {
   paused: "The demo is paused for today. It has used its daily limit of live runs.",
   rate: "This address has started too many runs in the last hour. Try again later.",
@@ -344,6 +388,7 @@ export default function TryDemo() {
           <h1>Watch Mano renew a benefits letter, live</h1>
           <p className="lede">Mano is a text line that helps people keep their public benefits. Pick a test below and it runs now, on Meta&rsquo;s models, for Maria, a made-up person. You see every step and every model call as it happens. No login.</p>
           <div className="try-start">
+            <a href="#try-criteria-h">How Mano meets the judging criteria</a>
             <a href="#results">How Mano is tested every night</a>
           </div>
         </header>
@@ -380,6 +425,8 @@ export default function TryDemo() {
             {DOCUMENTS.map((s) => <Choice key={s.key} name={s.name} text={s.text} onPick={() => pick(s.key)} disabled={busy || off || paused} active={started && scenario === s.key} />)}
           </ul>
         </section>
+
+        <Criteria />
       </div>
     </div>
   );
