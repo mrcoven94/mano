@@ -53,18 +53,18 @@ How they were produced: the harness is in `eval/`, merged in [PR 1](https://gith
 
 ## The models as they run today
 
-Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 402 (billing not set up), so nothing hosted only there is running.
+Every model Mano calls at runtime is a Meta model. Meta's own API answered HTTP 402 (billing not set up) until the evening of November 4, 2026. Once it answered again, we ran the same renewal on production on both routes. Muse Spark 1.3 on the Meta Model API took 28 s to read the letter against 4.9 s on Muse Spark Open, 6 to 13 s per form step against about 2 s, and its form fill stopped before finishing. So production stays on the open-weight route below. The Meta Model API runs the nightly test: Muse Spark 1.3 answers and Muse Wonder grades. The measurement is in `docs/decisions.md` and on [withmano.com/try](https://withmano.com/try#results).
 
 | Step | Meta model | Where it runs | On production today |
 | --- | --- | --- | --- |
 | Answering a text, with tools | Muse Spark Open (open weights), `meta-models/Muse-Spark-Open-816B-A42B` | Partner-provided inference on a Modal Shared Endpoint, with `meta/muse-spark-open` on OpenRouter as run-time backup | Running |
 | Reading a letter into cited fields, and saying which date the person must meet | Muse Spark Open | Modal Shared Endpoint, with OpenRouter as backup in the cases listed under [How model routing is set](#how-model-routing-is-set) | Running. If the read fails, the person gets no date and is asked to send the photo again |
-| Finding the letter in the photo | SAM 3.1 | Meta's API | Not running, 402. On-device paper detection (plain code) takes its place |
-| Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Muse Voice Transcribe is not running, 402. The backup is deployed and not confirmed live |
+| Finding the letter in the photo | SAM 3.1 | Meta's API | Not called on the open-weight route, and it failed on the one Meta API run measured on November 4. On-device paper detection (plain code) takes its place |
+| Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, and not confirmed live on either route |
 | Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Running: three unbroken production runs, below. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
-| Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
-| Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
+| Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed. Meta's API answers again since November 4. A failed check counts as a crisis |
+| Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby |
 | Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running. The gate held the spine's letter in the production runs below. The reader's question was seen on production on two synthetic fixture letters ([PR 216](https://github.com/mrcoven94/mano/pull/216)), which is not a rate |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
@@ -170,7 +170,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 - Mano missed 10 unsafe letters in each held-out run, and those runs had no Guardian. Guardian has no held-out number of its own.
 - Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The six generated-layout runs are a small sample on our own portal, not a fill rate for forms in general, and a fill has no model backup.
 - The model may ask again for a value it already has before the fill. It did so in 2 of 3 production runs on 9e7fe5d4. After [PR 215](https://github.com/mrcoven94/mano/pull/215), none of the three runs on 1127a025 re-asked a value. Three runs do not prove the issue is fixed.
-- SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
+- SAM 3.1 and Muse Voice Transcribe are not confirmed live on production, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
 - `pnpm judge` simulates Guardian's verdict, Mano's computer and Maria's yes, and it leaves out the text line and the agent turn.
@@ -237,7 +237,7 @@ Three parts are simulated even with a key. Guardian's verdict is recorded, becau
 - `modal`, with `MODAL_ENDPOINT_URL` and `MODAL_PROXY_TOKEN`, sends turns, page reads and form fills to `meta-models/Muse-Spark-Open-816B-A42B` on a Modal Shared Endpoint. No request carries a pin on this route (see the November 4 entry in `docs/decisions.md`). With a setting missing or a URL off Modal's domain, it calls no model and does not fall back.
 - With `OPENROUTER_API_KEY` set as well, a turn or page read goes to `meta/muse-spark-open` on OpenRouter only when Modal fails before a response starts: no response within 30 seconds, a 429 or 5xx, or a lost connection. Once Modal has answered 200, a lost response does not go to OpenRouter, whether a turn is streaming, before or after its first token, or waiting on one whole answer, and the call fails. The one difference is a page read, whose 30 seconds also cover reading the body, so a body that stalls past them goes to OpenRouter. A log line with fixed words says which route answered. A form fill has no backup.
 - `openrouter`, with `OPENROUTER_API_KEY`, sends the same work to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight.
-- With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. That route is unavailable today, because Meta answers 402.
+- With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. That route works again since November 4, and measured slower than the open-weight route (above).
 
 On either open-weight route, SAM 3.1 is not called. A fill has no hosted computer tool, so it never raises a safety check. The text line's own settings are in `apps/channels/wrangler.toml`. Its backup is OpenRouter only for now.
 
