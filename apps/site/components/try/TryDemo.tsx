@@ -4,6 +4,7 @@ import Image from "next/image";
 import type { TryLogged, TryScenario } from "@mano/protocol";
 import Mascot from "@/components/Mascot";
 import { TRY_API } from "@/lib/try-client";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 import { useTryRun, type Phase, type Source } from "./useTryRun";
 import { OK_STATUS, buildChecks, modelName, type Check, type Outcome } from "./checks";
 
@@ -81,6 +82,26 @@ const CRITERIA: { title: string; text: string; link: { href: string; label: stri
     link: { href: REPO, label: "The repository" },
   },
 ];
+
+function GetStarted() {
+  return (
+    <section className="try-criteria" aria-labelledby="try-start-h">
+      <h2 id="try-start-h">Get started</h2>
+      <ul>
+        <li>
+          <b>Text Mano</b>
+          <span>Text or iMessage a photo of a benefits letter to <a href={SMS_HREF}>{SMS_NUMBER}</a>. Mano reads it, tells you the date that matters and what to send. Use a made-up letter; filings go only to the test portal.</span>
+          <a href={SMS_HREF}>Text {SMS_NUMBER}</a>
+        </li>
+        <li>
+          <b>Run it from GitHub</b>
+          <span>Clone the repository, then run <code>pnpm install</code> and <code>pnpm judge</code>. It runs the same renewal in nine labeled steps with no key, or live on Meta&rsquo;s models with your own <code>META_MODEL_API_KEY</code>.</span>
+          <a href={REPO}>github.com/mrcoven94/mano</a>
+        </li>
+      </ul>
+    </section>
+  );
+}
 
 function Criteria() {
   return (
@@ -388,6 +409,7 @@ export default function TryDemo() {
           <h1>Watch Mano renew a benefits letter, live</h1>
           <p className="lede">Mano is a text line that helps people keep their public benefits. Pick a test below and it runs now, on Meta&rsquo;s models, for Maria, a made-up person. You see every step and every model call as it happens. No login.</p>
           <div className="try-start">
+            <a href="#try-start-h">Text Mano or run it from GitHub</a>
             <a href="#try-criteria-h">How Mano meets the judging criteria</a>
             <a href="#results">Evals: how Mano is tested every night</a>
           </div>
@@ -425,6 +447,8 @@ export default function TryDemo() {
             {DOCUMENTS.map((s) => <Choice key={s.key} name={s.name} text={s.text} onPick={() => pick(s.key)} disabled={busy || off || paused} active={started && scenario === s.key} />)}
           </ul>
         </section>
+
+        <GetStarted />
 
         <Criteria />
       </div>
