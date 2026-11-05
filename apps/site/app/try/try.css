@@ -1,5 +1,5 @@
 /* The judge view: what Mano sees, the conversation, and a dark rail of checks that reads clearly on video. */
-.try{padding:40px 0 96px}
+.try{padding:40px 0 24px}
 .try section{padding:0}
 .try-head{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:40px;align-items:end}
 .try-head h1{font-size:clamp(2rem,3.6vw,3rem);line-height:1.05;letter-spacing:-.02em;text-wrap:balance}

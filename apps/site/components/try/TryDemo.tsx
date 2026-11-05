@@ -177,7 +177,7 @@ function Thread({ events, phase, onYes }: { events: TryLogged[]; phase: Phase; o
         <span>Maria&rsquo;s phone</span>
       </div>
       <div className="try-thread-body">
-        {events.length === 0 && <p className="try-thread-empty">Pick a run. Maria&rsquo;s side of the conversation is pressed for her, and Mano&rsquo;s answers appear as they come back.</p>}
+        {events.length === 0 && <p className="try-thread-empty">Press Send Maria&rsquo;s letter to start.</p>}
         {events.map((e) => <Message key={e.seq} event={e} />)}
         {phase === "running" && <p className="bub mano try-typing" aria-label="Mano is working"><i /><i /><i /></p>}
         {phase === "question" && (
@@ -335,13 +335,14 @@ export default function TryDemo() {
     <div className="try">
       <div className="wrap">
         <header className="try-head">
-          <h1>Watch Mano handle a renewal letter, live.</h1>
-          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. Every check below is settled by the run&rsquo;s own log, and one that never ran says so.</p>
+          <h1>Test Mano live. No login.</h1>
+          <p className="lede">Press send. Meta&rsquo;s Muse Spark reads Maria&rsquo;s renewal letter and fills the form on a test portal, Muse Glimmer checks the filing, and Mano asks Maria before it files. Every model call shows as it runs. Maria and her letter are synthetic.</p>
           <div className="try-start">
             <button className="btn btn-primary btn-lg" onClick={() => pick("maria")} disabled={busy || off || paused}>
               {phase === "ended" && scenario === "maria" ? "Run it again" : "Send Maria’s letter"}
             </button>
             <a href="#try-stump-h">Or try to stump it</a>
+            <a href="#results">See the test results</a>
           </div>
         </header>
 

@@ -6,6 +6,7 @@ import TrustDemo from "@/components/home/TrustDemo";
 import Needs from "@/components/home/Needs";
 import { NeedIcon } from "@/components/home/NeedIcons";
 import Faq from "@/components/Faq";
+import Impact from "@/components/home/Impact";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
@@ -39,6 +40,7 @@ export default function Home() {
   return (
     <div className="home">
       <HeroStage />
+      <Impact />
       <MedicaidExample />
 
       <section className="h-today" aria-labelledby="today-h">
