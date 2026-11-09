@@ -107,15 +107,6 @@ class FakeComputer implements Computer {
     this.draft = new URL(url).searchParams.get("draft");
     this.typed = [];
   }
-  async stageFile(name: string) {
-    return `/uploads/${name}`;
-  }
-  fileUploadHint() {
-    return "";
-  }
-  liveViewUrl() {
-    return null;
-  }
   async close() {
     this.closed += 1;
   }

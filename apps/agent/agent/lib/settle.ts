@@ -19,7 +19,7 @@ export interface SettleResult {
   status: SettleStatus;
   // The reply, or "" when the turn failed.
   text: string;
-  // Machine-safe reason for logs: stop, tool_fallback, input, failed.
+  // Machine-safe reason for logs: stop, tool_fallback, input, empty, closed, failed.
   reason: string;
   // The approvals this run's form calls left waiting for the person's YES,
   // read from the run's own tool results. Only these can be shown.
@@ -120,7 +120,7 @@ export class SettleTimeout extends Error {
 
 export async function settleStream(
   stream: ReadableStream<StreamEventLike>,
-  opts: { timeoutMs: number; signal?: AbortSignal; marks?: Pick<AgentMarks, "observe">; turnId?: string },
+  opts: { timeoutMs: number; marks?: Pick<AgentMarks, "observe">; turnId?: string },
 ): Promise<SettleResult> {
   const state = initialSettleState(opts.turnId ?? null);
   const reader = stream.getReader();
@@ -130,7 +130,6 @@ export async function settleStream(
   });
   const read = (async (): Promise<SettleResult> => {
     for (;;) {
-      if (opts.signal?.aborted) throw new SettleTimeout();
       const { done, value } = await reader.read();
       if (done) {
         return state.stopTexts.length > 0

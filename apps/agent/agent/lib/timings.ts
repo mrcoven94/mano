@@ -11,8 +11,10 @@
 const ROUTES = [
   "GET /approvals",
   "POST /approvals/supersede",
+  "POST /approvals/fence",
   "POST /approvals/:id/approve",
   "POST /approvals/:id/reject",
+  "POST /approvals/:id/retire",
   "PUT /approvals/:id/replay",
   "GET /approvals/:id/replay",
   "POST /action",
@@ -29,6 +31,7 @@ const ROUTES = [
   "DELETE /memory/:id",
   "GET /profile",
   "PATCH /profile",
+  "GET /shares",
   "GET /reminders",
   "POST /reminders",
   "POST /reminders/:id/cancel",

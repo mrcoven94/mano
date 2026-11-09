@@ -111,11 +111,6 @@ export function waitingFrom(approvals: EngineApproval[], generation: number, tur
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));
 }
 
-// The approval this turn proposed and Engine still holds.
-export function proposedIn(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval | null {
-  return waitingFrom(approvals, generation, turnId)[0] ?? null;
-}
-
 // Proposals of this conversation still waiting that are not the answerable one.
 export function waitingProposals(approvals: EngineApproval[], generation: number, exceptId: string | null = null): EngineApproval[] {
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.id !== exceptId);

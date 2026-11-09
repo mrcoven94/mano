@@ -108,12 +108,9 @@ describe("recording a run", () => {
     expect(frames().map((f) => shown(f.png))).toEqual(["form|", "form|Rosa"]);
   });
 
-  test("everything else reaches the desktop unchanged", async () => {
+  test("close reaches the desktop", async () => {
     const screen = new FormScreen();
     const { computer } = recordFrames(screen);
-    expect(await computer.stageFile("stub.pdf", new Uint8Array([1]))).toBe("/staged/stub.pdf");
-    expect(computer.fileUploadHint()).toBe("test picker hint");
-    expect(computer.liveViewUrl()).toBeNull();
     await computer.close();
     expect(screen.closes).toBe(1);
   });

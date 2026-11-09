@@ -90,22 +90,6 @@ export class ModalComputer implements Computer {
     console.log(JSON.stringify({ type: "mano_computer_goto", loaded: body?.loaded === true, ms: Date.now() - started }));
   }
 
-  async stageFile(name: string, data: Uint8Array): Promise<string> {
-    const res = await this.control("/stage", { name, data_base64: Buffer.from(data).toString("base64") });
-    if (!res.ok) throw new Error(`stage failed with status ${res.status}`);
-    const body = (await res.json()) as { path?: unknown };
-    if (typeof body.path !== "string") throw new Error("session service returned no path");
-    return body.path;
-  }
-
-  fileUploadHint(): string {
-    return "To attach a file, press Tab until a file button is focused, then press Enter; type the full staged path into the dialog and press Enter. One file per button; do not pick into a filled button again.";
-  }
-
-  liveViewUrl(): string | null {
-    return null;
-  }
-
   /** Deletes the session, retrying until the service confirms the desktop stopped. Throws if it never does. */
   async close(): Promise<void> {
     if (this.closed) return;

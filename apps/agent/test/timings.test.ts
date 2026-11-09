@@ -20,6 +20,9 @@ describe("turn timings", () => {
     expect(engineRoute("POST", "/turns/eval-3f2a9c1e-77aa/complete")).toBe("POST /turns/:id/complete");
     expect(engineRoute("GET", "/pending-approval?generation=0")).toBe("GET /pending-approval");
     expect(engineRoute("POST", "/approvals/supersede")).toBe("POST /approvals/supersede");
+    expect(engineRoute("POST", "/approvals/fence")).toBe("POST /approvals/fence");
+    expect(engineRoute("POST", "/approvals/maria-garcia/retire")).toBe("POST /approvals/:id/retire");
+    expect(engineRoute("GET", "/shares")).toBe("GET /shares");
     expect(engineRoute("GET", "/documents/maria-garcia")).toBe("GET /documents/:id");
     expect(engineRoute("PATCH", "/documents/maria")).toBe("PATCH /documents/:id");
     expect(engineRoute("GET", "/turns/approve")).toBe("GET /turns/:id");

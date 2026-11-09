@@ -73,9 +73,6 @@ export function recordFrames(inner: Computer): { computer: Computer; frames: () 
       await inner.goto(url);
       changed = true;
     },
-    stageFile: (name, data) => inner.stageFile(name, data),
-    fileUploadHint: () => inner.fileUploadHint(),
-    liveViewUrl: () => inner.liveViewUrl(),
     close: () => inner.close(),
   };
   return { computer, frames: () => (broken ? [] : [...frames]) };

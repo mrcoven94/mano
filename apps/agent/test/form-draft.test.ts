@@ -5,7 +5,7 @@ import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
 import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import type { Profile } from "../agent/lib/engine.js";
-import { heldBack, presentsExactly, proposedIn, renderQuestion } from "../agent/lib/pending.js";
+import { heldBack, presentsExactly, renderQuestion, waitingFrom } from "../agent/lib/pending.js";
 import { SandboxExecutor, createExecutor } from "../../engine/src/gateway/executors.js";
 import { DOUBTFUL_PAGE, RENEWAL_PAGE, letterPhoto, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
@@ -514,7 +514,7 @@ describe("LAP-747: corrections and spacing", () => {
     expect(fix).toMatchObject({ status: "needs_answer", field: "phone" });
     const approvals = await client().listApprovals();
     expect(approvals.map((a) => a.status)).toEqual(["rejected"]);
-    expect(proposedIn(approvals, 0, "turn_same000001")).toBeNull();
+    expect(waitingFrom(approvals, 0, "turn_same000001")).toEqual([]);
   });
 
   // A same-turn correction that throws partway (Engine's document list

@@ -148,9 +148,6 @@ function tracedComputer(inner: Computer, handleHash: string, sending: Promise<vo
       sending.push(report({ handleHash, visited: new URL(url).pathname }));
       return inner.goto(url);
     },
-    stageFile: (name, data) => inner.stageFile(name, data),
-    fileUploadHint: () => inner.fileUploadHint(),
-    liveViewUrl: () => inner.liveViewUrl(),
     // The computer goes first: a run past its deadline ends when it closes, so a
     // stalled report must not leave it running and able to start another call.
     close: async () => {

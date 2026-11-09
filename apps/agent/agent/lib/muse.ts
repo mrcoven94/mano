@@ -1,28 +1,32 @@
-// Muse through the Meta Model API, called directly as an AI SDK model
-// instance over OpenAI-compatible chat completions. A middleware layer
+// The model for the agent's turns, called directly as an AI SDK model
+// instance over OpenAI-compatible chat completions. MANO_MODEL_PROVIDER
+// picks the route, and production sets it to modal. A middleware layer
 // enforces the output cap (Muse reasons, and reasoning tokens count
 // against the cap: 600 starved every answer, so this starts at 4096),
-// sends store:false, logs the run status plus usage on every call, and
-// strips content from every error before the runtime sees it.
+// sends the route's fixed body fields (store:false on the Meta Model API),
+// logs the run status plus usage on every call, and strips content from
+// every error before the runtime sees it.
 //
-// The agent answers a public number, so it always uses the Standard
-// model ID. Nothing here reads a data-class setting: no environment
-// value, request, or caller can select a cheaper contributor ID.
+// With no route set, turns go to the Meta Model API. The agent answers a
+// public number, so that route always uses the Standard model ID. Nothing
+// here reads a data-class setting: no environment value, request, or
+// caller can select a cheaper contributor ID.
 //
 // MANO_MODEL_PROVIDER=openrouter (with OPENROUTER_API_KEY) switches the
 // agent to Meta's open-weight model through OpenRouter, pinned to
 // zero-retention endpoints that collect no data, the same pin as the text
-// line's fallback, sorted by latency and at low reasoning effort. It is
-// for testing while the Meta Model API is down. Filling a form follows the
+// line's fallback, sorted by latency and at low reasoning effort. Without
+// the key, turns go to the Meta Model API. Filling a form follows the
 // same switch (computer-fill.ts), on a client of its own.
 //
 // MANO_MODEL_PROVIDER=modal (with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN)
 // switches turns to the same open-weight model on a Modal Shared Endpoint.
-// Off unless chosen. Rule 7 allows it on the strength of Modal's stated zero
-// retention for this endpoint type (no request carries a pin; see the November
-// 4 entry in docs/decisions.md). Chosen with a setting missing or a URL off
-// Modal's domain, it calls no model and never falls back to another
-// route. Filling a form follows it, on a client of its own.
+// Production runs this route (the November 4 LAP-913 entry in
+// docs/decisions.md). Rule 7 allows it on the strength of Modal's stated
+// zero retention for this endpoint type (no request carries a pin; see the
+// November 4 entry in docs/decisions.md). Chosen with a setting missing or
+// a URL off Modal's domain, it calls no model and never falls back to
+// another route. Filling a form follows it, on a client of its own.
 //
 // With OPENROUTER_API_KEY too, OpenRouter is the backup when a Modal call fails
 // at run time: only Meta's open-weight model, under the same pin. Nothing else
@@ -35,7 +39,7 @@ import {
   type LanguageModel,
   type LanguageModelMiddleware,
 } from "ai";
-import { UsageRecorder, startCall, type UsageSink } from "./usage.js";
+import { UsageRecorder, startCall } from "./usage.js";
 
 export const STANDARD_MODEL_ID = "muse-spark-1.3";
 export const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
@@ -79,11 +83,7 @@ export const MODEL_CONTEXT_WINDOW_TOKENS = 1_048_576;
 const RETRY_HEADERS = ["retry-after", "retry-after-ms", "x-should-retry"];
 
 export interface MuseModelOptions {
-  baseUrl?: string;
   apiKey?: string;
-  // Test seam: captures usage records instead of logging them.
-  usageSink?: UsageSink;
-  now?: () => number;
 }
 
 function tokenCount(value: number | undefined | null): number {
@@ -134,9 +134,8 @@ function meteringMiddleware(opts: {
   provider: string;
   bodyExtra: Record<string, JSONValue>;
   recorder: UsageRecorder;
-  now: () => number;
 }): LanguageModelMiddleware {
-  const { modelId, provider, bodyExtra, recorder, now } = opts;
+  const { modelId, provider, bodyExtra, recorder } = opts;
   const record = (status: "ok" | "error", inputTokens: number, outputTokens: number, latencyMs: number) =>
     recorder.record({
       package: "agent",
@@ -184,7 +183,7 @@ function meteringMiddleware(opts: {
       },
     }),
     wrapGenerate: async ({ doGenerate }) => {
-      const elapsed = startCall(now);
+      const elapsed = startCall();
       let result: Awaited<ReturnType<typeof doGenerate>>;
       try {
         result = await doGenerate();
@@ -197,7 +196,7 @@ function meteringMiddleware(opts: {
       return result;
     },
     wrapStream: async ({ doStream }) => {
-      const elapsed = startCall(now);
+      const elapsed = startCall();
       let result: Awaited<ReturnType<typeof doStream>>;
       try {
         result = await doStream();
@@ -258,7 +257,7 @@ interface ModelRoute {
 
 // The one place that picks the model path, for both createMuseModel and
 // the agent's stand-in check.
-export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
+export function selectModelRoute(opts: MuseModelOptions = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
   if (env.MANO_MODEL_PROVIDER === "modal") {
     const baseURL = modalBaseUrl(env.MODAL_ENDPOINT_URL);
     // An empty key sends the agent to its stand-in, so an incomplete choice
@@ -269,7 +268,7 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
     ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
     : {
         name: "meta",
-        baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
+        baseURL: env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
         apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "",
         modelId: STANDARD_MODEL_ID,
         bodyExtra: { store: false },
@@ -363,11 +362,11 @@ function backupMiddleware(backup: ReturnType<typeof wrapLanguageModel>): Languag
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
   const route = selectModelRoute(opts);
   if (route.name === "modal" && !route.apiKey) throw new Error("Modal is chosen but its settings are incomplete.");
-  const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);
+  const recorder = new UsageRecorder();
   const metered = (r: Pick<ModelRoute, "name" | "baseURL" | "apiKey" | "modelId" | "bodyExtra">, fetchFn?: typeof fetch) =>
     wrapLanguageModel({
       model: createOpenAICompatible({ name: r.name, baseURL: r.baseURL, apiKey: r.apiKey || "missing-key", includeUsage: true, ...(fetchFn ? { fetch: fetchFn } : {}) })(r.modelId),
-      middleware: meteringMiddleware({ modelId: r.modelId, provider: r.name, bodyExtra: r.bodyExtra, recorder, now: opts.now ?? Date.now }),
+      middleware: meteringMiddleware({ modelId: r.modelId, provider: r.name, bodyExtra: r.bodyExtra, recorder }),
     });
   const backupKey = route.name === "modal" ? process.env.OPENROUTER_API_KEY : undefined;
   if (!backupKey) return { model: metered(route, route.name === "modal" ? refuseRedirects : undefined), modelId: route.modelId };

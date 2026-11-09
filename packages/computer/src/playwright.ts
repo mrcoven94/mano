@@ -1,10 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ComputerAction } from "./actions";
 import type { Computer, ComputerOptions } from "./computer";
-
-const UNSAFE_FILENAME_CHARS_RE = /[^a-zA-Z0-9._-]/g;
 
 /** Smallest page surface the stand-in needs. Playwright's Page satisfies it. */
 export interface MouseLike {
@@ -72,9 +67,6 @@ const SCREENSHOT_TIMEOUT_MS = 8_000;
 export class PlaywrightComputer implements Computer {
   private launched: LaunchedPage | null = null;
   private launching: Promise<LaunchedPage> | null = null;
-  private staged: string[] = [];
-  private choosers = 0;
-  private scratch: string | null = null;
   private origins: string[] | null;
   private closed = false;
 
@@ -128,12 +120,10 @@ export class PlaywrightComputer implements Computer {
           bypass: (this.origins ?? []).map(bypassRule),
         })
         .then((launched) => {
-          // File pickers are answered with staged files, cycling so a repeated
-          // click refills the same input instead of clearing it. Headless
-          // Chromium shows no dialog.
+          // A fill attaches nothing, so every file picker is answered with no
+          // file. Headless Chromium shows no dialog.
           launched.page.on("filechooser", (chooser) => {
-            const next = this.staged.length > 0 ? this.staged[this.choosers++ % this.staged.length] : undefined;
-            void chooser.setFiles(next ? [next] : []);
+            void chooser.setFiles([]);
           });
           this.launched = launched;
           return launched;
@@ -200,23 +190,6 @@ export class PlaywrightComputer implements Computer {
     await page.goto(url);
   }
 
-  async stageFile(name: string, data: Uint8Array): Promise<string> {
-    if (!this.scratch) this.scratch = mkdtempSync(join(tmpdir(), "mano-computer-"));
-    const safe = name.replace(UNSAFE_FILENAME_CHARS_RE, "_") || "upload";
-    const path = join(this.scratch, safe);
-    writeFileSync(path, data);
-    this.staged.push(path);
-    return path;
-  }
-
-  fileUploadHint(): string {
-    return "To attach a file, press Tab until a file button is focused, then press Enter; the staged file attaches automatically. One file per button; do not click a filled button again.";
-  }
-
-  liveViewUrl(): string | null {
-    return null;
-  }
-
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -224,10 +197,6 @@ export class PlaywrightComputer implements Computer {
     if (this.launched) {
       await this.launched.close().catch(() => undefined);
       this.launched = null;
-    }
-    if (this.scratch) {
-      rmSync(this.scratch, { recursive: true, force: true });
-      this.scratch = null;
     }
   }
 

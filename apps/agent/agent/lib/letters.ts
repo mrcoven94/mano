@@ -1,9 +1,10 @@
 // A photo texted to the line, read inside the same turn. Channels stored
 // it in the person's Engine documents and sent its reference; this reads
-// it back, runs readMail (SAM 3.1 splits pages, Muse Spark reads them, on
-// the Standard model ID with store: false; under MANO_MODEL_PROVIDER=openrouter,
-// on-device detection splits them and Muse Spark Open reads them on
-// zero-retention endpoints) and answers from the reading
+// it back, runs readMail (under MANO_MODEL_PROVIDER=modal, which production
+// sets, or openrouter, on-device detection splits pages and Muse Spark Open
+// reads them, on a Modal Shared Endpoint or on OpenRouter's zero-retention
+// endpoints; with no route set, SAM 3.1 splits pages and Muse Spark reads
+// them, on the Standard model ID with store: false) and answers from the reading
 // with answerReading: what the letter is, the deadline the gate publishes
 // (held in Engine through POST /deadlines), otherwise one question that
 // quotes the sentence, and what to send. A photo with no words gets that
@@ -18,6 +19,7 @@ import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords,
 import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
 import { rememberFact, timeLeft } from "./memory.js";
+import { escapeBrackets } from "./profile.js";
 
 export interface TextedPhoto {
   id: string;
@@ -211,11 +213,6 @@ export async function documentsContext(engine: PersonEngine, timeoutMs: number):
     return null;
   }
 }
-
-// Angle brackets and their look-alikes, so nothing in the block can open
-// or close a block, written as JSON escapes the model still reads.
-const BRACKETS = /[<>\u2039\u203a\u2329\u232a\u27e8\u27e9\u3008\u3009\u300a\u300b\ufe64\ufe65\uff1c\uff1e]/g;
-const escapeBrackets = (json: string): string => json.replace(BRACKETS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 export function letterBlock(reply: LetterReply): string {
   const data = escapeBrackets(JSON.stringify({ photoRead: reply.read, alreadySent: reply.text }));

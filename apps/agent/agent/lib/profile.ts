@@ -398,8 +398,8 @@ export function profileData(view: ProfileView): Record<string, unknown> {
 
 // Angle brackets and their look-alikes, so no value can open or close a
 // block, written as JSON escapes the model still reads as the character.
-const BRACKETS = /[<>‹›〈〉⟨⟩〈〉《》﹤﹥＜＞]/g;
-const escapeBrackets = (json: string) => json.replace(BRACKETS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+const BRACKETS = /[<>\u2039\u203a\u2329\u232a\u27e8\u27e9\u3008\u3009\u300a\u300b\ufe64\ufe65\uff1c\uff1e]/g;
+export const escapeBrackets = (json: string) => json.replace(BRACKETS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 export const PROFILE_OPEN = "<profile_data>";
 export const PROFILE_CLOSE = "</profile_data>";
