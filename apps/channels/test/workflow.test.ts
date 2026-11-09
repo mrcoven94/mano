@@ -10,8 +10,12 @@ const REQUIRED = [
   "BLOOIO_API_KEY",
   "BLOOIO_CHANNEL_ID",
   "MANO_HANDLE_PEPPER",
-  "ENCRYPTION_KEK_B64",
   "META_MODEL_API_KEY",
+  "MANO_ENGINE_SEND_SECRET",
+  "MANO_ENGINE_CHANNELS_TOKEN",
+  "MANO_ENGINE_URL",
+  "MANO_AGENT_SECRET",
+  "MANO_HANDLE_GRANT_SECRET",
 ];
 
 describe("deploy-channels workflow", () => {
@@ -43,10 +47,8 @@ describe("deploy-channels workflow", () => {
   it("names the same text-number variable the site reads", () => {
     const example = readFileSync(new URL("../../site/.env.example", import.meta.url), "utf8");
     const siteLib = readFileSync(new URL("../../site/lib/site.ts", import.meta.url), "utf8");
-    for (const name of ["NEXT_PUBLIC_SMS_NUMBER", "NEXT_PUBLIC_APP_URL"]) {
-      expect(example).toContain(`${name}=`);
-      expect(siteLib).toContain(name);
-    }
+    expect(example).toContain("NEXT_PUBLIC_SMS_NUMBER=");
+    expect(siteLib).toContain("NEXT_PUBLIC_SMS_NUMBER");
     expect(example).not.toContain("NEXT_PUBLIC_MANO_TEXT_NUMBER");
     expect(siteLib).not.toContain("NEXT_PUBLIC_MANO_TEXT_NUMBER");
   });

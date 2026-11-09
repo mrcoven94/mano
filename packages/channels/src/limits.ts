@@ -8,7 +8,6 @@ export const TURN_TEXT_CAP = 4000;
 // postponing the batch alarm; the cap bounds what waits for it.
 export const MAX_PENDING_CHARS = 8000;
 export const DEFAULT_DAILY_BUDGET_USD = 5;
-export const DEFAULT_USD_PER_1K_CHARS = 0.001;
 export const MAX_ATTACHMENTS_PER_TURN = 5;
 export const MAX_ATTACHMENT_BYTES = 10_000_000;
 export const HANDLE_BYTES_DAILY = 25_000_000;
@@ -38,8 +37,4 @@ export function handleOverLimit(windows: HandleWindows, nowMs: number): "hour" |
 
 export function estimateCostUsd(inputChars: number, outputChars: number, usdPer1kChars: number): number {
   return ((inputChars + outputChars) / 1000) * usdPer1kChars;
-}
-
-export function budgetAllows(spentUsd: number, estimateUsd: number, budgetUsd: number): boolean {
-  return spentUsd + estimateUsd <= budgetUsd;
 }

@@ -3,8 +3,8 @@
 // recording stand-in for tests and local runs, the Responder interface
 // (plain Muse Spark, Meta's open-weight model as its fallback when the
 // Meta Model API is down, and the agent), and the pure pieces the worker
-// builds on: handles, signatures, bubbles, limits, approvals and
-// per-person encryption. Run: pnpm --filter @mano/channels check (tsc
+// builds on: handles, signatures, bubbles, limits, the stop and start
+// keywords and hashing. Run: pnpm --filter @mano/channels check (tsc
 // plus vitest, no keys needed).
 export * from "./types.js";
 export * from "./channel.js";

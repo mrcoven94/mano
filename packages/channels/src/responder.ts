@@ -3,8 +3,8 @@
 // the conversation goes as role messages. A turn is one fast call at
 // minimal effort that either answers or routes deep with a heads-up,
 // which the caller sends at once before the deep call at medium effort.
-// When the engine merges, its person agent becomes the Responder behind
-// this same interface.
+// Mano's agent answers behind this same interface (agent.ts), with this
+// plain responder as its fallback.
 import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, SAFETY_LINE, crisisLineFor, crisisNote, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
@@ -173,10 +173,10 @@ export function attachmentNote(count: number): string {
 // (no reader answered) or not stored.
 export const PHOTO_UNREAD_TEXT = `I could not read your photo just now. Send it again in a few minutes and I will try once more. ${SAFETY_LINE}`;
 export const PHOTO_UNSAVED_TEXT = `I could not save your photo, so I have not read it. Please send it again. ${SAFETY_LINE}`;
-// Added to the reply when a photo could not be turned into a file an
-// office takes (PDF, PNG or JPEG). It can still be read.
 // Sent when a voice note could not be heard or stored. Nothing is guessed.
 export const VOICE_UNHEARD_TEXT = `I could not listen to your voice note just now. Please send it as a text. ${SAFETY_LINE}`;
+// Added to the reply when a photo could not be turned into a file an
+// office takes (PDF, PNG or JPEG). It can still be read.
 export const PHOTO_FORMAT_TEXT = "I could not make a copy of this photo that an office will take, so I cannot attach it to a form. If you want me to send it with one, please send a screenshot of the photo instead.";
 
 export function extractOutputText(data: unknown): string {

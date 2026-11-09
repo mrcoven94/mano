@@ -33,7 +33,6 @@ import {
   isOptIn,
   isOptOut,
   lifecycleStateFor,
-  parseApprovalReply,
   sha256Hex,
   stripBlockedLinks,
   type Channel,
@@ -44,7 +43,6 @@ import {
 import type { HistoryMessage, ModelUsage, Responder, StoredPhoto } from "@mano/channels";
 import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
-  APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
   FAILURE_BUBBLE,
   INTERIM_BUBBLE,
@@ -1017,18 +1015,6 @@ export class ConversationRunner {
       this.checkSendsResolved(turn, generation);
     }
 
-    const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
-    if (approval && store.pendingApprovalCount(nowMs()) > 0) {
-      // The decision is recorded after the crisis line.
-      const recordedPart = crisisBubbles.length + 1;
-      const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
-      if (answered) {
-        store.updateTurnAnswer(turn, JSON.stringify([...crisisBubbles, { part: recordedPart, tag: "", text: APPROVAL_RECORDED_BUBBLE }]), 0, nowMs());
-        store.markTurnSettled(turn, nowMs());
-        return;
-      }
-    }
-
     const over = handleOverLimit(
       { hourKey: meta.hourKey, hourCount: meta.hourCount, dayKey: meta.dayKey, dayCount: meta.dayCount },
       nowMs(),
@@ -1298,15 +1284,6 @@ export class ConversationRunner {
     return accepted;
   }
 
-  // Runs the responder. A deep turn's heads-up goes out the moment the
-  // responder has it, after the intro on a first contact, and takes the
-  // place of the interim notice.
-  // A reaction is decoration on top of words: it runs outside the turn,
-  // never awaited by it, and goes out at most once. Its row is written as
-  // "sending" before the call, so a resumed or retried turn never issues
-  // it again; an outcome that never comes back leaves it there, dropped.
-  // It sends only while the generation and decoration epoch it was
-  // scheduled under still hold, read fresh right before the call.
   // Records a reaction as dropped, so no later run sends it.
   private dropTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, code: string): void {
     const { store, logger, nowMs, config } = this.deps;
@@ -1320,6 +1297,12 @@ export class ConversationRunner {
     logger.info("tapback_dropped", { handle: this.logHandle(), turn, code });
   }
 
+  // A reaction is decoration on top of words: it runs outside the turn,
+  // never awaited by it, and goes out at most once. Its row is written as
+  // "sending" before the call, so a resumed or retried turn never issues
+  // it again; an outcome that never comes back leaves it there, dropped.
+  // It sends only while the generation and decoration epoch it was
+  // scheduled under still hold, read fresh right before the call.
   private async sendTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, epoch: number): Promise<void> {
     const { store, channel, logger, nowMs, config } = this.deps;
     if (!config.reactionsEnabled) return;
@@ -1348,6 +1331,9 @@ export class ConversationRunner {
     }
   }
 
+  // Runs the responder. A deep turn's heads-up goes out the moment the
+  // responder has it, after the intro on a first contact, and takes the
+  // place of the interim notice.
   private async respondWithInterim(
     turn: number,
     turnText: string,
@@ -1866,20 +1852,6 @@ export class ConversationRunner {
     }
   }
 
-  async requestApproval(opts: { id: string; code: string; summary: string; ttlMs: number }): Promise<void> {
-    const now = this.deps.nowMs();
-    this.store.addApproval({
-      id: opts.id,
-      codeHash: await sha256Hex(opts.code),
-      summary: opts.summary,
-      status: "pending",
-      decision: null,
-      createdAtMs: now,
-      expiresAtMs: now + opts.ttlMs,
-    });
-    this.deps.logger.info("approval_requested", { handle: this.logHandle(), approval: opts.id });
-  }
-
   // Sends one agent-started text (reminder, nudge) through the normal
   // outbound path: consent and STOP refuse, per-handle limits and the
   // spend ledger apply, links are checked, and every bubble carries its
@@ -1967,24 +1939,6 @@ export class ConversationRunner {
       throw err;
     }
   }
-
-  private async answerApproval(
-    code: string,
-    decision: "yes" | "no",
-    turn: number,
-    chatId: string | null,
-    to: string | null,
-    part = 1,
-  ): Promise<boolean> {
-    const { store, logger, nowMs } = this.deps;
-    const codeHash = await sha256Hex(code);
-    const approvalId = store.pendingApprovalIdByCode(codeHash, nowMs());
-    if (!approvalId) return false;
-    store.answerApproval(approvalId, decision);
-    logger.info("approval_answered", { handle: this.logHandle(), approval: approvalId, decision });
-    await this.sendBubble({ turn, part, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
-    return true;
-  }
 }
 
 // The message a turn may react to: the batch's last one.
@@ -2000,9 +1954,6 @@ interface Eyes {
   // Puts them on once, outside the turn, when the message allows them.
   put(why: string): void;
 }
-
-// A message send whose outcome is still open. A reaction or the eyes are
-// never one: sent at most once, an unknown outcome dropped, not retried.
 
 // A text its sender asked Channels not to replay.
 const NO_REPLAY_TAG = "agent_once";

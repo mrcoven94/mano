@@ -260,8 +260,6 @@ async function noteSeenIds(env: Env, ids: string[]): Promise<void> {
   });
 }
 
-// Dead letters record the event ID and reason, then drop the body. The
-// full event, with its message text, never sits in the DLQ.
 // Each event is first resolved to its conversation, all at once. Then one
 // conversation's events are delivered in batch order (STOP before a later
 // message, typing started before stopped), whichever of chat or handle
@@ -326,6 +324,8 @@ export async function routeInLanes(
   );
 }
 
+// Dead letters record the event ID and reason, then drop the body. The
+// full event, with its message text, never sits in the DLQ.
 export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   const logger = createLogger();
   for (const message of batch.messages) {

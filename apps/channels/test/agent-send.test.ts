@@ -31,7 +31,6 @@ function agentEnv(stub: (url: string, init: RequestInit) => Promise<Response>): 
     BLOOIO_CHANNEL_ID: "",
     BLOOIO_WEBHOOK_SECRET: "",
     MANO_HANDLE_PEPPER: "",
-    ENCRYPTION_KEK_B64: "",
     MANO_AGENT_SECRET: SECRET,
     MANO_ENGINE_SEND_SECRET: ENGINE_SEND_SECRET,
     MANO_HANDLE_GRANT_SECRET: "test-grant-secret-not-real",

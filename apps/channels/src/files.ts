@@ -148,7 +148,8 @@ export interface AttachmentFetchOptions {
   mediaHosts: string[];
   maxBytes?: number;
   maxHops?: number;
-  // Cancels the download (STOP, a delete, a decoration timeout).
+  // Cancels the download when its caller stops waiting. The turn's own
+  // download passes none and ends on the fetch timeout.
   signal?: AbortSignal;
 }
 

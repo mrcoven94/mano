@@ -39,7 +39,6 @@ jobs:
           check "$BLOOIO_API_KEY" BLOOIO_API_KEY
           check "$BLOOIO_CHANNEL_ID" BLOOIO_CHANNEL_ID
           check "$MANO_HANDLE_PEPPER" MANO_HANDLE_PEPPER
-          check "$ENCRYPTION_KEK_B64" ENCRYPTION_KEK_B64
           check "$META_MODEL_API_KEY" META_MODEL_API_KEY
           check "$MANO_ENGINE_SEND_SECRET" MANO_ENGINE_SEND_SECRET
           check "$MANO_ENGINE_CHANNELS_TOKEN" MANO_ENGINE_CHANNELS_TOKEN
@@ -53,7 +52,6 @@ jobs:
           BLOOIO_API_KEY: ${{ secrets.BLOOIO_API_KEY }}
           BLOOIO_CHANNEL_ID: ${{ secrets.BLOOIO_CHANNEL_ID }}
           MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
-          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_ENGINE_SEND_SECRET: ${{ secrets.MANO_ENGINE_SEND_SECRET }}
           MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}
@@ -88,7 +86,6 @@ jobs:
           printf '%s' "$BLOOIO_API_KEY" | pnpm exec wrangler secret put BLOOIO_API_KEY
           printf '%s' "$BLOOIO_CHANNEL_ID" | pnpm exec wrangler secret put BLOOIO_CHANNEL_ID
           printf '%s' "$MANO_HANDLE_PEPPER" | pnpm exec wrangler secret put MANO_HANDLE_PEPPER
-          printf '%s' "$ENCRYPTION_KEK_B64" | pnpm exec wrangler secret put ENCRYPTION_KEK_B64
           printf '%s' "$META_MODEL_API_KEY" | pnpm exec wrangler secret put META_MODEL_API_KEY
           printf '%s' "$MANO_ENGINE_SEND_SECRET" | pnpm exec wrangler secret put MANO_ENGINE_SEND_SECRET
           printf '%s' "$MANO_ENGINE_CHANNELS_TOKEN" | pnpm exec wrangler secret put MANO_ENGINE_CHANNELS_TOKEN
@@ -101,7 +98,6 @@ jobs:
           BLOOIO_API_KEY: ${{ secrets.BLOOIO_API_KEY }}
           BLOOIO_CHANNEL_ID: ${{ secrets.BLOOIO_CHANNEL_ID }}
           MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
-          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_ENGINE_SEND_SECRET: ${{ secrets.MANO_ENGINE_SEND_SECRET }}
           MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}

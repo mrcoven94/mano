@@ -7,7 +7,6 @@ import {
   TEST_CHAT,
   TEST_HANDLE,
   TEST_HANDLE_HASH,
-  TEST_KEK_B64,
   inboundEvent,
   lifecycleEvent,
   makeHarness,

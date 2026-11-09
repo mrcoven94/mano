@@ -58,16 +58,6 @@ export interface HeldReceipt {
   atMs: number;
 }
 
-export interface ApprovalRow {
-  id: string;
-  codeHash: string;
-  summary: string;
-  status: "pending" | "answered" | "expired";
-  decision: "yes" | "no" | null;
-  createdAtMs: number;
-  expiresAtMs: number;
-}
-
 export interface AnswerBubble {
   part: number;
   // "" for a text bubble, "react" for a tapback, whose text is the
@@ -281,11 +271,6 @@ export interface ConversationStore {
   outboundStates(turn: number): OutboundState[];
   holdReceipt(receipt: HeldReceipt): void;
   takeReceipts(messageId: string): HeldReceipt[];
-  addApproval(row: ApprovalRow): void;
-  pendingApprovals(nowMs: number): ApprovalRow[];
-  pendingApprovalCount(nowMs: number): number;
-  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null;
-  answerApproval(id: string, decision: "yes" | "no"): void;
   startTurn(row: PersistedTurn): void;
   unfinishedTurn(): PersistedTurn | null;
   // The unfinished turn's attempts, without reading its stored input.
@@ -316,7 +301,6 @@ export class MemoryStore implements ConversationStore {
   private metaRow: ConversationMeta = defaultMeta();
   private pendingRows: PendingInbound[] = [];
   private outboundRows = new Map<string, OutboundRow>();
-  private approvalRows = new Map<string, ApprovalRow>();
 
   hasEvent(eventId: string): boolean {
     return this.events.has(eventId);
@@ -417,27 +401,6 @@ export class MemoryStore implements ConversationStore {
       this.heldReceipts = this.heldReceipts.filter((r) => r.messageId !== messageId);
     }
     return taken;
-  }
-
-  addApproval(row: ApprovalRow): void {
-    this.approvalRows.set(row.id, { ...row });
-  }
-
-  pendingApprovals(nowMs: number): ApprovalRow[] {
-    return [...this.approvalRows.values()].filter((a) => a.status === "pending" && a.expiresAtMs > nowMs);
-  }
-
-  pendingApprovalCount(nowMs: number): number {
-    return this.pendingApprovals(nowMs).length;
-  }
-
-  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null {
-    return this.pendingApprovals(nowMs).find((a) => a.codeHash === codeHash)?.id ?? null;
-  }
-
-  answerApproval(id: string, decision: "yes" | "no"): void {
-    const row = this.approvalRows.get(id);
-    if (row) this.approvalRows.set(id, { ...row, status: "answered", decision });
   }
 
   private turnRows = new Map<number, PersistedTurn>();
@@ -549,7 +512,6 @@ export class MemoryStore implements ConversationStore {
     this.pendingRows = [];
     this.outboundRows.clear();
     this.heldReceipts = [];
-    this.approvalRows.clear();
     this.turnRows.clear();
     this.agentSendRows.clear();
     this.presentationRows.clear();

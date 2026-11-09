@@ -187,7 +187,7 @@ describe("ConversationDO on SQLite", () => {
     expect(await postEvent(b, "hash-b", inbound("evt_same_id", "For B."))).toBe("queued");
   });
 
-  it("wipes pending, outbounds and approvals on delete", async () => {
+  it("wipes pending and outbounds on delete", async () => {
     const stub = stubFor(`do-wipe-${Date.now()}`);
     expect(await postEvent(stub, "hash-wipe", inbound("evt_do_wipe_1", "Hi Mano"))).toBe("queued");
     await new Promise((r) => setTimeout(r, 3000));
@@ -197,19 +197,12 @@ describe("ConversationDO on SQLite", () => {
     });
     expect(turn.status).toBe(200);
     expect(await postEvent(stub, "hash-wipe", inbound("evt_do_wipe_2", "Still here."))).toBe("queued");
-    const approval = await stub.fetch("https://conversation/internal/approval", {
-      method: "POST",
-      body: JSON.stringify({ handleHash: "hash-wipe", id: "apr_wipe", code: " ABC123 ", summary: "Test.", ttlMs: 60000 }),
-    });
-    expect(approval.status).toBe(200);
     const before = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
       sends: unknown[];
       pending: number;
-      approvals: number;
     };
     expect(before.sends.length).toBeGreaterThan(0);
     expect(before.pending).toBe(1);
-    expect(before.approvals).toBe(1);
     const res = await stub.fetch("https://conversation/internal/delete", {
       method: "POST",
       body: JSON.stringify({ handleHash: "hash-wipe" }),
@@ -220,9 +213,8 @@ describe("ConversationDO on SQLite", () => {
     const after = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
       sends: unknown[];
       pending: number;
-      approvals: number;
     };
-    expect(after).toMatchObject({ sends: [], pending: 0, approvals: 0 });
+    expect(after).toMatchObject({ sends: [], pending: 0 });
   });
 
   it("deletes the conversation, and fails closed while Engine has not confirmed it", async () => {

@@ -48,7 +48,6 @@ function hookEnv(sent: unknown[]): Env {
     BLOOIO_CHANNEL_ID: CHANNEL_ID,
     BLOOIO_WEBHOOK_SECRET: SECRET,
     MANO_HANDLE_PEPPER: "test-pepper-not-real",
-    ENCRYPTION_KEK_B64: "",
   };
 }
 

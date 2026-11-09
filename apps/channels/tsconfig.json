@@ -9,5 +9,5 @@
     "types": ["@cloudflare/workers-types"],
     "lib": ["ES2022"]
   },
-  "include": ["src", "test", "test-worker", "worker-configuration.d.ts"]
+  "include": ["src", "test", "test-worker"]
 }

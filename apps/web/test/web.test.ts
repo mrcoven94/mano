@@ -535,3 +535,60 @@ describe("the crisis check reads the whole message", () => {
     expect(pulled).toBeLessThan(10);
   });
 });
+
+describe("a malformed request is refused, not thrown", () => {
+  // A percent sequence cut short: decodeURIComponent throws on it.
+  const BAD = "%E0%A4%A";
+  const refused = async (res: Response) => {
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "That request is not valid." });
+  };
+
+  it("answers 400 for a malformed approval part, before any session check", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await refused(await handleApi(post(`/api/persons/${s.personId}/approvals/${BAD}/shown`, { messageId: "m-1" }), h.env));
+  });
+
+  it("answers 400 for a malformed person part on the shown route", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await refused(await handleApi(post(`/api/persons/${BAD}/approvals/appr-1/shown`, { messageId: "m-1" }, s.token), h.env));
+  });
+
+  it("answers 400 for a malformed person part on the conversation route", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await refused(await handleApi(new Request(`https://web.test/api/persons/${BAD}/conversation`, { headers: auth(s.token) }), h.env));
+  });
+
+  it("refuses a sign-in body over the limit as it refuses an invalid one, and takes a normal one", async () => {
+    const h = harness();
+    const big = await handleApi(post("/api/auth/request-code", { email: EMAIL, pad: "x".repeat(5_000) }), h.env);
+    expect(big.status).toBe(400);
+    expect(await big.json()).toEqual({ error: "Enter a valid email address." });
+    expect(h.sent).toHaveLength(0);
+    expect((await handleApi(post("/api/auth/request-code", { email: EMAIL }), h.env)).status).toBe(200);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it("stops reading a sign-in body at the limit", async () => {
+    const h = harness();
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(1024).fill(120));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await handleApi(new Request("https://web.test/api/auth/request-code", { method: "POST", body, duplex: "half" } as RequestInit), h.env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Enter a valid email address." });
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(10);
+  });
+});

@@ -6,7 +6,6 @@ import type { ModelCosts } from "./runner.js";
 import {
   DECORATION_TAGS,
   defaultMeta,
-  type ApprovalRow,
   type AttachmentChoice,
   type ChatBackground,
   type ConversationMeta,
@@ -80,6 +79,8 @@ CREATE TABLE IF NOT EXISTS held_receipts (
   recorded_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_held_receipts_message ON held_receipts (message_id);
+-- Nothing reads or writes approvals any more. The table is kept so the
+-- wipe statement works on conversations created before and after that.
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
   code_hash TEXT NOT NULL,
@@ -290,10 +291,11 @@ export class SqlConversationStore implements ConversationStore {
   constructor(sql: SqlStorage) {
     this.sql = sql;
     this.sql.exec(SCHEMA);
-    // Pre-launch migrations for dev databases created before the
-    // review fixes added columns. Nothing has been deployed, so a plain
-    // ALTER per column is enough; the first schema change after launch
-    // gets a real migration.
+    // Each statement adds a column that came after the table's first
+    // schema, so a conversation created before that column gets it the
+    // next time it wakes. Where the column is already there the ALTER
+    // throws and the catch below skips it. Production conversations may
+    // predate any of these, so none can be removed.
     for (const ddl of [
       "ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE outbounds ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
@@ -588,55 +590,6 @@ export class SqlConversationStore implements ConversationStore {
       this.sql.exec("DELETE FROM held_receipts WHERE message_id = ?", messageId);
     }
     return taken;
-  }
-
-  addApproval(row: ApprovalRow): void {
-    this.sql.exec(
-      "INSERT OR REPLACE INTO approvals (id, code_hash, summary, status, decision, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      row.id,
-      row.codeHash,
-      row.summary,
-      row.status,
-      row.decision,
-      row.createdAtMs,
-      row.expiresAtMs,
-    );
-  }
-
-  pendingApprovals(nowMs: number): ApprovalRow[] {
-    return (this.sql.exec("SELECT id, code_hash, summary, status, decision, created_at_ms, expires_at_ms FROM approvals WHERE status = 'pending' AND expires_at_ms > ?", nowMs).toArray() as unknown as Array<{
-      id: string;
-      code_hash: string;
-      summary: string;
-      status: ApprovalRow["status"];
-      decision: ApprovalRow["decision"];
-      created_at_ms: number;
-      expires_at_ms: number;
-    }>).map((r) => ({
-      id: r.id,
-      codeHash: r.code_hash,
-      summary: r.summary,
-      status: r.status,
-      decision: r.decision,
-      createdAtMs: r.created_at_ms,
-      expiresAtMs: r.expires_at_ms,
-    }));
-  }
-
-  pendingApprovalCount(nowMs: number): number {
-    const row = firstRow<{ n: number }>(this.sql.exec("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending' AND expires_at_ms > ?", nowMs));
-    return row?.n ?? 0;
-  }
-
-  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null {
-    const row = firstRow<{ id: string }>(
-      this.sql.exec("SELECT id FROM approvals WHERE status = 'pending' AND expires_at_ms > ? AND code_hash = ? LIMIT 1", nowMs, codeHash),
-    );
-    return row?.id ?? null;
-  }
-
-  answerApproval(id: string, decision: "yes" | "no"): void {
-    this.sql.exec("UPDATE approvals SET status = 'answered', decision = ? WHERE id = ?", decision, id);
   }
 
   startTurn(row: PersistedTurn): void {

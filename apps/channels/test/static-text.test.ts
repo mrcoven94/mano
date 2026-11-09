@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractLinks } from "@mano/channels";
 import {
-  APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
   FAILURE_BUBBLE,
   INTERIM_BUBBLE,
@@ -18,7 +17,6 @@ describe("static reply texts", () => {
       FAILURE_BUBBLE,
       BUSY_BUBBLE,
       OPT_OUT_BUBBLE,
-      APPROVAL_RECORDED_BUBBLE,
       PHOTO_UNREAD_TEXT,
       PHOTO_UNSAVED_TEXT,
       PHOTO_FORMAT_TEXT,

@@ -441,26 +441,6 @@ export class ConversationDO implements DurableObject {
       }
       return Response.json({ result });
     }
-    if (request.method === "POST" && url.pathname === "/internal/approval") {
-      const body = (await request.json().catch(() => null)) as {
-        handleHash?: unknown;
-        id?: unknown;
-        code?: unknown;
-        summary?: unknown;
-        ttlMs?: unknown;
-      } | null;
-      if (!body || typeof body.handleHash !== "string" || typeof body.id !== "string" || typeof body.code !== "string") {
-        return new Response("Bad approval.", { status: 400 });
-      }
-      const { runner } = this.runner(body.handleHash);
-      await runner.requestApproval({
-        id: body.id,
-        code: body.code,
-        summary: typeof body.summary === "string" ? body.summary : "",
-        ttlMs: typeof body.ttlMs === "number" ? body.ttlMs : 15 * 60 * 1000,
-      });
-      return Response.json({ ok: true });
-    }
     if (request.method === "POST" && url.pathname === "/internal/agent-send") {
       const body = (await request.json().catch(() => null)) as {
         handleHash?: unknown;
@@ -536,7 +516,6 @@ export class ConversationDO implements DurableObject {
         turn: store.meta().turn,
         introduced: store.meta().introduced,
         pending: store.pending().length,
-        approvals: store.pendingApprovalCount(Date.now()),
         engineDeletePending: loadPendingDelete(this.ctx.storage.sql),
       });
     }

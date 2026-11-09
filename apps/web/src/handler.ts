@@ -81,6 +81,7 @@ const CLIENT_OP_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const NOT_CONFIGURED = "Mano on the web is not configured.";
 const SIGN_IN_AGAIN = "Sign in again.";
 const COULD_NOT_ANSWER = "Mano could not answer just now. Your message is saved; try again.";
+const BAD_PATH = "That request is not valid.";
 
 function error(status: number, message: string): Response {
   return Response.json({ error: message }, { status });
@@ -96,8 +97,21 @@ function parseObject(raw: string, maxBytes: number): Record<string, unknown> | n
   }
 }
 
+// A path part as text, or null when its percent sequences are malformed
+// (decodeURIComponent throws on those).
+function decodePart(part: string): string | null {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
+
+// A body past the limit is refused without being read whole, and answers
+// the same as one that is not a JSON object.
 async function readJson(request: Request, maxBytes: number): Promise<Record<string, unknown> | null> {
-  return parseObject(await request.text(), maxBytes);
+  const { text, truncated } = await readCapped(request, maxBytes);
+  return truncated ? null : parseObject(text, maxBytes);
 }
 
 // The clock is read after any body is read: a body can be held open.
@@ -311,7 +325,9 @@ async function questionShown(request: Request, env: WebEnv, secret: string, pers
   const personId = await sessionPerson(request, env, secret);
   if (!personId) return error(401, SIGN_IN_AGAIN);
   const handleHash = handleForPersonId(personId);
-  if (decodeURIComponent(personSegment) !== personId || !handleHash) return error(403, SIGN_IN_AGAIN);
+  const segment = decodePart(personSegment);
+  if (segment === null) return error(400, BAD_PATH);
+  if (segment !== personId || !handleHash) return error(403, SIGN_IN_AGAIN);
   const messageId = body?.messageId;
   const person = env.stateFor(`person:${personId}`);
   const textHash = typeof messageId === "string" ? await person.questionToReport(approvalId, messageId) : null;
@@ -348,12 +364,18 @@ export async function handleApi(request: Request, env: WebEnv): Promise<Response
   if (request.method === "POST" && url.pathname === "/api/auth/request-code") return requestCode(request, env, secret);
   if (request.method === "POST" && url.pathname === "/api/auth/verify-code") return verifyCode(request, env, secret, pepper);
   const shownMatch = SHOWN_PATH.exec(url.pathname);
-  if (shownMatch && request.method === "POST") return questionShown(request, env, secret, shownMatch[1], decodeURIComponent(shownMatch[2]));
+  if (shownMatch && request.method === "POST") {
+    const approvalId = decodePart(shownMatch[2]);
+    if (approvalId === null) return error(400, BAD_PATH);
+    return questionShown(request, env, secret, shownMatch[1], approvalId);
+  }
 
   const personId = await sessionPerson(request, env, secret);
   if (!personId) return error(401, SIGN_IN_AGAIN);
   if (chatMatch) {
-    if (decodeURIComponent(chatMatch[1]) !== personId || !handleForPersonId(personId)) return error(403, SIGN_IN_AGAIN);
+    const segment = decodePart(chatMatch[1]);
+    if (segment === null) return error(400, BAD_PATH);
+    if (segment !== personId || !handleForPersonId(personId)) return error(403, SIGN_IN_AGAIN);
     if (chatMatch[2] === "conversation" && request.method === "GET") {
       return Response.json({ messages: await env.stateFor(`person:${personId}`).listMessages() });
     }
