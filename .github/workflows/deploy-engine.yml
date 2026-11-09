@@ -6,6 +6,7 @@ on:
       - "apps/engine/**"
       - "packages/protocol/**"
       - "packages/guardian/**"
+      - "packages/persona/**"
       - "packages/programs/**"
       - ".github/workflows/deploy-engine.yml"
   # Pull requests run only the validate job: lint this workflow and bundle
@@ -15,6 +16,7 @@ on:
       - "apps/engine/**"
       - "packages/protocol/**"
       - "packages/guardian/**"
+      - "packages/persona/**"
       - "packages/programs/**"
       - ".github/workflows/deploy-engine.yml"
   workflow_dispatch:

@@ -11,6 +11,8 @@ node_modules/
 dist/
 .expo/
 coverage/
+runs/
+runs-staging/
 *.log
 .DS_Store
 *.tsbuildinfo

@@ -229,6 +229,23 @@ describe("idempotency", () => {
     expect(body["status"]).toBe("not_found");
   });
 
+  test("a key with a malformed percent sequence is a bad request, never not found", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions/%E0%A4%A`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, string>;
+    expect(typeof body["error"]).toBe("string");
+    expect(body["status"]).toBeUndefined();
+    expect(body["key"]).toBeUndefined();
+  });
+
   test("a different packet under an existing key returns 409 with the received digest", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
@@ -1112,6 +1129,24 @@ describe("caseworker view", () => {
 
     const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`, { headers: { authorization: AUTH } }), store, files, config);
     expect(missing.status).toBe(404);
+  });
+
+  test("a confirmation with a malformed percent sequence is not found", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const detail = await handleRequest(new Request(`${BASE}/caseworker/%E0%A4%A`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(detail.status).toBe(404);
+    expect(await detail.text()).toContain("That confirmation number does not exist.");
+  });
+
+  test("a file address with a malformed percent sequence is not found", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const file = await handleRequest(new Request(`${BASE}/caseworker/%E0%A4%A/file/0`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(file.status).toBe(404);
+    expect(await file.text()).toContain("That file does not exist.");
   });
 
   test("downloads sanitize hostile file names", async () => {
