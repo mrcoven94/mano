@@ -19,4 +19,3 @@ export * from "./workos";
 export * from "./channels";
 export * from "./engine";
 export * from "./service";
-export * from "./client";
