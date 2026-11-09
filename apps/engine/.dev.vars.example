@@ -1,5 +1,5 @@
 # Engine local config. Copy to .dev.vars (never commit it) and fill in
-# values from Infisical with `ws keys`. Names only here, never values.
+# values. Maintainers inject these at run time; never commit values.
 #
 # Required for live model calls and documents:
 META_MODEL_API_KEY= # gitleaks:allow (empty example value)

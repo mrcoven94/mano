@@ -7,7 +7,6 @@ import type { ActionRequest, CheckOutcome, DocumentFiling, Executor, StoredDocum
 // outbound messages.
 export class ConsentDeliveringExecutor implements Executor {
   readonly simulated: boolean;
-  calls: ActionRequest[] = [];
 
   constructor(
     private inner: Executor,
@@ -25,7 +24,6 @@ export class ConsentDeliveringExecutor implements Executor {
   }
 
   async execute(req: ActionRequest): Promise<{ externalId: string; simulated?: boolean }> {
-    this.calls.push(req);
     if (req.type === "share") {
       // The org really receives the case, even when every other action
       // runs simulated: label the receipt per action, not per executor.

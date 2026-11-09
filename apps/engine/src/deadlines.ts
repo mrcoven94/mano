@@ -83,8 +83,8 @@ const CONTROL_CHAR_RUN = /[\u0000-\u001f\u007f]+/g;
 const WHITESPACE_RUN = /\s+/g;
 const DEADLINE_PATH = /^\/deadlines\/([^/]+)$/;
 
-// The program names a nudge may use. Replaced by the Programs catalog
-// once it lands.
+// The program names a nudge may use: a separate short list for nudge
+// wording, not the Programs catalog.
 const KNOWN_PROGRAMS = [
   "CalFresh", "SNAP", "Medi-Cal", "Medicaid", "Medicare", "WIC", "TANF", "CalWORKs", "SSI", "SSDI", "LIHEAP",
   "Section 8", "CHIP", "Covered California", "General Assistance",

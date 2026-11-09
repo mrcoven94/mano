@@ -5,7 +5,7 @@
 // Run and check:
 //
 //   pnpm --filter @mano/engine dev          # copy .dev.vars.example to .dev.vars first
-//   pnpm --filter @mano/engine run check    # typecheck plus both test suites
+//   pnpm --filter @mano/engine run check    # typecheck plus the three test suites
 //   pnpm --filter @mano/engine run smoke    # one live synthetic model call (needs META_MODEL_API_KEY)
 //
 // Without keys the engine runs on stand-ins in development only
@@ -139,18 +139,22 @@
 // a letter only to the mail provider's test mode, and the approval question
 // shows the price Engine worked out for the exact document.
 //
-// Secrets: never put a key on a command line. Set secrets from stdin:
+// Secrets: never put a key on a command line. Production gets its secrets
+// at deploy: .github/workflows/deploy-engine.yml builds a secrets file from
+// the engine-production GitHub environment and passes it to wrangler
+// deploy, so the code and every secret go live as one version. The file
+// carries META_MODEL_API_KEY, ENCRYPTION_KEK_B64 (32 bytes, base64),
+// SESSION_SECRET, OPERATOR_SECRET, MANO_ENGINE_AGENT_TOKEN,
+// MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN, MANO_CHANNELS_URL,
+// MANO_ENGINE_SEND_SECRET and EXECUTOR_MODE, and whichever of these are
+// set: SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN, MANO_AGENT_URL,
+// MANO_AGENT_SECRET, CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
+// MODEL_ALLOWLIST_EXTRA, MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN,
+// MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET. Local runs read
+// .dev.vars (see .dev.vars.example).
 //
-//   ~/Desktop/code/bin/ws keys run -- sh -c 'printf %s "$META_MODEL_API_KEY" | pnpm --filter @mano/engine exec wrangler secret put META_MODEL_API_KEY'
-//
-// Same for ENCRYPTION_KEK_B64 (32 bytes, base64), SESSION_SECRET and
-// OPERATOR_SECRET, and the optional CF_ACCOUNT_ID, AI_GATEWAY_ID,
-// AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA, MANO_ENV, EXECUTOR_MODE,
-// SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN, MANO_GUARDIAN_URL,
-// MANO_GUARDIAN_TOKEN, MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET.
-//
-// Deploy: ask David before the first deploy. After that, deploys go
-// through GitHub by pushing. Never run a production deploy from a laptop.
+// Deploy: a push to main that changes Engine or a package it uses runs
+// that workflow. Never run a production deploy from a laptop.
 import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
 import {
@@ -171,13 +175,12 @@ import {
   getSessionSecret,
   mintSessionToken,
   mintWsTicket,
-  secretsEqual,
   sessionConfigured,
 } from "./auth.js";
 import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { tryRoute } from "./try/routes.js";
-import { base64ToBytes } from "./hash.js";
+import { base64ToBytes, timingSafeEqual } from "./hash.js";
 import { SANDBOX_ORG_ID } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
@@ -195,18 +198,8 @@ import { createCallServices } from "./calls/provider.js";
 
 export { PersonAgent, OrgAgent };
 export { TryLedger } from "./try/ledger.js";
-export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
-export * from "./gateway/types.js";
-export { checkLinkSafety } from "./link-safety.js";
-export { extractEvidence, detectPlantedInstructions, wrapEvidenceForModel } from "./evidence.js";
-export { MetaModelClient, StandInModelClient, createModelClient, buildModelBaseUrl } from "./model-client.js";
-export { encryptForPerson, decryptForPerson, documentAad } from "./crypto.js";
-export { putDocument, getDocumentBytes, documentR2Key } from "./files.js";
-export { InMemorySharedStore } from "./shared-store.js";
-export { sha256Hex } from "./hash.js";
 
 const ORG_CASE_PATH = /^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/;
-const UNSAFE_IN_FILENAME = /["\r\n]/g;
 
 function personStub(env: Env, personId: string) {
   return env.PERSON_AGENT.get(env.PERSON_AGENT.idFromName(personId));
@@ -506,9 +499,6 @@ async function handleAgentState(
   }
 }
 
-// A replay page by its link. The token's hash names the person and the
-// approval; the person's agent checks its own row holds the same token.
-// Anything else, an expired link included, gets the same 404 page.
 const CALL_WEBHOOK_PATH = "/webhooks/calls";
 
 // The phone company's events about a hold call. With no provider set up the
@@ -525,6 +515,9 @@ async function callWebhook(env: Env, request: Request): Promise<Response> {
   return new Response(null, { status: 204 });
 }
 
+// A replay page by its link. The token's hash names the person and the
+// approval; the person's agent checks its own row holds the same token.
+// Anything else, an expired link included, gets the same 404 page.
 async function fillReplayResponse(env: Env, pathname: string): Promise<Response> {
   const unavailable = (status: number) => new Response(renderReplayPage({ state: "missing" }), { status, headers: REPLAY_PAGE_HEADERS });
   const token = REPLAY_LINK_PATH.exec(pathname)?.[1];
@@ -599,7 +592,7 @@ const worker = {
 
     if (url.pathname === "/api/staff/session" && request.method === "POST") {
       const token = bearerToken(request);
-      if (!env.SANDBOX_PORTAL_TOKEN || !token || !secretsEqual(token, env.SANDBOX_PORTAL_TOKEN)) return FORBIDDEN();
+      if (!env.SANDBOX_PORTAL_TOKEN || !token || !timingSafeEqual(token, env.SANDBOX_PORTAL_TOKEN)) return FORBIDDEN();
       const read = await readCappedJson(request, MAX_ACTION_BODY);
       if (!read.ok) return read.response;
       if ((read.value as { orgId?: unknown } | null)?.orgId !== SANDBOX_ORG_ID) return FORBIDDEN();
@@ -615,7 +608,7 @@ const worker = {
         return Response.json({ error: "Operator access is not configured." }, { status: 503 });
       }
       const token = bearerToken(request);
-      if (!token || !secretsEqual(token, env.OPERATOR_SECRET)) return FORBIDDEN();
+      if (!token || !timingSafeEqual(token, env.OPERATOR_SECRET)) return FORBIDDEN();
       const read = await readCappedJson(request, MAX_ACTION_BODY);
       if (!read.ok) return read.response;
       const synthetic = (read.value as { synthetic?: unknown })?.synthetic;
@@ -926,7 +919,7 @@ const worker = {
           return new Response(base64ToBytes(document.contentB64) as BodyInit, {
             headers: {
               "content-type": "application/octet-stream",
-              "content-disposition": `attachment; filename="${document.name.replace(UNSAFE_IN_FILENAME, "_")}"`,
+              "content-disposition": `attachment; filename="${document.name.replace(FILENAME_UNSAFE_CHARS, "_")}"`,
               "cache-control": "no-store",
             },
           });

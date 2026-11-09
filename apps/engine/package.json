@@ -9,8 +9,7 @@
     "test:node": "vitest run --config vitest.node.config.ts",
     "smoke": "node scripts/smoke.mjs",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "types": "wrangler types"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@mano/guardian": "workspace:*",

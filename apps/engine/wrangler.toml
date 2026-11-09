@@ -67,7 +67,12 @@ MANO_TRY_ORIGIN = "https://withmano.com"
 #   endpoint and bearer token; with none of the four set the checker is
 #   local rules only), MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET
 #   (the Modal proxy key pair the endpoint requires)
-# Production sets all of these from the engine-production GitHub
-# environment in .github/workflows/deploy-engine.yml.
+# Production gets these from the engine-production GitHub environment in
+# .github/workflows/deploy-engine.yml. The workflow carries the model key,
+# the encryption, session and operator secrets, the agent, Channels and
+# reminder send names, the judge demo's agent URL and secret, EXECUTOR_MODE
+# with the sandbox portal names, Guardian's four and the model routing
+# names below. It does not carry MANO_NUDGE_TIME or the fax and letter
+# names, so those stay unset in production.
 # Optional model routing (see .dev.vars.example):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA
