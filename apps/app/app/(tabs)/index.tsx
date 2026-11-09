@@ -113,7 +113,6 @@ export default function Chat() {
   const [voicePlaying, setVoicePlaying] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
   const playerRef = useRef<AudioPlayer | null>(null);
-  const listRef = useRef<FlatList<ListRow>>(null);
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
   const keepReply = useCallback((reply: ChatMessage) => setArrived((current) => [...current, reply]), []);
@@ -506,7 +505,6 @@ export default function Chat() {
           </View>
         ) : (
           <FlatList
-            ref={listRef}
             data={listRows(shown)}
             keyExtractor={(row) => row.key}
             inverted

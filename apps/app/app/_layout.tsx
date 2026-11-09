@@ -7,11 +7,7 @@
 import { useEffect, useMemo } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { Geist_400Regular, Geist_500Medium, Geist_700Bold, useFonts as useGeist } from "@expo-google-fonts/geist";
-import {
-  SchibstedGrotesk_500Medium,
-  SchibstedGrotesk_700Bold,
-  useFonts as useDisplay,
-} from "@expo-google-fonts/schibsted-grotesk";
+import { SchibstedGrotesk_700Bold, useFonts as useDisplay } from "@expo-google-fonts/schibsted-grotesk";
 import * as Notifications from "expo-notifications";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -19,7 +15,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Body, Title } from "../components/ui";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { resolveClient, type ResolvedClient } from "../lib/client";
-import { easProjectId } from "../lib/config";
 import { LanguageProvider, useStrings } from "../lib/i18n";
 import { ensureNotificationSetup } from "../lib/notify";
 import { notificationRoute } from "../lib/reminders";
@@ -66,7 +61,7 @@ function SessionGate() {
 function NotificationsGate() {
   const router = useRouter();
   useEffect(() => {
-    ensureNotificationSetup(easProjectId()).catch(() => {});
+    ensureNotificationSetup().catch(() => {});
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       router.push(notificationRoute(response.notification.request.content.data));
     });
@@ -77,7 +72,7 @@ function NotificationsGate() {
 
 export default function RootLayout() {
   const [geistLoaded] = useGeist({ Geist_400Regular, Geist_500Medium, Geist_700Bold });
-  const [displayLoaded] = useDisplay({ SchibstedGrotesk_500Medium, SchibstedGrotesk_700Bold });
+  const [displayLoaded] = useDisplay({ SchibstedGrotesk_700Bold });
   const clientState = useResolvedClient();
   const ready = geistLoaded && displayLoaded;
 

@@ -37,7 +37,6 @@ export const tapTarget = 48;
 
 export const fonts = {
   display: "SchibstedGrotesk_700Bold",
-  displayMedium: "SchibstedGrotesk_500Medium",
   sans: "Geist_400Regular",
   sansMedium: "Geist_500Medium",
   sansBold: "Geist_700Bold",
@@ -49,5 +48,4 @@ export const type = {
   cardTitle: { fontFamily: fonts.sansBold, fontSize: 16, lineHeight: 22 },
   body: { fontFamily: fonts.sans, fontSize: 16, lineHeight: 24 },
   small: { fontFamily: fonts.sans, fontSize: 14, lineHeight: 20 },
-  caption: { fontFamily: fonts.sans, fontSize: 12, lineHeight: 16 },
 } as const;

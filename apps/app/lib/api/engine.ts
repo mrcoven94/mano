@@ -133,10 +133,11 @@ export class EngineClient implements ManoClient {
   }
 
   async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
-    // The engine ignores clientOpId today, so no failure here can be
-    // reconciled: anything past an auth rejection holds for the
-    // person's own retry instead of resending blindly. The op ID still
-    // travels so a repeat dedupes once the engine honors it (PR 2).
+    // The web Worker dedupes chat on clientOpId (apps/web/src/handler.ts):
+    // a repeat of the same op and words gets the stored reply. The app
+    // still cannot tell whether a failed attempt landed, so anything
+    // past an auth rejection holds for the person's own retry instead
+    // of resending blindly.
     try {
       for (const a of attachments) {
         await this.uploadDocument(session, a.name, a.mimeType, a.bytesB64, opId);
@@ -271,7 +272,6 @@ export class EngineClient implements ManoClient {
   }
 
   async uploadDocument(session: Session, name: string, mimeType: string, bytesB64: string, opId?: string): Promise<DocMeta> {
-    void mimeType;
     const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/documents`, {
       method: "POST",
       body: JSON.stringify({ name, contentB64: bytesB64, clientOpId: opId ?? null }),

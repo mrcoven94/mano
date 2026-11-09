@@ -1,6 +1,6 @@
 // Stand-in engine: serves the recorded Maria spine run with no network.
-// Every screen works against it today. When the engine merges, the app
-// switches to EngineClient and this file keeps serving tests and demos.
+// The app uses it only in demo mode (EXPO_PUBLIC_DEMO_MODE with no engine
+// URL); with an engine URL the app uses EngineClient. Tests use it too.
 //
 // The stand-in is honest about hashes: approvals bind the real SHA-256 of
 // the document bytes they carry, computed through the injected hasher.

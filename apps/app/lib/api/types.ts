@@ -1,13 +1,14 @@
 // The one typed client the app talks to. Every screen goes through
 // ManoClient; nothing fetches the engine directly. Two implementations:
-// EngineClient (apps/engine over HTTP) and StandInClient (recorded
-// synthetic responses, so every screen works before the engine merges).
+// EngineClient (over HTTP) and StandInClient (recorded synthetic
+// responses, for demo mode and tests).
 //
-// The engine's routes live in apps/engine/src/index.ts on branch lap-500.
-// Shapes the engine does not serve yet (email-code sign-in, deadlines,
-// grants, conversation history) are defined here so the stand-in and the
-// screens agree; EngineClient throws EngineGapError naming the missing
-// route until the engine adds it.
+// The web Worker (apps/web/src/handler.ts) serves sign-in, the
+// conversation and chat; the other routes follow Engine's shape in
+// apps/engine/src/index.ts. Shapes with no route behind them yet
+// (deadlines, the document list, grants) are defined here so the stand-in
+// and the screens agree; EngineClient throws EngineGapError naming the
+// missing route.
 
 export type EngineMode = "live" | "stand-in";
 
@@ -210,9 +211,10 @@ export class StaleApprovalError extends Error {
 
 // A send whose outcome is unknown: the request may have landed. The
 // outbox holds it for the person's own retry instead of resending it
-// blindly, which is what would send twice. The engine cannot confirm
-// the op yet (coordinated on Engine PR 2); until it can, the op ID
-// travels with every attempt so a repeat is deduped once supported.
+// blindly, which is what would send twice. The client cannot ask
+// whether an op landed. The op ID travels with every attempt, and the
+// web Worker's chat route answers a repeat of the same op and words
+// with the reply it stored.
 export class UnreconciledSendError extends Error {
   readonly opId: string | null;
   constructor(opId: string | null) {
@@ -220,9 +222,4 @@ export class UnreconciledSendError extends Error {
     this.name = "UnreconciledSendError";
     this.opId = opId;
   }
-}
-
-export function isNetworkError(err: unknown): boolean {
-  if (err instanceof AuthError || err instanceof EngineGapError || err instanceof StaleApprovalError) return false;
-  return true;
 }
