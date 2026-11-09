@@ -53,7 +53,7 @@ const full = finishReport(report, {
   runId: `${startedAt.slice(0, 10)}-local`,
   startedAt, finishedAt, gitSha: gitSha(), broken,
   paths, judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-}, { results, expectedCaseIds, requireHoldout: false });
+}, { results, expectedCaseIds });
 writeRun(out, full, results);
 for (const s of Object.values(full.suites)) {
   console.log(`${s.suite}: hard ${(s.hardCheckPassRate * 100).toFixed(1)}% judge ${s.judgeMean.toFixed(2)} gate ${s.gateFailed ? "FAIL" : "pass"} p50/p95 ${s.p50Ms}/${s.p95Ms}ms $${s.usdPer1kAnswers.toFixed(2)}/1k`);

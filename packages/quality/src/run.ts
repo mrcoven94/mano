@@ -159,7 +159,6 @@ export interface RunOptions {
   judge?: JudgeClient | null;
   dns?: DnsClient;
   env?: NodeJS.ProcessEnv;
-  runId?: string;
   onlyCaseIds?: Set<string>;
   concurrency?: number;
   // Test seam: answer every case through these paths instead of loading them.
@@ -458,9 +457,6 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
 export interface FinishInput {
   results: CaseResult[];
   expectedCaseIds: string[];
-  // Retired: the holdout is reported, not required. Kept so old callers
-  // still type-check.
-  requireHoldout?: boolean;
   judgeErrors?: number;
   answeringModel?: string | null;
   // Attached before eligibility is decided, so a probe that never ran
@@ -485,8 +481,8 @@ export function fingerprintsOf(results: CaseResult[], suites: Record<string, Sui
 }
 
 // A run is gate-eligible when its live cases ran with the live judge and its
-// coverage matches the expected case list exactly. Stand-in cases (mail until
-// it merges) are labeled and left out of every comparison, so they cannot
+// coverage matches the expected case list exactly. Stand-in cases (answered
+// with no key) are labeled and left out of every comparison, so they cannot
 // hold a gate open or shut. Provisional calibration labels and a missing
 // holdout are reported on every surface but do not block the gate: a drop is
 // measured against the same judge on the same cases, which hand labels do

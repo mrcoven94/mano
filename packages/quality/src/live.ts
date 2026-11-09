@@ -16,8 +16,6 @@ import type { BenchCase, CaseFacts } from "./suites/types.ts";
 
 // One in twenty answers is graded in place. The sampler hashes the answer id
 // so sampling is stable and needs no stored state.
-export const JUDGE_SAMPLE_RATE = 1 / 20;
-
 export function sampleForJudge(answerId: string): boolean {
   let hash = 0x811c9dc5;
   for (let i = 0; i < answerId.length; i++) {

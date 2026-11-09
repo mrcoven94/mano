@@ -116,8 +116,3 @@ export function judgeClientFromEnv(env: NodeJS.ProcessEnv = process.env): ModelC
   if (key) return new MetaModelClient(id, base, key);
   return new FakeModelClient();
 }
-
-// Counts only rough tokens for cost math when the API reports none.
-export function roughTokens(text: string): number {
-  return Math.max(1, Math.round(text.length / 4));
-}

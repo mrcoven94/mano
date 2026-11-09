@@ -25,10 +25,6 @@ export function shuffle<T>(items: readonly T[], rand: () => number): T[] {
   return out;
 }
 
-export function pick<T>(items: readonly T[], rand: () => number): T {
-  return items[Math.floor(rand() * items.length)] as T;
-}
-
 export function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }

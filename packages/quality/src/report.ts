@@ -71,8 +71,6 @@ export function readRun(dir: string): { report: RunReport; results: CaseResult[]
   return { report, results };
 }
 
-// The public copy of a report: holdout per-case detail is dropped (aggregates
-// stay), fingerprints exclude the holdout by construction.
 // The public copy of a report: fixed identifiers and counts only. Check
 // details (which can hold a response URL), judge reasons (which can quote an
 // answer) and the mail reader's output stay in the private per-case results.
