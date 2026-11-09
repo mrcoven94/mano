@@ -2,8 +2,9 @@
 // is the deterministic net underneath it. Detection is never the only
 // protection: every busy, over-limit and failure reply carries
 // SAFETY_LINE, and on those paths the broad mightBeCrisis sends
-// CRISIS_LINE. isCrisis routes a message away from the deep path and
-// makes its normal reply name 988 and 911.
+// CRISIS_LINE. crisisGate decides, with no model, whether a message is
+// a crisis; decideCrisis settles the one case that asks the model; and
+// holdCrisisLines puts CRISIS_LINE first on every crisis reply.
 
 export const CRISIS_LINE =
   "I'm really glad you told me. Please call or text 988 right now, they're there 24/7 and it's free. " +
@@ -37,14 +38,19 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
-const CURLY_APOSTROPHE = /[’]/g;
+// Every mark a keyboard can put where an apostrophe goes: curly quotes
+// either way, low and reversed quotes, the prime, the acute accent, the
+// modifier apostrophe, the full-width apostrophe and the backtick. Each
+// reads as a straight apostrophe, so "don`t want to live" and "don´t
+// want to live" match the same phrases as "don't want to live".
+const APOSTROPHE_LIKE = /[\u2018\u2019\u201A\u201B\u2032\u00B4\u02BC\uFF07\u0060]/g;
 const NOT_ASCII_WORD_CHAR = /[^a-z0-9' ]/g;
 const NOT_WORD_CHAR = /[^\p{L}\p{N}' ]/gu;
 const WHITESPACE_RUN = /\s+/g;
 const WHITESPACE = /\s+/;
 
 function normalize(text: string): string {
-  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -79,12 +85,6 @@ const NUMBER_911 = /\b911\b/;
 
 export function namesCrisisLines(reply: string): boolean {
   return NUMBER_988.test(reply) && NUMBER_911.test(reply);
-}
-
-// The reply a crisis turn sends: the model's own words when they name
-// both lines, otherwise CRISIS_LINE first.
-export function crisisFloor(reply: string): string {
-  return namesCrisisLines(reply) ? reply : `${CRISIS_LINE} ${reply}`.trim();
 }
 
 // The last step on a crisis turn's outgoing bubbles, after the guard,
@@ -129,7 +129,7 @@ const REPEAT_FILLER = new Set(
 );
 
 function wordsOf(text: string): string[] {
-  return text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
+  return text.toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
 }
 
 function callShape(sentence: string): CallShape {
@@ -237,7 +237,7 @@ const SENTENCE_END = /(?<=[.!?])(?:\s+|$)/;
 
 function sentencesOf(text: string): string[] {
   return text
-    .replace(CURLY_APOSTROPHE, "'")
+    .replace(APOSTROPHE_LIKE, "'")
     .replace(WHITESPACE_RUN, " ")
     .split(SENTENCE_END)
     .map((s) => s.trim())
@@ -318,7 +318,7 @@ function unmarked(words: string): string {
 }
 
 function accented(text: string): string {
-  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
@@ -339,7 +339,7 @@ const OPENS_ES = /^¿\s*(?:debo|deber[íi]a|es|puedo|puede|pueden|se puede|tengo
 const INTENT = /(?:^|\s)(?:i want|i'm going to|im going to|i am going to|i'll|i will|i wish|i hope|so i|because|cause|quiero|voy a|ojal[áa]|porque)(?=\s|$)/iu;
 
 export function isOneHealthQuestion(text: string): boolean {
-  const trimmed = text.trim().replace(CURLY_APOSTROPHE, "'");
+  const trimmed = text.trim().replace(APOSTROPHE_LIKE, "'");
   if (trimmed.length > MAX_QUESTION_CHARS) return false;
   if (sentencesOf(trimmed).length !== 1 || !trimmed.endsWith("?")) return false;
   if (trimmed.split(WHITESPACE).length > MAX_QUESTION_WORDS) return false;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CRISIS_LINE, SAFETY_LINE, crisisFloor, holdCrisisLines, isCrisis, mightBeCrisis, namesCrisisLines } from "../src/crisis.js";
+import { CRISIS_LINE, SAFETY_LINE, crisisGate, holdCrisisLines, isCrisis, mightBeCrisis, namesCrisisLines } from "../src/crisis.js";
 import { SAFE_REPLY, guardReply } from "../src/guard.js";
 
 describe("isCrisis", () => {
@@ -33,18 +33,34 @@ describe("isCrisis", () => {
   });
 });
 
-describe("crisisFloor", () => {
-  it("keeps a reply that names 988 and 911", () => {
-    const reply = "I'm so glad you said something. Call or text 988 now. If you're in danger, call 911. I'm here.";
-    expect(crisisFloor(reply)).toBe(reply);
+describe("an apostrophe typed with another mark", () => {
+  // Phone and Spanish-layout keyboards put a left curly quote, a backtick,
+  // an acute accent, a prime or a modifier apostrophe where the apostrophe
+  // goes. Each must read as one, or "don t want to live" matches nothing.
+  const marks = ["'", "\u2019", "\u2018", "\u201B", "`", "\u00B4", "\u02BC", "\u2032", "\uFF07"];
+
+  it("still reads as a crisis in every check", () => {
+    for (const mark of marks) {
+      for (const text of [`I don${mark}t want to live anymore`, `I don${mark}t want to be here`, `what${mark}s the point`, `I don${mark}t feel safe at home`]) {
+        expect(isCrisis(text), text).toBe(true);
+        expect(mightBeCrisis(text), text).toBe(true);
+        expect(crisisGate(text), text).not.toBe("none");
+      }
+    }
   });
 
-  it("puts the crisis line first when the reply misses either number", () => {
-    expect(crisisFloor("I'm here with you. Call 988.")).toBe(`${CRISIS_LINE} I'm here with you. Call 988.`);
-    expect(crisisFloor("")).toBe(CRISIS_LINE);
+  it("does not make a benefits sentence a crisis", () => {
+    for (const mark of marks) {
+      for (const text of [`I don${mark}t have my renewal letter`, `what${mark}s the point of renewing`, `it${mark}s due friday`]) {
+        expect(isCrisis(text), text).toBe(false);
+        expect(crisisGate(text), text).toBe("none");
+      }
+    }
   });
+});
 
-  it("writes the crisis line in the voice the guard enforces", () => {
+describe("CRISIS_LINE", () => {
+  it("is written in the voice the guard enforces", () => {
     expect(guardReply(CRISIS_LINE)).toEqual({ text: CRISIS_LINE, changes: [] });
   });
 });
@@ -59,7 +75,7 @@ describe("holdCrisisLines (review blocker 2, made structural in PR 67 round 4)",
   });
 
   it("survives the guard dropping a sentence that named a provider", () => {
-    const guarded = guardReply(crisisFloor("Call 988 or 911 through Llama.")).text;
+    const guarded = guardReply("Call 988 or 911 through Llama.").text;
     expect(holdCrisisLines([guarded]).join(" ")).toContain("988");
     expect(holdCrisisLines([guarded]).join(" ")).toContain("911");
   });
