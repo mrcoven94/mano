@@ -4,7 +4,7 @@ import Image from "next/image";
 import type { TryLogged, TryScenario } from "@mano/protocol";
 import Mascot from "@/components/Mascot";
 import { TRY_API } from "@/lib/try-client";
-import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
+import { REPO_URL, SMS_HREF, SMS_NUMBER } from "@/lib/site";
 import { useTryRun, type Phase, type Source } from "./useTryRun";
 import { OK_STATUS, buildChecks, modelName, type Check, type Outcome } from "./checks";
 
@@ -57,8 +57,6 @@ const NAMES: Record<TryScenario, string> = {
   ...Object.fromEntries([...STUMPS, ...DOCUMENTS].map((s) => [s.key, s.name])),
 } as Record<TryScenario, string>;
 
-const REPO = "https://github.com/mrcoven94/mano";
-
 /* The judging rubric, answered in Mano's own terms, each with where to check it. */
 const CRITERIA: { title: string; text: string; link: { href: string; label: string } }[] = [
   {
@@ -74,12 +72,12 @@ const CRITERIA: { title: string; text: string; link: { href: string; label: stri
   {
     title: "Technical depth and execution, 20%",
     text: "A yes covers one exact document, so a single changed byte stops the filing. Text inside a letter is treated as information, never as an order. Every change is tested against the last good nightly run, and a held-out test was run twice with both results published.",
-    link: { href: `${REPO}/blob/main/docs/decisions.md`, label: "Every decision and why" },
+    link: { href: `${REPO_URL}/blob/main/docs/decisions.md`, label: "Every decision and why" },
   },
   {
     title: "Demo, 25%",
     text: "Everything on this page runs live on the deployed product as you watch. Pick any test above. From a clone, pnpm judge runs the same renewal with no key, or live with your own Meta key.",
-    link: { href: REPO, label: "The repository" },
+    link: { href: REPO_URL, label: "The repository" },
   },
 ];
 
@@ -96,7 +94,7 @@ function GetStarted() {
         <li>
           <b>Run it from GitHub</b>
           <span>Clone the repository, then run <code>pnpm install</code> and <code>pnpm judge</code>. It runs the same renewal in nine labeled steps with no key, or live on Meta&rsquo;s models with your own <code>META_MODEL_API_KEY</code>.</span>
-          <a href={REPO}>github.com/mrcoven94/mano</a>
+          <a href={REPO_URL}>github.com/mrcoven94/mano</a>
         </li>
       </ul>
     </section>

@@ -7,14 +7,12 @@ import { PLACEHOLDER_NOTE, SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/li
    first line filled in on a phone and still works with no script. On a computer with a mouse, where an sms: link goes
    nowhere useful, it becomes a button that opens a small panel with a QR code to scan and the number to type. Escape,
    a click outside or the button again closes it. Until the real number is configured, a note under it says so. */
+const LABEL = `Text Mano at ${SMS_NUMBER}`;
+
 export default function TextMano({
-  href = SMS_HREF,
-  label = `Text Mano at ${SMS_NUMBER}`,
   className = "btn btn-primary",
   align = "center",
 }: {
-  href?: string;
-  label?: string;
   className?: string;
   align?: "start" | "center" | "end";
 }) {
@@ -65,19 +63,19 @@ export default function TextMano({
 
   const note = SMS_IS_PLACEHOLDER && <small className="text-mano-note">{PLACEHOLDER_NOTE}</small>;
 
-  if (!desktop) return <span className="text-mano"><a className={className} href={href}>{label}</a>{note}</span>;
+  if (!desktop) return <span className="text-mano"><a className={className} href={SMS_HREF}>{LABEL}</a>{note}</span>;
 
   return (
     <span className="text-mano" ref={wrap}>
       <button ref={button} type="button" className={className} aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
-        {label}
+        {LABEL}
       </button>
       <span ref={pop} id={id} className="tm-pop" data-align={align} hidden={!open}>
-        <span className="tm-qr"><QRCode value={href} size={136} aria-label="QR code that opens a text to Mano" /></span>
+        <span className="tm-qr"><QRCode value={SMS_HREF} size={136} aria-label="QR code that opens a text to Mano" /></span>
         <span className="tm-copy">
           <b>Scan with your phone camera</b>
           or text Mano at
-          <a className="tm-num" href={href}>{SMS_NUMBER}</a>
+          <a className="tm-num" href={SMS_HREF}>{SMS_NUMBER}</a>
         </span>
       </span>
       {note}

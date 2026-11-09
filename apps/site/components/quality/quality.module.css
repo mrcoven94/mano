@@ -1,4 +1,4 @@
-/* Staff quality page only. Uses the site's tokens from globals.css. */
+/* The quality results on /try only. Uses the site's tokens from globals.css. */
 .page{padding-top:56px;padding-bottom:80px;scroll-margin-top:84px}
 .title{font-size:clamp(2rem,4vw,2.8rem)}
 .runline{margin-top:10px;color:var(--muted)}
