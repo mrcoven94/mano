@@ -35,8 +35,7 @@
  * Deploy it: the model endpoint deploys only through
  * .github/workflows/guardian-modal.yml on merge to main, never from a
  * laptop. The workflow needs MODAL_TOKEN_ID and MODAL_TOKEN_SECRET as
- * secrets in the guardian-production environment, and the mano-guardian
- * Modal secret created by hand.
+ * repository secrets, and the mano-guardian Modal secret created by hand.
  */
 export type {
   ActionType,
