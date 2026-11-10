@@ -90,6 +90,15 @@ const SUBMISSION_PATH = /^\/submissions\/([^/]+)$/;
 const CASEWORKER_FILE_PATH = /^\/caseworker\/([^/]+)\/file\/(\d+)$/;
 const CASEWORKER_CASE_PATH = /^\/caseworker\/([^/]+)$/;
 
+/** Decode one path part. Null when its percent sequences are malformed. */
+function decodePathPart(part: string): string | null {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
+
 type CappedBody = { ok: true; bytes: Uint8Array } | { ok: false };
 
 async function readCappedBody(request: Request, maxBytes: number): Promise<CappedBody> {
@@ -967,7 +976,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
 
   const submissionMatch = SUBMISSION_PATH.exec(path);
   if (method === "GET" && submissionMatch?.[1]) {
-    const key = decodeURIComponent(submissionMatch[1]);
+    const key = decodePathPart(submissionMatch[1]);
+    // A key that cannot be decoded names no filing. It is a bad request, never "not found".
+    if (key === null) return json({ error: "The submission key is not valid percent-encoding." }, 400);
     const scope = await callerScope(request);
     const sub = await store.getSubmission(scope, key);
     if (sub) {
@@ -1008,7 +1019,8 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
 
   const fileMatch = CASEWORKER_FILE_PATH.exec(path);
   if (method === "GET" && fileMatch?.[1] && fileMatch[2] !== undefined) {
-    const sub = await store.getSubmissionByConfirmation(decodeURIComponent(fileMatch[1]));
+    const confirmation = decodePathPart(fileMatch[1]);
+    const sub = confirmation === null ? null : await store.getSubmissionByConfirmation(confirmation);
     const file = sub?.files[Number(fileMatch[2])];
     if (!sub || !file) {
       return html(errorPage("Not found", "That file does not exist.", "/caseworker", "Back to the list"), 404);
@@ -1027,7 +1039,8 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
 
   const caseMatch = CASEWORKER_CASE_PATH.exec(path);
   if (method === "GET" && caseMatch?.[1]) {
-    const sub = await store.getSubmissionByConfirmation(decodeURIComponent(caseMatch[1]));
+    const confirmation = decodePathPart(caseMatch[1]);
+    const sub = confirmation === null ? null : await store.getSubmissionByConfirmation(confirmation);
     if (!sub) {
       return html(errorPage("Not found", "That confirmation number does not exist.", "/caseworker", "Back to the list"), 404);
     }

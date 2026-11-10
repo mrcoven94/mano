@@ -145,9 +145,6 @@ export function olderProposal(a: ProposalOrder, b: ProposalOrder): boolean {
 
 export const SUPERSEDED_REASON = "A newer request replaced this one, so it can no longer be approved.";
 
-// Statuses that hold an action key, in the order a lookup prefers them:
-// a NO first, then a revocation, then the consumed approval, then the
-// live one.
 // A request is bounded by far less than this, so a send still in flight this
 // long has no live request behind it, the same age recovery works from.
 const SEND_DEAD_AFTER_MS = 5 * 60_000;
@@ -157,6 +154,9 @@ const SEND_DEAD_AFTER_MS = 5 * 60_000;
 const FIRST_LOOKUP_DELAY_MS = 5 * 60_000;
 const LOOKUP_WINDOW_MS = 24 * 3600_000;
 
+// Statuses that hold an action key, in the order a lookup prefers them:
+// a NO first, then a revocation, then the consumed approval, then the
+// live one.
 export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "retired", "approved", "pending"];
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {

@@ -224,8 +224,6 @@ export interface EngineLatest {
   turnId: string;
 }
 
-// What the agent asks Engine to freeze for approval. Engine stamps the
-// person from the grant and owns hashing, policy and execution.
 // What the person shares, as GET /shares lists it. Every organization has
 // its own rows: stopping with one says nothing about another.
 export interface EngineShare {
@@ -240,6 +238,8 @@ export interface EngineShares {
   revoked: { recipient: string; caseId: string }[];
 }
 
+// What the agent asks Engine to freeze for approval. Engine stamps the
+// person from the grant and owns hashing, policy and execution.
 export interface ActionProposal {
   type: "submit" | "send" | "share";
   recipient: string;
@@ -532,11 +532,11 @@ export class PersonEngine {
     throw new EngineError(res.status);
   }
 
-  // turnId: the turn this draft belongs to. Engine orders proposals by it.
   async listShares(): Promise<EngineShares> {
     return (await this.json("GET", "/shares")) as EngineShares;
   }
 
+  // turnId: the turn this draft belongs to. Engine orders proposals by it.
   async proposeAction(proposal: ActionProposal, turnId: string): Promise<EngineResult> {
     return parseResult(
       await this.json("POST", "/action", {
@@ -561,9 +561,6 @@ export class PersonEngine {
     return (await this.listApprovals()).find((a) => a.id === approvalId) ?? null;
   }
 
-  // Engine closes every waiting draft that is not the latest proposal,
-  // decided in one statement when it runs. The agent never names which:
-  // anything it read earlier may be out of date by then.
   // Records that this turn is correcting the recipient's form: Engine
   // refuses drafts for it from turns received before this one, and closes
   // the ones still waiting.
@@ -571,6 +568,9 @@ export class PersonEngine {
     return ((await this.json("POST", "/approvals/fence", { generation: this.generation, recipient, turnId })) as { closed: number }).closed;
   }
 
+  // Engine closes every waiting draft that is not the latest proposal,
+  // decided in one statement when it runs. The agent never names which:
+  // anything it read earlier may be out of date by then.
   async supersede(): Promise<number> {
     return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
   }

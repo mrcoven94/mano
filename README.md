@@ -249,7 +249,7 @@ What each app needs differs:
 
 - `apps/site`: with no keys, the sign-in routes run on stand-ins and print which parts are not live.
 - `apps/app`: it needs `EXPO_PUBLIC_ENGINE_URL` or `EXPO_PUBLIC_DEMO_MODE=true`, and otherwise shows "Mano is not configured". Demo mode uses recorded synthetic responses and says so on screen.
-- `apps/sandbox-portal`: it needs [wrangler](https://developers.cloudflare.com/workers/wrangler/) installed globally, because `pnpm install` does not add it for that package.
+- `apps/sandbox-portal`: no keys needed for its browser pages. Without `SANDBOX_PORTAL_TOKEN`, staff and API access is off.
 - `apps/agent` and `apps/channels`: with no model key, a stand-in answers. The agent's turn route answers 503 without `ENGINE_URL` and `MANO_ENGINE_AGENT_TOKEN`.
 - `apps/engine`: with no model key, it refuses to answer unless `MANO_ENV=development` is set, as in `apps/engine/.dev.vars.example`, and then uses a labeled stand-in.
 
@@ -261,7 +261,7 @@ pnpm --filter @mano/sandbox-portal dev
 EXPO_PUBLIC_DEMO_MODE=true pnpm --filter @mano/app start
 ```
 
-Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
+Copy each app's `.env.example` to `.env` to use your own keys. Engine and Channels ship `.dev.vars.example` instead: copy it to `.dev.vars`. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
 
 The sandbox portal also serves the renewal under other layouts (`/layouts`): five fixed ones and one generated from any seed at `/scramble/<seed>/apply`. `MEASURE_PORTAL_URL=<portal> SANDBOX_PORTAL_DRAFT_TOKEN=... MEASURE_MODEL=standin pnpm --filter @mano/computer probe:live layouts` runs a fill on each and prints correct fields, wall time, steps and model per layout, read back from what the portal saved. The stand-in needs no key and measures no model; `MEASURE_MODEL=meta`, `open` or `route` spends credit (see `packages/computer/probe/layouts.probe.ts`).
 
@@ -285,8 +285,7 @@ Two tracks: text (all letters as text) and photo (photographed letters as images
 ```sh
 pnpm --filter ./eval run check      # tests, no keys needed
 pnpm --filter ./eval run verify     # verify freeze (held-out check needs seed plus pack)
-pnpm eval:baselines                 # deterministic baselines; agent needs a key
-ws keys run -- pnpm eval:baselines  # all systems live on the dev split, both tracks
+pnpm eval:baselines                 # deterministic baselines; with model keys in the environment, all systems live on the dev split, both tracks
 pnpm --filter ./eval run heldout    # all systems on the held-out split; prints aggregates only
 ```
 

@@ -84,8 +84,7 @@ export interface TurnDeps {
   warmGuardian?: () => Promise<unknown>;
   background?: (work: Promise<unknown>) => void;
   now?: () => number;
-  // Reads texted photos (SAM 3.1 and Muse Spark through @mano/mail), and
-  // how long a reading may take before the turn says it could not finish.
+  // Reads texted photos (SAM 3.1 and Muse Spark through @mano/mail).
   mailModel?: ModelClient;
   // The whole turn's budget from its arrival; under Channels' 100-second
   // wait. Default TURN_BUDGET_MS.
@@ -184,10 +183,12 @@ const failure = (httpStatus: number, status: string, reason?: string): TurnRespo
   body: { status, text: "", ...(reason ? { reason } : {}) },
 });
 
-// Live readings use the Standard model ID with store: false, or Meta's
-// open-weight model on zero-retention endpoints under the same setting as
-// the agent's own model path (lib/muse.ts). Without a key the stand-in
-// answers nothing, so the reply says it could not read.
+// Live readings follow the same MANO_MODEL_PROVIDER setting as the agent's
+// own model path (lib/muse.ts): Meta's open-weight model on a Modal Shared
+// Endpoint (modal, which production sets) or on OpenRouter's zero-retention
+// endpoints (openrouter), and with no route set the Standard model ID with
+// store: false. Without a key the stand-in answers nothing, so the reply
+// says it could not read.
 let mailModel: ModelClient | null = null;
 function defaultMailModel(): ModelClient {
   mailModel ??= createModelClient(process.env, { synthetic: false });

@@ -20,12 +20,10 @@ describe("PR 67 round 5, crisis, through the runner", () => {
     const sent = await say(h, "evt_long", text);
     expect(sent).toContain(CRISIS_LINE);
   });
-  it("runs an approval reply through the crisis check, sends the crisis line first and still records the decision (2)", async () => {
+  it("runs a YES with a code through the crisis check and sends the crisis line first (2)", async () => {
     const h = makeHarness();
-    await h.runner.requestApproval({ id: "apr_1", code: "kill-me", summary: "Synthetic test approval.", ttlMs: 3600_000 });
     const sent = await say(h, "evt_yes", "YES kill-me");
     expect(sent[0] === CRISIS_LINE || sent[1] === CRISIS_LINE).toBe(true);
     expect(sent.indexOf(CRISIS_LINE)).toBeLessThan(sent.length - 1);
-    expect(h.store.pendingApprovals(h.now)).toHaveLength(0);
   });
 });

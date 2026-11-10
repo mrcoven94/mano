@@ -8,12 +8,6 @@ export interface Computer {
   act(actions: ComputerAction[]): Promise<void>;
   /** Open a page on the allowed portal origin. Every other origin is refused. */
   goto(url: string): Promise<void>;
-  /** Stage a file the run needs (for file pickers). Returns the path to pick. */
-  stageFile(name: string, data: Uint8Array): Promise<string>;
-  /** How file picking works here, in words for the model. */
-  fileUploadHint(): string;
-  /** A live view of the screen for the person. Both backends return null: there is no live view. */
-  liveViewUrl(): string | null;
   /** Stop the computer and release it. Safe to call twice. */
   close(): Promise<void>;
 }

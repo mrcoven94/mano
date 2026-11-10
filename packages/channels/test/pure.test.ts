@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { splitBubbles } from "../src/bubbles.js";
-import { isOptOut, parseApprovalReply } from "../src/approvals.js";
+import { isOptOut } from "../src/approvals.js";
 import {
   DEFAULT_DAILY_BUDGET_USD,
   HANDLE_DAILY_LIMIT,
   HANDLE_HOURLY_LIMIT,
-  budgetAllows,
   dayKeyFor,
   estimateCostUsd,
   handleOverLimit,
@@ -67,23 +66,6 @@ describe("splitBubbles", () => {
   });
 });
 
-describe("parseApprovalReply", () => {
-  it("accepts YES and NO with a code", () => {
-    expect(parseApprovalReply("YES abc123")).toEqual({ decision: "yes", code: "abc123" });
-    expect(parseApprovalReply("no XYZ-9")).toEqual({ decision: "no", code: "XYZ-9" });
-  });
-
-  it("rejects anything else", () => {
-    expect(parseApprovalReply("YES")).toBeNull();
-    expect(parseApprovalReply("yess abc123")).toBeNull();
-    expect(parseApprovalReply("MAYBE abc123")).toBeNull();
-    expect(parseApprovalReply("YES abc123 extra")).toBeNull();
-    // Lenient parse, strict match: "please" parses as a code, and the
-    // runner only acts when it matches a pending approval.
-    expect(parseApprovalReply("yes please")).toEqual({ decision: "yes", code: "please" });
-  });
-});
-
 describe("isOptOut", () => {
   it("matches STOP-family keywords", () => {
     for (const word of ["STOP", "stop", "QUIT", "CANCEL", "UNSUBSCRIBE", "END"]) {
@@ -114,8 +96,6 @@ describe("budget", () => {
   it("converts chars to dollars and compares", () => {
     expect(DEFAULT_DAILY_BUDGET_USD).toBe(5);
     expect(estimateCostUsd(1000, 1000, 0.001)).toBeCloseTo(0.002);
-    expect(budgetAllows(4.99, 0.02, 5)).toBe(false);
-    expect(budgetAllows(4.0, 0.02, 5)).toBe(true);
   });
 });
 

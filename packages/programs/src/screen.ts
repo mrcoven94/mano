@@ -85,7 +85,10 @@ export function screenIncome(entry: ProgramEntry, household: Household): Screen 
   const fact = entry.incomeLimit;
   const size = Math.floor(household.householdSize);
   if (!fact) return cantTell(name, "there is no confirmed income limit");
-  if (size < 1) return cantTell(name, "it needs the household size");
+  // A size or income that is not a plain number must never read as "may
+  // qualify": every comparison with NaN is false, so each is refused here.
+  if (!Number.isFinite(size) || size < 1) return cantTell(name, "it needs the household size");
+  if (!Number.isFinite(household.monthlyIncome) || household.monthlyIncome < 0) return cantTell(name, "it needs their monthly income as an amount");
   const { measuredOn, period, year, tables } = fact.value;
   if (measuredOn !== "gross") return cantTell(name, `this limit is measured on ${measuredOn === "magi" ? "MAGI income" : measuredOn === "net" ? "income after deductions" : "income the source does not define"}, which monthly pay alone does not show`);
   const facts: Household = { householdSize: size, monthlyIncome: household.monthlyIncome, ...(household.earnedIncome === undefined ? {} : { earnedIncome: household.earnedIncome }) };

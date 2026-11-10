@@ -3,8 +3,10 @@
 // /channels/mano/turn and gets the reply text back. Engine is the system
 // of record: the person's profile, memory and proposed actions live
 // there, and only a texted YES to Engine's frozen approval sends anything.
-// Muse runs through the Meta Model API directly, always on the Standard
-// model ID with store:false.
+// MANO_MODEL_PROVIDER picks the model route (lib/muse.ts). Production sets
+// it to modal: Meta's open-weight model on a Modal Shared Endpoint. With no
+// route set, turns go to the Meta Model API on the Standard model ID with
+// store:false.
 //
 // A texted photo is read inside the turn (lib/letters.ts, @mano/mail):
 // Channels stores it in Engine, the agent reads it back, answers what the
@@ -57,7 +59,9 @@ const model = route.apiKey
 if (route.apiKey) {
   console.log(`mano: model path ${route.name} ${route.modelId}`);
 } else {
-  console.warn("mano: model path stand-in; set META_MODEL_API_KEY, or MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY.");
+  console.warn(
+    "mano: model path stand-in; set META_MODEL_API_KEY, or MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY, or MANO_MODEL_PROVIDER=modal with MODAL_PROXY_TOKEN and MODAL_ENDPOINT_URL (an https URL on Modal's endpoint domain).",
+  );
 }
 if (!process.env.ENGINE_URL || !process.env.MANO_ENGINE_AGENT_TOKEN) {
   console.warn("mano: ENGINE_URL or MANO_ENGINE_AGENT_TOKEN is not set; turns are refused until Engine is configured.");

@@ -3,7 +3,6 @@
 // missing on either side. Nothing here names models or providers.
 
 export const en = {
-  appName: "Mano",
   demoMode: "Demo mode: this is sample data. Nothing goes to a real office.",
   tabsAgent: "Agent",
   tabsApprovals: "Approvals",
@@ -26,7 +25,6 @@ export const en = {
   codePlaceholder: "123456",
   verify: "Sign in",
   verifying: "Signing in…",
-  resend: "Send a new code",
   backToEmail: "Use a different email",
   demoCodeHint: "Demo mode: any 6-digit code works.",
   invalidEmail: "Enter an email address.",
@@ -43,7 +41,6 @@ export const en = {
   heldNote: "A message might have sent already, so it is waiting. Retry only if it did not arrive.",
   failed: "Not sent. Tap to retry.",
   attachPhoto: "Photos",
-  attachCamera: "Camera",
   attachVideo: "Video",
   attachVoice: "Voice note",
   attachClose: "Close photo and voice options",
@@ -54,12 +51,10 @@ export const en = {
   mailAddVideo: "Add a video instead",
   mailSend: "Send to my agent",
   mailCancel: "Cancel",
-  mailPhotos: "photos",
   mailSent: "I photographed my mail",
   voiceSent: "Voice note",
   videoSent: "Video of my mail",
   recording: "Recording… tap to stop",
-  voiceTap: "Hold to record a voice note",
   voicePlay: "Play your voice note",
   retry: "Try again",
   offline: "You are offline. Messages wait here and send when you reconnect.",
@@ -186,7 +181,6 @@ export const en = {
   documentsEmpty: "No documents yet.",
   documentsBody: "Everything your agent holds for you, exactly as it will be sent.",
   share: "Share",
-  download: "Save",
 
   accessTitle: "Who has access",
   accessEmpty: "Nobody has access to your cases. When you share one, it appears here.",
@@ -234,7 +228,6 @@ export type StringKey = keyof typeof en;
 export type Strings = Record<StringKey, string>;
 
 export const es: Strings = {
-  appName: "Mano",
   demoMode: "Modo de demostración: son datos de ejemplo. Nada llega a una oficina real.",
   tabsAgent: "Agente",
   tabsApprovals: "Aprobar",
@@ -257,7 +250,6 @@ export const es: Strings = {
   codePlaceholder: "123456",
   verify: "Iniciar sesión",
   verifying: "Iniciando sesión…",
-  resend: "Enviar un código nuevo",
   backToEmail: "Usar otro correo",
   demoCodeHint: "Modo de demostración: cualquier código de 6 dígitos funciona.",
   invalidEmail: "Escriba un correo electrónico.",
@@ -274,7 +266,6 @@ export const es: Strings = {
   heldNote: "Es posible que un mensaje ya se haya enviado, por eso espera. Reintente solo si no llegó.",
   failed: "No enviado. Toque para reintentar.",
   attachPhoto: "Fotos",
-  attachCamera: "Cámara",
   attachVideo: "Video",
   attachVoice: "Nota de voz",
   attachClose: "Cerrar las opciones de fotos y voz",
@@ -285,12 +276,10 @@ export const es: Strings = {
   mailAddVideo: "Agregar un video",
   mailSend: "Enviar a mi agente",
   mailCancel: "Cancelar",
-  mailPhotos: "fotos",
   mailSent: "Fotografié mi correo",
   voiceSent: "Nota de voz",
   videoSent: "Video de mi correo",
   recording: "Grabando… toque para detener",
-  voiceTap: "Mantenga para grabar una nota de voz",
   voicePlay: "Reproducir su nota de voz",
   retry: "Reintentar",
   offline: "Sin conexión. Los mensajes esperan aquí y se envían al reconectar.",
@@ -416,7 +405,6 @@ export const es: Strings = {
   documentsEmpty: "Aún no hay documentos.",
   documentsBody: "Todo lo que su agente guarda para usted, exactamente como se enviará.",
   share: "Compartir",
-  download: "Guardar",
 
   accessTitle: "Quién tiene acceso",
   accessEmpty: "Nadie tiene acceso a sus casos. Cuando comparta uno, aparece aquí.",

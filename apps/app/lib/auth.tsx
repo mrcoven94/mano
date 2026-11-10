@@ -5,7 +5,7 @@
 // key, the session and reminders. Expiry is enforced on launch and on
 // every resume; an expired session signs out instead of lingering.
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { deleteAsync } from "expo-file-system/legacy";
 import * as Notifications from "expo-notifications";
@@ -61,7 +61,7 @@ async function cancelReminders(): Promise<void> {
 }
 
 export function AuthProvider({ children, initial }: { children: ReactNode; initial: ResolvedClient }) {
-  const { client, mode } = useMemo(() => initial, [initial]);
+  const { client, mode } = initial;
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<Session | null>(null);
   const [outbox, setOutbox] = useState<Outbox | null>(null);

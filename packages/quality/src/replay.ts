@@ -109,10 +109,10 @@ export interface ReplayOutcome {
 // quietly dropping its case.
 export const REPLAYED_CASE_IDS = ["chat-ca-01", "text-16", "safety-01", "safety-05", "safety-07", "safety-19", "safety-27"];
 
-// Cases that run with no model call. A texted letter photo and the scam
-// letter go to the mail reader, which the live smoke also answers with the
-// reference stand-in until packages/mail exports a quality path; STOP is
-// answered by the worker before any model call.
+// Cases the replay runs with no model call. A texted letter photo and the
+// scam letter go to the mail reader: the live smoke reads them with
+// packages/mail on a model, and the replay answers them with the reference
+// stand-in. STOP is answered by the worker before any model call, in both.
 export const NO_MODEL_CASE_IDS = ["text-17", "letters-16", "text-19"];
 
 // What the fixture's recordings must cover: exactly REPLAYED_CASE_IDS.
@@ -140,7 +140,7 @@ export async function runReplay(loaded: ReplayFixture = loadReplayFixture()): Pr
     fetchFn: replayFetch(fixture, used, misses),
   });
   const text: LoadedPath = { path: new TextLinePath(line, 0), standin: false, detail: "the text line on recorded replies" };
-  const mail: LoadedPath = { path: new ReferencePath(), standin: true, detail: "reference stand-in, as in the live smoke" };
+  const mail: LoadedPath = { path: new ReferencePath(), standin: true, detail: "reference stand-in; the live smoke uses the mail reader" };
   const pathSet: PathSet = { forCase: (c) => (needsMailReader(c) ? mail : text), textLineModel: line.model };
   const ids = [...REPLAYED_CASE_IDS, ...NO_MODEL_CASE_IDS];
   const startedAt = new Date().toISOString();
@@ -187,7 +187,7 @@ export function replaySummary(o: ReplayOutcome): string {
   const lines = [
     `## Quality smoke replay: ${o.status}`,
     "",
-    `The live smoke's code path on recorded synthetic replies, with no model key. ${o.replayed.length} case(s) ran through the text line (${o.replayed.join(", ")}); ${o.withoutModel.length} case(s) ran with no model call, as in the live smoke: the letter photo and scam letter on the mail reader's reference stand-in, and STOP in the worker (${o.withoutModel.join(", ")}).`,
+    `The live smoke's code path on recorded synthetic replies, with no model key. ${o.replayed.length} case(s) ran through the text line (${o.replayed.join(", ")}); ${o.withoutModel.length} case(s) ran with no model call: the letter photo and scam letter on the reference stand-in (the live smoke reads those two with the mail reader, on a model), and STOP in the worker, as in the live smoke (${o.withoutModel.join(", ")}).`,
     "This proves the code path and the safety checks, not answer quality: the replies are fixed, the judge is the deterministic stand-in and links resolve through the local table.",
   ];
   if (o.reasons.length > 0) lines.push("", "Gate failures:", ...o.reasons.map((r) => `- ${r}`));

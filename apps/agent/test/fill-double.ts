@@ -42,9 +42,6 @@ function desktop(): Computer {
       draft = new URL(url).searchParams.get("draft");
       typed.length = 0;
     },
-    stageFile: async (name) => `/uploads/${name}`,
-    fileUploadHint: () => "",
-    liveViewUrl: () => null,
     close: async () => undefined,
   };
 }

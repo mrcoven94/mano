@@ -5,10 +5,9 @@
 import { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Badge, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
+import { Badge, Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
 import type { ApprovalStatus, Deadline } from "../../lib/api/types";
 import { AuthError, EngineGapError } from "../../lib/api/types";
-import { Body } from "../../components/ui";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { holdMailAsk } from "../../lib/chat-draft";
 import { daysUntil, formatDate } from "../../lib/dates";

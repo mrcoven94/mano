@@ -107,6 +107,7 @@ import {
   type DeadlineResult,
 } from "../deadlines.js";
 import { dailyCheckSends, gateHelpText, isHelpText, nextCheckAt, planHelpText, standingOf, type HelpStanding } from "../always-on.js";
+import type { OrgAgent } from "./org-agent.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -122,7 +123,6 @@ const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 // One delivery run claims at most this many; a run that leaves more due
 // re-arms the wake-up for now.
 const REMINDER_BATCH = 25;
-import type { OrgAgent } from "./org-agent.js";
 
 export interface GrantConsentInput {
   orgAgentId: string;
@@ -324,11 +324,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { closed: this.closeExpiredSockets() };
   }
 
-  // Arms a close at the given session expiry. True when the scheduler
-  // accepts it; false (audited) when the scheduler rejects it, in which
-  // case the caller must close the socket. The callback is a parameter
-  // so tests can force a real scheduler rejection with an unknown name;
-  // production always arms the session close.
   // Each wake of the agent recovers outstanding reminders: the wake-up is
   // re-armed from the table, so a lost schedule never strands one.
   async onStart() {
@@ -336,6 +331,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.armAlwaysOnCheck();
   }
 
+  // Arms a close at the given session expiry. True when the scheduler
+  // accepts it; false (audited) when the scheduler rejects it, in which
+  // case the caller must close the socket. The callback is a parameter
+  // so tests can force a real scheduler rejection with an unknown name;
+  // production always arms the session close.
   async armSocketExpiry(sessionExp: number, callback: keyof PersonAgent = "closeExpiredSessionSockets"): Promise<boolean> {
     try {
       await this.schedule(new Date(sessionExp * 1000), callback, {});
@@ -707,13 +707,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return out;
   }
 
-  // The zone nudges are timed in, from the state on the person's profile
-  // when the profile part of Engine is present; Pacific otherwise.
+  // The zone nudges are timed in, from the state on the person's profile;
+  // Pacific when the profile has no state or cannot be read.
   private async deadlineTimeZone(): Promise<string> {
-    const getProfile = (this as unknown as { getProfile?: (subject: string) => Promise<unknown> }).getProfile;
-    if (typeof getProfile !== "function") return timeZoneForState(null);
     try {
-      const profile = (await getProfile.call(this, this.personId)) as { person?: { address?: { state?: { value?: unknown } } } } | null;
+      const profile = await this.getProfile(this.personId);
       const state = profile?.person?.address?.state?.value;
       return timeZoneForState(typeof state === "string" ? state : null);
     } catch {
@@ -1470,13 +1468,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const row = grant ? this.documentRow(documentId) : undefined;
     const bytes = row?.name ? await this.documentBytes(documentId) : null;
     if (!grant || !row?.name || bytes == null) return null;
-    const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    const [hash, caseHash] = await Promise.all([sha256Hex(raw), auditDigest(caseId)]);
+    const [hash, caseHash] = await Promise.all([sha256Hex(bytes), auditDigest(caseId)]);
     // A delete or revoke can land during those waits: this check is the last
     // step before the bytes leave.
     if (hash !== grant.hash || grantNow()?.hash !== grant.hash) return null;
     this.store.audit({ event: "case.document_read", caseHash });
-    return { name: row.name, contentB64: bytesToBase64(raw) };
+    return { name: row.name, contentB64: bytesToBase64(bytes) };
   }
 
   // Which documents staff can still open on a case, for their screen.
@@ -1646,8 +1643,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (!row?.name) throw new Error("Document not found.");
     const bytes = await this.documentBytes(docId);
     if (bytes == null) throw new Error("Document not found.");
-    const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    return { name: row.name, contentB64: bytesToBase64(raw) };
+    return { name: row.name, contentB64: bytesToBase64(bytes) };
   }
 }
 

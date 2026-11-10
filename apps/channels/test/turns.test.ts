@@ -445,36 +445,10 @@ describe("link safety", () => {
   });
 });
 
-describe("approvals by text", () => {
-  it("accepts YES and NO only for a matching code", async () => {
+describe("a YES with a code", () => {
+  it("is a normal message for the responder", async () => {
     const h = makeHarness();
-    await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 600_000 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_yes", text: "YES K7Q2", occurredAtMs: h.now }), "webhook");
-    await runTurnAfterBatch(h);
-    expect(h.store.pendingApprovals(h.now)).toHaveLength(0);
-    expect(h.channel.sends.map((s) => s.text)).toContain("Recorded. I will follow up when it is decided.");
-    expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
-
-    await h.runner.requestApproval({ id: "apr_2", code: "M3P9", summary: "Share the pay stub.", ttlMs: 600_000 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_no", text: "NO M3P9", occurredAtMs: h.now }), "webhook");
-    await runTurnAfterBatch(h);
-    expect(h.store.pendingApprovals(h.now)).toHaveLength(0);
-  });
-
-  it("treats a wrong code as a normal message", async () => {
-    const h = makeHarness();
-    await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 600_000 });
     await h.runner.handleEvent(inboundEvent({ id: "evt_wrong", text: "YES ZZZZ", occurredAtMs: h.now }), "webhook");
-    await runTurnAfterBatch(h);
-    expect(h.store.pendingApprovals(h.now)).toHaveLength(1);
-    expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(1);
-  });
-
-  it("lets codes expire", async () => {
-    const h = makeHarness();
-    await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 1000 });
-    h.advance(2000);
-    await h.runner.handleEvent(inboundEvent({ id: "evt_late", text: "YES K7Q2", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(1);
   });

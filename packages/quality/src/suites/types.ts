@@ -10,7 +10,7 @@ export interface LetterImage {
   // Synthetic SVG of the letter, rendered with a TEST banner. Never a real scan.
   svg: string;
   // What the letter says, for the stand-in mail reader. The real mail reader
-  // path transcribes the SVG through packages/mail once it is merged.
+  // path transcribes the SVG through packages/mail.
   transcript: string;
 }
 
@@ -70,12 +70,3 @@ export interface SuiteBuild {
   cases: BenchCase[];
   sha256: string;
 }
-
-export const EMPTY_FACTS: CaseFacts = {
-  allowedPhones: [],
-  allowedUrls: [],
-  allowedAmounts: [],
-  allowedDates: [],
-  allowedPrograms: [],
-  citations: [],
-};

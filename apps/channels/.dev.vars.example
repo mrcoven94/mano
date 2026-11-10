@@ -5,7 +5,6 @@ BLOOIO_WEBHOOK_SECRET=
 # Local end-to-end runs only: point at a provider stand-in.
 BLOOIO_BASE_URL=
 MANO_HANDLE_PEPPER=
-ENCRYPTION_KEK_B64=
 META_MODEL_API_KEY=
 # Optional: turns on Meta's open-weight fallback for when the Meta Model
 # API is down (the model ID is MANO_OPEN_WEIGHT_MODEL in wrangler.toml).
@@ -27,3 +26,6 @@ MANO_HANDLE_GRANT_SECRET=
 MANO_ENGINE_URL=
 MANO_ENGINE_CHANNELS_TOKEN=
 MANO_ENGINE_SEND_SECRET=
+# Local end-to-end runs only: "1" opens POST /dev/delete, which deletes one
+# conversation by its handle. Leave it unset in production.
+MANO_DEV_ROUTES=

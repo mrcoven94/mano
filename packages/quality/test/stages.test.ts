@@ -87,7 +87,7 @@ test("Guardian is scored the way its own eval scores it", async () => {
   assert.equal(notRun("x").ran, false);
 });
 
-test("mail deadline accuracy is labeled a stand-in until packages/mail merges", async () => {
+test("mail deadline accuracy is labeled a stand-in without a model key", async () => {
   const letters = buildLettersCases();
   assert.equal(letters.filter((c) => expectedDeadline(c) === null).length, 8, "3 scams, 2 two-date letters and 3 hedged dates publish no deadline");
   const summary = await scoreMailDeadlines();

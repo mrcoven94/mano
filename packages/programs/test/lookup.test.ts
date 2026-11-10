@@ -77,6 +77,22 @@ describe("screenIncome (Sol's households)", () => {
     expect(s.limit?.appliesTo).toMatch(/earned income/);
   });
 
+  it("can't tell when the income or the household size is not a usable number", () => {
+    const ny = lookupProgram({ state: "NY", program: "snap" })!;
+    const works = { earnedIncome: true };
+    expect(screenIncome(ny, { householdSize: 1, monthlyIncome: 1900, ...works }).result).toBe("may_qualify");
+    for (const monthlyIncome of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+      const s = screenIncome(ny, { householdSize: 1, monthlyIncome, ...works });
+      expect(s.result, String(monthlyIncome)).toBe("cant_tell");
+      expect(s.limit, String(monthlyIncome)).toBeUndefined();
+    }
+    for (const householdSize of [Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+      const s = screenIncome(ny, { householdSize, monthlyIncome: 0, ...works });
+      expect(s.result, String(householdSize)).toBe("cant_tell");
+      expect(s.limit, String(householdSize)).toBeUndefined();
+    }
+  });
+
   it("can't tell for the same New Yorker when it does not know whether anyone works", () => {
     const ny = lookupProgram({ state: "NY", program: "snap" })!;
     expect(screenIncome(ny, { householdSize: 1, monthlyIncome: 1900 }).result).toBe("cant_tell");

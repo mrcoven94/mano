@@ -14,13 +14,6 @@ export const PLACEHOLDER_NOTE = LIVE ? "" : `Placeholder number ${SMS_NUMBER} un
 export const REPO_URL = "https://github.com/mrcoven94/mano";
 export const ISSUES_URL = `${REPO_URL}/issues`;
 
-/* The web app, from config. Set NEXT_PUBLIC_APP_URL (for example https://app.example.org) once it is live; until
-   then sign up and sign in point to the project's public GitHub issues. */
-const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-export const EARLY_HREF = ISSUES_URL;
-export const SIGN_UP_HREF = APP_URL ? `${APP_URL}/sign-up` : EARLY_HREF;
-export const SIGN_IN_HREF = APP_URL ? `${APP_URL}/sign-in` : EARLY_HREF;
-
 /* The renewal banner remembers a dismissal under this key and hides itself while <html> carries this attribute. */
 export const BANNER_KEY = "mano-judges-banner";
 export const BANNER_ATTR = "data-rb-off";

@@ -25,7 +25,6 @@ export class MemoryDocumentStore implements DocumentStore {
 }
 
 export const TEST_PEPPER = "test-pepper-not-real";
-export const TEST_KEK_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 export const TEST_HANDLE = "+15550001001";
 export const TEST_HANDLE_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 export const TEST_CHAT = "chat_test_aaa";

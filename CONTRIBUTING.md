@@ -4,7 +4,7 @@ Thanks for helping. Read `AGENTS.md` and `docs/decisions.md` first; they apply t
 
 ## Run it
 
-You need Node 24 and pnpm. No accounts and no keys: every package runs with local stand-ins when its keys are missing and says which parts are not live.
+You need pnpm and Node 25 or newer for `pnpm check`: the eval's tests isolate each system with Node's permission model, which cannot deny network access on Node 24, so they fail there. `pnpm judge` and the apps run on Node 24. No accounts and no keys: every package runs with local stand-ins when its keys are missing and says which parts are not live.
 
 ```sh
 pnpm install
@@ -12,7 +12,7 @@ pnpm check
 pnpm --filter @mano/site dev
 ```
 
-Copy an app's `.env.example` to `.dev.vars` or `.env` to use your own keys.
+Copy an app's `.env.example` to `.env` to use your own keys. Engine and Channels are Workers and ship `.dev.vars.example` instead: copy it to `.dev.vars`.
 
 ## Test it
 

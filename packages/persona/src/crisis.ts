@@ -2,8 +2,9 @@
 // is the deterministic net underneath it. Detection is never the only
 // protection: every busy, over-limit and failure reply carries
 // SAFETY_LINE, and on those paths the broad mightBeCrisis sends
-// CRISIS_LINE. isCrisis routes a message away from the deep path and
-// makes its normal reply name 988 and 911.
+// CRISIS_LINE. crisisGate decides, with no model, whether a message is
+// a crisis; decideCrisis settles the one case that asks the model; and
+// holdCrisisLines puts CRISIS_LINE first on every crisis reply.
 
 export const CRISIS_LINE =
   "I'm really glad you told me. Please call or text 988 right now, they're there 24/7 and it's free. " +
@@ -37,14 +38,28 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
-const CURLY_APOSTROPHE = /[’]/g;
+const CURLY_APOSTROPHE = /[\u2019]/g;
+// Every mark a keyboard can put where an apostrophe goes: curly quotes
+// either way, low and reversed quotes, the prime, the acute accent, the
+// modifier apostrophe, the full-width apostrophe and the backtick.
+const APOSTROPHE_LIKE = /[\u2018\u2019\u201A\u201B\u2032\u00B4\u02BC\uFF07\u0060]/g;
 const NOT_ASCII_WORD_CHAR = /[^a-z0-9' ]/g;
 const NOT_WORD_CHAR = /[^\p{L}\p{N}' ]/gu;
 const WHITESPACE_RUN = /\s+/g;
 const WHITESPACE = /\s+/;
 
-function normalize(text: string): string {
-  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
+// A message is read two ways. In the first, only the right curly quote is
+// an apostrophe and every other mark breaks a word, so "no point in
+// \u2018living\u2019" reads "no point in living". In the second, every
+// apostrophe-like mark is an apostrophe, so "don`t want to live" reads
+// "don't want to live". A detector fires when either reading matches, and
+// an exemption holds only when both readings allow it, so the second
+// reading can add a crisis and can never take one away.
+function readings(text: string, notWord: RegExp): string[] {
+  const base = text.normalize("NFC").toLowerCase();
+  const first = ` ${base.replace(CURLY_APOSTROPHE, "'").replace(notWord, " ").replace(WHITESPACE_RUN, " ")} `;
+  const second = ` ${base.replace(APOSTROPHE_LIKE, "'").replace(notWord, " ").replace(WHITESPACE_RUN, " ")} `;
+  return first === second ? [first] : [first, second];
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -66,12 +81,11 @@ const ENDING = new RegExp(
 );
 
 export function isCrisis(text: string): boolean {
-  const words = normalize(text);
-  return SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words) || ENDING.test(words);
+  return readings(text, NOT_ASCII_WORD_CHAR).some((words) => SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words) || ENDING.test(words));
 }
 
 export function mightBeCrisis(text: string): boolean {
-  return isCrisis(text) || POSSIBLE_CRISIS.test(normalize(text).replace(BENEFITS_DANGER, " "));
+  return isCrisis(text) || readings(text, NOT_ASCII_WORD_CHAR).some((words) => POSSIBLE_CRISIS.test(words.replace(BENEFITS_DANGER, " ")));
 }
 
 const NUMBER_988 = /\b988\b/;
@@ -79,12 +93,6 @@ const NUMBER_911 = /\b911\b/;
 
 export function namesCrisisLines(reply: string): boolean {
   return NUMBER_988.test(reply) && NUMBER_911.test(reply);
-}
-
-// The reply a crisis turn sends: the model's own words when they name
-// both lines, otherwise CRISIS_LINE first.
-export function crisisFloor(reply: string): string {
-  return namesCrisisLines(reply) ? reply : `${CRISIS_LINE} ${reply}`.trim();
 }
 
 // The last step on a crisis turn's outgoing bubbles, after the guard,
@@ -322,8 +330,9 @@ function accented(text: string): string {
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
-  const words = accented(text);
-  return IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words));
+  return readings(text, NOT_WORD_CHAR).some(
+    (words) => IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words)),
+  );
 }
 
 // The gate into the model check (the lead's decision after Sol's second
@@ -345,7 +354,8 @@ export function isOneHealthQuestion(text: string): boolean {
   if (trimmed.split(WHITESPACE).length > MAX_QUESTION_WORDS) return false;
   const opens = trimmed.startsWith("¿") ? OPENS_ES.test(trimmed) : OPENS_EN.test(trimmed);
   if (!opens) return false;
-  return !INTENT.test(accented(trimmed));
+  // Intent in either reading keeps the message a crisis.
+  return !readings(trimmed, NOT_WORD_CHAR).some((words) => INTENT.test(words));
 }
 
 // The keyword floor every turn starts from: a detector fired, and the

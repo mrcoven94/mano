@@ -16,7 +16,6 @@ import { boundFetch } from "./fetch.js";
 import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Reaction } from "./types.js";
 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
-export const BLOOIO_WEBHOOK_API_VERSION = "2026-10-01";
 
 const TRAILING_SLASH_RE = /\/$/;
 

@@ -14,8 +14,11 @@ import {
 
 /** Durable Object wrapper. All logic lives in PortalStoreSql so unit tests stay runtime-free. */
 export class PortalStore extends DurableObject {
+  private store?: PortalStoreSql;
+
+  /** One store per object, so its tables are checked once, not on every call. */
   private inner(): PortalStoreSql {
-    return new PortalStoreSql(this.ctx.storage.sql);
+    return (this.store ??= new PortalStoreSql(this.ctx.storage.sql));
   }
 
   getSession(id: string): Promise<SessionData | null> {

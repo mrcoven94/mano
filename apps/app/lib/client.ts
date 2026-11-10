@@ -1,7 +1,6 @@
 // Picks the engine the app talks to. An EXPO_PUBLIC_ENGINE_URL always
 // wins; otherwise the stand-in runs only with EXPO_PUBLIC_DEMO_MODE,
 // and anything else throws at start instead of demoing by accident.
-// When the engine merges, set the URL and the app switches.
 
 import { CryptoDigestAlgorithm, digest } from "expo-crypto";
 import { b64decode } from "./base64";
@@ -51,9 +50,4 @@ export function resolveClient(): ResolvedClient {
     cached = { client: new StandInClient({ sha256B64: expoSha256B64, language: currentLanguage }), mode: "stand-in" };
   }
   return cached;
-}
-
-// Tests and previews reset the singleton between cases.
-export function resetClient(): void {
-  cached = null;
 }

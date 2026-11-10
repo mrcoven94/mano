@@ -22,14 +22,14 @@ const base = {
   env: { ...process.env, MANO_QUALITY_BROKEN: "" },
 };
 
-async function smokeRun(broken: boolean, onlyCaseIds = SMOKE_CASE_IDS, requireHoldout = false) {
+async function smokeRun(broken: boolean, onlyCaseIds = SMOKE_CASE_IDS) {
   const startedAt = new Date().toISOString();
   const out = await runBench({ broken, onlyCaseIds: new Set(onlyCaseIds), ...base });
   const full = finishReport(out.report, {
     runId: broken ? "smoke-broken" : "smoke-ref",
     startedAt, finishedAt: new Date().toISOString(), gitSha: null, broken,
     paths: out.paths, judge: out.judge, dns: "local", env: base.env,
-  }, { results: out.results, expectedCaseIds: out.expectedCaseIds, requireHoldout });
+  }, { results: out.results, expectedCaseIds: out.expectedCaseIds });
   return { full, results: out.results, skipped: out.skippedSuites };
 }
 
@@ -75,7 +75,7 @@ test("coverage mismatch makes a run ineligible", async () => {
 });
 
 test("a missing holdout is labeled on the run, not hidden", async () => {
-  const { full } = await smokeRun(false, SMOKE_CASE_IDS, true);
+  const { full } = await smokeRun(false);
   assert.ok(full.standins!.some((r) => r.includes("safety holdout did not run")));
 });
 

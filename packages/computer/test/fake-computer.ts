@@ -9,7 +9,6 @@ export class FakeComputer implements Computer {
   screenshots = 0;
   actions: ComputerAction[][] = [];
   urls: string[] = [];
-  staged: Array<{ name: string; data: Uint8Array }> = [];
   closes = 0;
   failOnAct = false;
 
@@ -25,19 +24,6 @@ export class FakeComputer implements Computer {
 
   async goto(url: string): Promise<void> {
     this.urls.push(url);
-  }
-
-  async stageFile(name: string, data: Uint8Array): Promise<string> {
-    this.staged.push({ name, data });
-    return `/staged/${name}`;
-  }
-
-  fileUploadHint(): string {
-    return "test picker hint";
-  }
-
-  liveViewUrl(): string | null {
-    return null;
   }
 
   async close(): Promise<void> {

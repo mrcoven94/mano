@@ -2,7 +2,7 @@
 // three messages in a row, a photo, STOP, and questions Mano cannot help with.
 // Suite version 1.
 
-import { FIXTURE_STATES, factsForState, stateByCode } from "../facts.ts";
+import { factsForState, stateByCode } from "../facts.ts";
 import { syntheticPhoto } from "./art.ts";
 import type { BenchCase } from "./types.ts";
 
@@ -260,8 +260,4 @@ export function buildTextCases(): BenchCase[] {
 
   void snap;
   return cases;
-}
-
-export function fixtureStateCount(): number {
-  return FIXTURE_STATES.length;
 }

@@ -6,7 +6,7 @@
 // session and the person confirms the exact combine text. Never merges silently.
 
 import { CODE_TTL_MS, PhoneCodeService } from "./codes";
-import { keyedHash } from "./crypto";
+import { keyedHash, randomId } from "./crypto";
 import type { ChannelsPort } from "./channels";
 import type { EngineAccountsPort } from "./engine";
 import { parseSessionExpiry } from "./engine";
@@ -593,7 +593,7 @@ export class AccountsService {
   async deleteAccount(sessionToken: string): Promise<void> {
     const personId = this.sessionPerson(sessionToken);
     const job: DeleteJob = {
-      id: `del_${this.jobSeq++}_${Date.now().toString(36)}`,
+      id: randomId("del"),
       personId,
       engineDone: false,
       channelsDone: false,

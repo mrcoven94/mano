@@ -1,7 +1,7 @@
 // Reminders for approvals and near deadlines. Notification text never
 // carries anything sensitive: a generic nudge to open the app, in the
-// person's language. Local schedules work with no accounts; the Expo
-// push token registers only when an EAS project ID is configured.
+// person's language. Reminders are local schedules and work with no
+// accounts; the app registers no push token.
 
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
@@ -11,11 +11,10 @@ import { stringsFor, type Language } from "./strings";
 
 const CHANNEL_ID = "mano-reminders";
 
-export async function ensureNotificationSetup(projectId: string | null): Promise<{
+export async function ensureNotificationSetup(): Promise<{
   granted: boolean;
-  pushToken: string | null;
 }> {
-  if (Platform.OS === "web") return { granted: false, pushToken: null };
+  if (Platform.OS === "web") return { granted: false };
   Notifications.setNotificationHandler({
     handleNotification: () => Promise.resolve({ shouldPlaySound: false, shouldSetBadge: true, shouldShowBanner: true, shouldShowList: true }),
   });
@@ -28,14 +27,7 @@ export async function ensureNotificationSetup(projectId: string | null): Promise
   const current = await Notifications.getPermissionsAsync();
   const granted =
     current.granted || (await Notifications.requestPermissionsAsync()).granted;
-  if (!granted) return { granted: false, pushToken: null };
-  if (!projectId) return { granted: true, pushToken: null };
-  try {
-    const token = await Notifications.getExpoPushTokenAsync({ projectId });
-    return { granted: true, pushToken: token.data };
-  } catch {
-    return { granted: true, pushToken: null };
-  }
+  return { granted };
 }
 
 // Rebuilds local reminders from current data. Callers refresh after

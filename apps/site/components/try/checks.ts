@@ -68,8 +68,8 @@ function verdict(e: Extract<TryLogged, { kind: "guardian" }>): Omit<Settled, "se
   return { state: "warn", detail: `${standIn ? "A stand-in for Guardian" : "Guardian"} said ${e.verdict}`, problems: e.problems };
 }
 
-/* What one event settles for one check, given the checks already settled. */
-function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TryScenario): Omit<Settled, "seq"> | null {
+/* What one event settles for one check. */
+function settle(key: Key, e: TryLogged, scenario: TryScenario): Omit<Settled, "seq"> | null {
   switch (key) {
     case "read":
       // state says where a call ran, not whether it worked; the status says that.
@@ -135,7 +135,7 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
     for (const key of plan) {
       // The last reading call says how the reading went, so a retry updates it either way.
       if (done.has(key) && !(key === "read" && e.kind === "model")) continue;
-      const result = settle(key, e, done, scenario);
+      const result = settle(key, e, scenario);
       if (!result) continue;
       done.set(key, { ...result, seq: e.seq });
     }

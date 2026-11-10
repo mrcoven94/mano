@@ -26,8 +26,12 @@ import { recordFrames } from "../src/recorder";
  * MEASURE_MODEL: standin (no model, no credit: it reads the page's HTML, so it
  * proves the plumbing and measures nothing), meta (Muse Spark 1.3, needs
  * META_MODEL_API_KEY), open (Muse Spark Open, on Modal with MODAL_ENDPOINT_URL
- * and MODAL_PROXY_TOKEN, otherwise needs OPENROUTER_API_KEY) or route (whichever
- * the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter).
+ * and MODAL_PROXY_TOKEN, otherwise needs OPENROUTER_API_KEY) or route. Today
+ * route follows only MANO_MODEL_PROVIDER=openrouter, and only with
+ * OPENROUTER_API_KEY set: it then runs Muse Spark Open through OpenRouter. With
+ * any other value, modal included, route runs Muse Spark 1.3 and needs
+ * META_MODEL_API_KEY. To measure the Modal route, use open with the two Modal
+ * settings.
  * MEASURE_LIMITS: agent (the fill's own step and time limits, and its recording
  * of each screen), probe (looser, to see what those limits cost) or both, the
  * default, which runs each layout twice and prints the rows side by side.

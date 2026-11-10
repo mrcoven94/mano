@@ -19,12 +19,12 @@ import { GlimmerModelChecker } from "@mano/guardian";
 import { guardReply } from "@mano/persona";
 import { TRY_CALL_STATES, TRY_HANDLE_PREFIX, TRY_SCENARIOS, isTryPerson, mintHandleGrant, personIdForHandle, type TryEvent, type TryScenario } from "@mano/protocol";
 
-import { secretsEqual } from "../auth.js";
 import { documentAad, encryptForPerson } from "../crypto.js";
 import { documentR2Key, getDocumentBytes } from "../files.js";
 import { boundFetch } from "../fetch.js";
 import type { Env } from "../env.js";
 import { checkerSetting } from "../gateway/guardian.js";
+import { timingSafeEqual } from "../hash.js";
 import type { TryLedger, TryRun } from "./ledger.js";
 
 export type SelfFetch = (request: Request) => Promise<Response>;
@@ -492,7 +492,7 @@ function modelReport(value: unknown): TryEvent | null {
 
 async function report(request: Request, env: Env): Promise<Response> {
   const token = request.headers.get("authorization")?.replace(BEARER_PREFIX, "") ?? "";
-  if (!env.MANO_ENGINE_AGENT_TOKEN || !secretsEqual(token, env.MANO_ENGINE_AGENT_TOKEN)) return new Response("Forbidden", { status: 403 });
+  if (!env.MANO_ENGINE_AGENT_TOKEN || !timingSafeEqual(token, env.MANO_ENGINE_AGENT_TOKEN)) return new Response("Forbidden", { status: 403 });
   if (Number(request.headers.get("content-length") ?? 0) > MAX_REPORT_BYTES) return new Response("Too large", { status: 413 });
   const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown; visited?: unknown } | null;
   const handleHash = body?.handleHash;

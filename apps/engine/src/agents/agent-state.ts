@@ -1,5 +1,5 @@
-// Per-person state the agent used to keep in Redis, now in the person's
-// own SQLite: reminders, the turn ledger and the pending approval pointer.
+// Per-person state kept for the agent in the person's own SQLite:
+// reminders, the turn ledger and the pending approval pointer.
 // Every lifecycle change is one guarded statement, so a cancelled
 // reminder never sends and a claimed one is never claimed twice. Every
 // write carries the conversation generation it was prepared under and

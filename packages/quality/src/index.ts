@@ -4,8 +4,8 @@
 // The bench (synthetic, every PR and every night): versioned suites in
 // suites/ answered by the real text line (textline.ts: SparkResponder with
 // Mano's persona and the worker's send pipeline) on Meta models, and by the
-// mail reader for letters and photos (a labeled stand-in until packages/mail
-// merges). Hard checks (checks.ts) are code only; the judge (judge.ts) grades
+// mail reader for letters and photos (packages/mail, or a labeled stand-in
+// with no key). Hard checks (checks.ts) are code only; the judge (judge.ts) grades
 // 1 to 5 on helpful, accurate, plain, warm. The nightly run (bin/nightly.ts)
 // adds the persona probes (probes.ts), Guardian against production
 // (guardian.ts) and mail's deadline accuracy (mail.ts), and records the run
@@ -43,11 +43,11 @@ export { FakeJudge, JUDGE_AGREEMENT_MIN, JUDGE_BATCH_SIZE, JUDGE_LETTER_RULE, JU
 export type { JudgeClient, JudgeItem, JudgeScore } from "./judge.ts";
 export { DohDns, LocalDns, checkLink, dnsFromEnv } from "./links.ts";
 export type { DnsAnswer, DnsClient, DnsMode, LinkVerdict } from "./links.ts";
-export { JUDGE_SAMPLE_RATE, LIVE_BLOCKING_CHECKS, LiveQuality, displayTotal, expectedJudgeId, gradingPayload, inboundNeedsCrisis, maskText, sampleForJudge, suppressCounts } from "./live.ts";
+export { LIVE_BLOCKING_CHECKS, LiveQuality, displayTotal, expectedJudgeId, gradingPayload, inboundNeedsCrisis, maskText, sampleForJudge, suppressCounts } from "./live.ts";
 export type { LiveAnswerInput, LiveAnswerResult, LiveHooksDeps, SuppressedCounts } from "./live.ts";
 export { MemoryLiveStore } from "./live-store.ts";
 export type { AnswerOutcome, CounterKey, FeedbackRow, JudgeSample, LiveStore } from "./live-store.ts";
-export { DEFAULT_JUDGE_MODEL_ID, DEFAULT_MODEL_BASE_URL, FakeModelClient, MetaModelClient, assertJudgeServingDiffer, judgeClientFromEnv, roughTokens } from "./models.ts";
+export { DEFAULT_JUDGE_MODEL_ID, DEFAULT_MODEL_BASE_URL, FakeModelClient, MetaModelClient, assertJudgeServingDiffer, judgeClientFromEnv } from "./models.ts";
 export type { ChatMessage, ChatResult, ModelClient } from "./models.ts";
 export { BrokenPath, ReferencePath, loadPaths, needsMailReader, sentText } from "./paths.ts";
 export type { AnswerPath, BenchAction, BenchAnswer, LoadedPath, PathSet } from "./paths.ts";
@@ -62,7 +62,7 @@ export type { DeadlineReader, MailSummary } from "./mail.ts";
 export { CHECK_NAME, COMMENT_MARKER, exitCodeFor, publishSmoke, readOutcome } from "./publish.ts";
 export type { PublishTarget, SmokeOutcome } from "./publish.ts";
 export { readPublic, uploadStaging } from "./sync.ts";
-export { mulberry32, pick, sha256Hex, shuffle, stableStringify } from "./prng.ts";
+export { mulberry32, sha256Hex, shuffle, stableStringify } from "./prng.ts";
 export { HARD_DROP_MAX, JUDGE_DROP_MAX, compareMatched, compareSuites, evalGate, historyRow, prComment, printSideBySide, probeSafetyFailures, publicReport, readHistory, readRun, safetySummary, writeNightlyStaging, writeRun } from "./report.ts";
 export type { GateEvaluation, GateStatus, HistoryRow, HistorySuite, MatchedComparison, NightlyStaging, SuiteComparison } from "./report.ts";
 export { rescoreRun } from "./rescore.ts";
@@ -80,5 +80,4 @@ export { LETTERS_SUITE_VERSION, buildLettersCases } from "./suites/letters.ts";
 export { PERSONAS_SUITE_VERSION, buildPersonasCases } from "./suites/personas.ts";
 export { SAFETY_SUITE_VERSION, buildSafetyCases } from "./suites/safety.ts";
 export { TEXT_MAX_BUBBLE_CHARS, TEXT_MAX_BUBBLES, TEXT_SUITE_VERSION, buildTextCases } from "./suites/text.ts";
-export { EMPTY_FACTS } from "./suites/types.ts";
 export type { BenchCase, BenchInput, CaseExpect, CaseFacts, LetterImage, Locale, SuiteBuild, SuiteName } from "./suites/types.ts";

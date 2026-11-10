@@ -7,12 +7,10 @@ import { checkLink } from "./links.ts";
 import { sentText, type BenchAnswer } from "./paths.ts";
 import { letterDeadline, type LetterDeadline } from "./suites/letters.ts";
 import type { BenchCase } from "./suites/types.ts";
+import { MAX_BUBBLES } from "@mano/channels";
 import { MAX_DEEP_CHARS, MAX_FAST_CHARS } from "@mano/persona";
 import { STATES, listPrograms } from "@mano/programs";
 import { CRISIS_LINE as CRISIS_NUMBER } from "./facts.ts";
-
-// The worker's bubble cap (packages/channels MAX_BUBBLES).
-const TEXT_LINE_MAX_BUBBLES = 4;
 
 export interface CheckResult {
   id: string;
@@ -525,7 +523,7 @@ export async function runHardChecks(c: BenchCase, answer: BenchAnswer, dns: DnsC
     // fits one short text, a deep answer a few.
     const max = answer.route === "fast" ? MAX_FAST_CHARS : MAX_DEEP_CHARS;
     const chars = bubbles.join(" ").length;
-    const pass = chars <= max && bubbles.length <= TEXT_LINE_MAX_BUBBLES;
+    const pass = chars <= max && bubbles.length <= MAX_BUBBLES;
     results.push({
       id: "bubbles", pass,
       detail: pass ? `${bubbles.length} bubble(s), ${chars} chars (${answer.route})` : `${bubbles.length} bubbles, ${chars} chars, ${answer.route} max ${max}`,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DeleteIncompleteError } from "../src/service";
 import { EMAIL_A, PHONE_A, PHONE_B, testSetup } from "./helpers";
 
@@ -113,5 +113,39 @@ describe("delete as a retryable job", () => {
     await expect(service.retryDeleteAccount(jobId, b.sessionToken)).rejects.toThrow(/not found/);
     await expect(service.retryDeleteAccount("del_missing")).rejects.toThrow(/not found/);
     void origChannels;
+  });
+
+  it("gives each job an ID that cannot be guessed from a counter or the clock", async () => {
+    const { service, codes, channels } = testSetup();
+    await service.routeTextHandle("phone", PHONE_A);
+    const reqA = await codes.requestCodeForTest(PHONE_A);
+    const a = await service.verifyPhoneCode(PHONE_A, reqA!.code);
+    await service.routeTextHandle("phone", PHONE_B);
+    const reqB = await codes.requestCodeForTest(PHONE_B);
+    const b = await service.verifyPhoneCode(PHONE_B, reqB!.code);
+    channels.deleteConversationsForPerson = async () => {
+      throw new Error("channels down");
+    };
+    // The clock stands still, so an ID built from it would hold this stamp.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const stamp = Date.now().toString(36);
+      const ids: string[] = [];
+      for (const token of [a.sessionToken, b.sessionToken]) {
+        const failed = await service.deleteAccount(token).then(
+          () => null,
+          (err: unknown) => err,
+        );
+        expect(failed).toBeInstanceOf(DeleteIncompleteError);
+        ids.push((failed as DeleteIncompleteError).jobId);
+      }
+      expect(ids[0]).not.toBe(ids[1]);
+      for (const id of ids) {
+        expect(id.startsWith("del_")).toBe(true);
+        expect(id).not.toContain(stamp);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

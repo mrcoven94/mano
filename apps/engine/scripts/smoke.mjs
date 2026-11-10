@@ -1,6 +1,6 @@
 // Live smoke: one synthetic request through the real model client.
-// Run with a key in the environment (never on a command line):
-//   ~/Desktop/code/bin/ws keys run -- pnpm --filter @mano/engine run smoke
+// Run with META_MODEL_API_KEY in the environment (never on a command line):
+//   pnpm --filter @mano/engine run smoke
 // Prints the model, path, latency and status. Never prints the key.
 import { MetaModelClient, defaultModelFor } from "../src/model-client.ts";
 

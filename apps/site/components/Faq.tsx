@@ -7,7 +7,7 @@ const linkNumber = (text: string) =>
 
 const LESS_THAN = /</g;
 
-export default function Faq({ id = "questions", title = "Questions", intro, items }: { id?: string; title?: string; intro?: string; items: [string, string][] }) {
+export default function Faq({ id = "questions", items }: { id?: string; items: [string, string][] }) {
   return (
     <section id={id} aria-labelledby={`${id}-h`}>
       <script
@@ -20,8 +20,7 @@ export default function Faq({ id = "questions", title = "Questions", intro, item
       />
       <div className="wrap faq-grid">
         <div className="faq-side">
-          <h2 id={`${id}-h`}>{title}</h2>
-          {intro && <p className="lede" style={{ marginTop: 16, maxWidth: 380 }}>{intro}</p>}
+          <h2 id={`${id}-h`}>Questions</h2>
           <a className="faq-ask" href={SMS_HREF}>
             <Mascot tile wave tone="orange" size={56} />
             <span><b>Still wondering?</b><small>Text Mano your question at <span className="sms-num">{SMS_NUMBER}</span>, any time of day.</small></span>

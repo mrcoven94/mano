@@ -3,11 +3,14 @@
 // AuthKit guidance: random state, PKCE code challenge on the authorize
 // URL, verifier on the code exchange, short-lived pending login.
 //
-// The site keeps no server state (serverless). issueChallenge returns a
-// signed, encrypted-then-MACed cookie value holding the state secret, the
-// PKCE verifier, the session binding, and the intent. The callback hands
-// the cookie back with the returned state; consumeChallenge verifies all
-// of it in one step. Never log the state, verifier, or session binding.
+// No server-side record of a pending login is kept; the cookie carries it.
+// issueOAuthChallenge returns a cookie value that is signed, not encrypted:
+// base64url JSON, a dot, then an HMAC-SHA256 of that text keyed with the
+// pepper. Anyone holding the cookie can read the PKCE verifier, the expiry
+// and the linking flag in it. The state and the session token appear only
+// as keyed hashes. The callback hands the cookie back with the returned
+// state; consumeOAuthChallenge verifies all of it in one step. Never log
+// the state, verifier, or session binding.
 
 import { keyedHash } from "./crypto";
 

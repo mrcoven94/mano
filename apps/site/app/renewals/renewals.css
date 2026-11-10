@@ -92,13 +92,6 @@
 .rw-from{font-size:.78rem;font-weight:600;color:var(--alert)}
 .rw-scam-stage .tr-steps{background:#fff}
 
-/* price */
-.home section.rw-price{padding-bottom:0}
-.rw-price-card{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:32px;align-items:center;padding:40px 44px;border-radius:28px;background:#fff;border:3px solid var(--text);box-shadow:0 6px 0 var(--text)}
-.rw-price-card h2{font-size:clamp(1.8rem,3.2vw,2.6rem)}
-.rw-price-card .lede{margin-top:10px}
-.rw-price-mascot{transform:rotate(-8deg)}
-
 @media (max-width:1080px){
   .rw-hero-grid{grid-template-columns:1fr;gap:40px}
   .rw-hero-art{max-width:560px}
@@ -110,7 +103,6 @@
   .rw-cards li:nth-child(5){grid-column:4/span 2}
   .rw-split{grid-template-columns:1fr;gap:40px}
   .rw-promises{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .rw-price-card{grid-template-columns:1fr;gap:20px;padding:32px 28px}
 }
 @media (max-width:720px){
   .home section.rw-letter-sec{padding-top:40px}

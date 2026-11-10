@@ -133,9 +133,8 @@ describe("inline replies (LAP-636)", () => {
 });
 
 describe("reaction webhooks (LAP-636)", () => {
-  it("records a tapback on Mano's message and never approves anything", async () => {
+  it("records a tapback on Mano's message and answers nothing", async () => {
     const h = introduced(makeHarness({ replies: ["Here is what I'd send."] }));
-    await h.runner.requestApproval({ id: "apr_1", code: "ABCD12", summary: "Synthetic approval.", ttlMs: 3600_000 });
     await say(h, "evt_1", "draft it");
     const approvalMessage = h.channel.sends[0].messageId;
     const reaction: NormalizedEvent = {
@@ -149,7 +148,6 @@ describe("reaction webhooks (LAP-636)", () => {
     await h.runner.handleEvent(reaction, "webhook");
     h.advance(h.batchMs + 100);
     expect(await h.runner.runDueTurn()).toBe("idle");
-    expect(h.store.pendingApprovals(h.now)).toHaveLength(1);
     expect(h.lines.join("\n")).toContain("reaction_received");
   });
 });

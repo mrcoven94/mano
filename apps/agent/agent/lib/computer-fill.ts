@@ -1,7 +1,7 @@
 // Fills a form on the person's own computer: the hosted desktop (Modal)
 // or, for local runs, the Playwright stand-in. The model is the agent's:
-// Meta's open-weight model when MANO_MODEL_PROVIDER=openrouter, otherwise
-// the Meta Model API. Each fill opens a fresh draft on the sandbox portal,
+// Meta's open-weight model when MANO_MODEL_PROVIDER is modal (which
+// production sets) or openrouter, otherwise the Meta Model API. Each fill opens a fresh draft on the sandbox portal,
 // the model types the values the person will
 // approve and moves to the form's next step, which saves the draft. The
 // portal's own checks run on the values. The fill then reads the draft

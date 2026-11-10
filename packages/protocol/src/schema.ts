@@ -140,7 +140,9 @@ interface MiniSchema {
 }
 
 // Small validator for the payload schemas above: required, type, enum,
-// minLength and array items. Deliberately narrow; unknown keywords fail.
+// minLength and array items. Deliberately narrow: it reads only those
+// keywords and ignores any other, so const or pattern would not be
+// enforced. A type it does not know (number, for example) never matches.
 function matches(value: unknown, schema: MiniSchema): boolean {
   if (schema.enum !== undefined && !schema.enum.includes(value)) return false;
   switch (schema.type) {

@@ -1,9 +1,10 @@
-/* Staff quality page data, server-side only. The latest run and its history
-   come from the mano-quality bucket (aggregates only); per-case results come
-   from mano-quality-private. Both are read with signed requests, so neither
-   bucket needs a public URL. The holdout never appears per case. Every string
-   that reaches the page passes the model-name filter; the page never renders
-   model IDs at all. */
+/* Data for the quality results on /try, server-side only. That section is
+   public, and /quality redirects to it. The latest run and its history come
+   from the mano-quality bucket (aggregates only); per-case results come from
+   mano-quality-private. Both are read with signed requests, so neither bucket
+   needs a public URL. The holdout never appears per case. Every string read
+   from a run passes the model-name filter before it reaches the page. The
+   section's own speed table names two models in fixed copy. */
 
 import {
   PRIVATE_BUCKET,
