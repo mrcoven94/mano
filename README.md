@@ -6,6 +6,8 @@ Mano is a text line for people renewing public benefits. Text it a photo of the 
 
 Everything here uses synthetic people. Filings go only to our own sandbox agency portal, never to a real office.
 
+**After the hackathon.** Submissions closed on November 4, 2026. On November 9 the hosted models were switched off, so the text line answers with stand-in replies. On November 10 the live demo at withmano.com/try was retired and the site went back to residents, government and partners. Everything below describes the entry as it was submitted: links to withmano.com/try no longer open, and `apps/site/public/try/recording/run.json` is gone from the tree.
+
 ## For judges: try it in 60 seconds
 
 - **On the web, no login:** open [withmano.com/try](https://withmano.com/try) and press send. It runs a preset synthetic letter through the deployed agent, Engine, Guardian and sandbox portal, and lists every model call beside the steps. If Guardian is cold, the page counts down while it warms, which takes about 3 minutes. The same page shows the latest nightly test results below the demo ([withmano.com/try#results](https://withmano.com/try#results)).

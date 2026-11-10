@@ -39,9 +39,9 @@ SANDBOX_MAX_UPLOAD_BYTES = "5242880"
 # stop it later, change this line to "off" and merge: the check keeps running,
 # sends nothing, and a text already waiting holds.
 MANO_DAILY_CHECK_SENDS = "off"
-# The judge demo at withmano.com/try (src/try). It stays off until MANO_AGENT_URL
-# and MANO_AGENT_SECRET are set. To stop it, change this line to "off" and merge.
-MANO_TRY = "on"
+# The judge demo's public endpoint (src/try). The demo was retired on
+# November 10, 2026 and its page is gone from the site, so this stays "off".
+MANO_TRY = "off"
 MANO_TRY_ORIGIN = "https://withmano.com"
 
 # Secrets (never commit values):

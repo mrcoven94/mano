@@ -20,7 +20,3 @@ const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
 export const EARLY_HREF = ISSUES_URL;
 export const SIGN_UP_HREF = APP_URL ? `${APP_URL}/sign-up` : EARLY_HREF;
 export const SIGN_IN_HREF = APP_URL ? `${APP_URL}/sign-in` : EARLY_HREF;
-
-/* The renewal banner remembers a dismissal under this key and hides itself while <html> carries this attribute. */
-export const BANNER_KEY = "mano-judges-banner";
-export const BANNER_ATTR = "data-rb-off";

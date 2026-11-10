@@ -7,11 +7,9 @@ import Mascot from "./Mascot";
 import TextMano from "./TextMano";
 
 const links = [
-  { href: "/try", label: "Test it live", sub: "No login, with results" },
   { href: "/how-it-works", label: "How Mano works", sub: "From a photo to a filing" },
   { href: "/renewals", label: "Renewals", sub: "Your letter came" },
   { href: "/government", label: "Government", sub: "What works today" },
-  { href: "/organizations", label: "Nonprofits", sub: "What works today" },
   { href: "/partners", label: "Partners", sub: "What is planned" },
 ];
 
