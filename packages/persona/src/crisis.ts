@@ -38,19 +38,28 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
+const CURLY_APOSTROPHE = /[\u2019]/g;
 // Every mark a keyboard can put where an apostrophe goes: curly quotes
 // either way, low and reversed quotes, the prime, the acute accent, the
-// modifier apostrophe, the full-width apostrophe and the backtick. Each
-// reads as a straight apostrophe, so "don`t want to live" and "don´t
-// want to live" match the same phrases as "don't want to live".
+// modifier apostrophe, the full-width apostrophe and the backtick.
 const APOSTROPHE_LIKE = /[\u2018\u2019\u201A\u201B\u2032\u00B4\u02BC\uFF07\u0060]/g;
 const NOT_ASCII_WORD_CHAR = /[^a-z0-9' ]/g;
 const NOT_WORD_CHAR = /[^\p{L}\p{N}' ]/gu;
 const WHITESPACE_RUN = /\s+/g;
 const WHITESPACE = /\s+/;
 
-function normalize(text: string): string {
-  return ` ${text.normalize("NFC").toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
+// A message is read two ways. In the first, only the right curly quote is
+// an apostrophe and every other mark breaks a word, so "no point in
+// \u2018living\u2019" reads "no point in living". In the second, every
+// apostrophe-like mark is an apostrophe, so "don`t want to live" reads
+// "don't want to live". A detector fires when either reading matches, and
+// an exemption holds only when both readings allow it, so the second
+// reading can add a crisis and can never take one away.
+function readings(text: string, notWord: RegExp): string[] {
+  const base = text.normalize("NFC").toLowerCase();
+  const first = ` ${base.replace(CURLY_APOSTROPHE, "'").replace(notWord, " ").replace(WHITESPACE_RUN, " ")} `;
+  const second = ` ${base.replace(APOSTROPHE_LIKE, "'").replace(notWord, " ").replace(WHITESPACE_RUN, " ")} `;
+  return first === second ? [first] : [first, second];
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -72,12 +81,11 @@ const ENDING = new RegExp(
 );
 
 export function isCrisis(text: string): boolean {
-  const words = normalize(text);
-  return SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words) || ENDING.test(words);
+  return readings(text, NOT_ASCII_WORD_CHAR).some((words) => SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words) || ENDING.test(words));
 }
 
 export function mightBeCrisis(text: string): boolean {
-  return isCrisis(text) || POSSIBLE_CRISIS.test(normalize(text).replace(BENEFITS_DANGER, " "));
+  return isCrisis(text) || readings(text, NOT_ASCII_WORD_CHAR).some((words) => POSSIBLE_CRISIS.test(words.replace(BENEFITS_DANGER, " ")));
 }
 
 const NUMBER_988 = /\b988\b/;
@@ -129,7 +137,7 @@ const REPEAT_FILLER = new Set(
 );
 
 function wordsOf(text: string): string[] {
-  return text.toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
+  return text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
 }
 
 function callShape(sentence: string): CallShape {
@@ -237,7 +245,7 @@ const SENTENCE_END = /(?<=[.!?])(?:\s+|$)/;
 
 function sentencesOf(text: string): string[] {
   return text
-    .replace(APOSTROPHE_LIKE, "'")
+    .replace(CURLY_APOSTROPHE, "'")
     .replace(WHITESPACE_RUN, " ")
     .split(SENTENCE_END)
     .map((s) => s.trim())
@@ -318,12 +326,13 @@ function unmarked(words: string): string {
 }
 
 function accented(text: string): string {
-  return ` ${text.normalize("NFC").toLowerCase().replace(APOSTROPHE_LIKE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
-  const words = accented(text);
-  return IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words));
+  return readings(text, NOT_WORD_CHAR).some(
+    (words) => IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words)),
+  );
 }
 
 // The gate into the model check (the lead's decision after Sol's second
@@ -339,13 +348,14 @@ const OPENS_ES = /^¿\s*(?:debo|deber[íi]a|es|puedo|puede|pueden|se puede|tengo
 const INTENT = /(?:^|\s)(?:i want|i'm going to|im going to|i am going to|i'll|i will|i wish|i hope|so i|because|cause|quiero|voy a|ojal[áa]|porque)(?=\s|$)/iu;
 
 export function isOneHealthQuestion(text: string): boolean {
-  const trimmed = text.trim().replace(APOSTROPHE_LIKE, "'");
+  const trimmed = text.trim().replace(CURLY_APOSTROPHE, "'");
   if (trimmed.length > MAX_QUESTION_CHARS) return false;
   if (sentencesOf(trimmed).length !== 1 || !trimmed.endsWith("?")) return false;
   if (trimmed.split(WHITESPACE).length > MAX_QUESTION_WORDS) return false;
   const opens = trimmed.startsWith("¿") ? OPENS_ES.test(trimmed) : OPENS_EN.test(trimmed);
   if (!opens) return false;
-  return !INTENT.test(accented(trimmed));
+  // Intent in either reading keeps the message a crisis.
+  return !readings(trimmed, NOT_WORD_CHAR).some((words) => INTENT.test(words));
 }
 
 // The keyword floor every turn starts from: a detector fired, and the

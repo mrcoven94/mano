@@ -49,6 +49,32 @@ describe("an apostrophe typed with another mark", () => {
     }
   });
 
+  // Found in review: reading a quote mark as an apostrophe must never
+  // undo a match that reading it as a word break made. Each mark is read
+  // both ways, and either reading can make a message a crisis.
+  // The straight apostrophe, the right curly quote and the full-width
+  // apostrophe always read as an apostrophe, before and after; the other
+  // marks used to break a word.
+  const breakers = marks.filter((mark) => !["'", "\u2019", "\uFF07"].includes(mark));
+
+  it("keeps every crisis it read before, with the mark used as a quote or in place of a space", () => {
+    expect(crisisGate("No point in \u2018living\u2019 anymore")).toBe("crisis");
+    for (const mark of breakers) {
+      for (const text of [`no point in ${mark}living${mark} anymore`, `I might kill${mark}myself tonight`, `he said ${mark}I want to die${mark} last night`]) {
+        expect(isCrisis(text), text).toBe(true);
+        expect(crisisGate(text), text).not.toBe("none");
+      }
+    }
+  });
+
+  it("never lets a quoted intent through as one health question", () => {
+    expect(crisisGate("Can pills help when \u2018I want to die\u2019?")).toBe("crisis");
+    for (const mark of breakers) {
+      const text = `Can pills help when ${mark}I want to die${mark}?`;
+      expect(crisisGate(text), text).toBe("crisis");
+    }
+  });
+
   it("does not make a benefits sentence a crisis", () => {
     for (const mark of marks) {
       for (const text of [`I don${mark}t have my renewal letter`, `what${mark}s the point of renewing`, `it${mark}s due friday`]) {
