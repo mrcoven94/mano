@@ -11,7 +11,7 @@
     "build": "eve build"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "3.0.70",
+    "@ai-sdk/openai-compatible": "3.0.86",
     "@mano/computer": "workspace:*",
     "@mano/guardian": "workspace:*",
     "@mano/mail": "workspace:*",
