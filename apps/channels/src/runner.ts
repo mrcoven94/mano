@@ -977,8 +977,8 @@ export class ConversationRunner {
       logger.warn("turn_unroutable", { handle: this.logHandle(), turn });
       return;
     }
-    // One crisis detector for every path, classified before approvals,
-    // admission and any model work, on the whole message even when the
+    // One crisis detector for every path, classified before admission
+    // and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
     // The decision was made once on the whole message before it was
