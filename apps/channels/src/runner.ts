@@ -121,7 +121,9 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   usdPer1kChars: 0.001,
   maxInboundAgeMs: 5 * 60 * 1000,
   mediaHosts: DEFAULT_MEDIA_HOSTS,
-  eyesAfterMs: 5000,
+  // 0 turns the slow-turn eyes off: typing already says Mano is working,
+  // and eyes on every slow turn blocked every real tapback (LAP-986).
+  eyesAfterMs: 0,
   reactionsEnabled: true,
 };
 
@@ -1077,12 +1079,12 @@ export class ConversationRunner {
     // own text alone.
     const last = items[items.length - 1];
     const target: Target | null = last?.messageId ? { messageId: last.messageId, text: last.text ?? "" } : null;
-    // The eyes say Mano is on it: at once for a photo, and otherwise when
-    // the turn routes deep or runs past eyesAfterMs.
+    // The eyes say Mano is on it: at once for a photo, when the turn routes
+    // deep, and past eyesAfterMs only when that is set above 0.
     const eyes = this.eyesFor(turn, chatId, target, crisis, generation, epoch);
     if (attachments.length > 0) eyes.put("attachment");
     // Tracked by the decoration queue, so STOP, a close or a delete cancels it.
-    const stopEyesTimer = this.decorations.schedule("eyes_timer", config.eyesAfterMs, () => eyes.put("slow"));
+    const stopEyesTimer = config.eyesAfterMs > 0 ? this.decorations.schedule("eyes_timer", config.eyesAfterMs, () => eyes.put("slow")) : () => {};
 
     // Keepalive refreshes run one at a time. Before the final stop, no
     // new refresh starts and the one in flight finishes, so typing can
