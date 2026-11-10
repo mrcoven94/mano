@@ -11,7 +11,7 @@ export default function Footer() {
           <div className="foot">
             <div>
               <Link href="/" className="brand"><Mascot size={30} tile tone="orange" className="brand-mark" />mano</Link>
-              <p className="foot-about">Mano reads your letters, tracks your deadlines and files renewals on a practice portal. It is free in this demo.</p>
+              <p className="foot-about">Mano reads your letters, tracks your deadlines and files renewals on a practice portal. It is free.</p>
               <a className="foot-text" href={SMS_HREF}>Text Mano at {SMS_NUMBER}</a>
             </div>
             <nav aria-label="Footer">
@@ -19,7 +19,6 @@ export default function Footer() {
               <ul>
                 <li><Link href="/how-it-works">How Mano works</Link></li>
                 <li><Link href="/renewals">Renewals</Link></li>
-                <li><Link href="/try">Test it live</Link></li>
                 <li><Link href="/#questions">Questions</Link></li>
               </ul>
             </nav>

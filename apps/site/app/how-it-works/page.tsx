@@ -112,7 +112,7 @@ export default function HowItWorks() {
       <div className="t-hero hw-hero">
         <div className="wrap">
           <h1>From a photo of your letter to <mark className="h-phrase">a filed renewal.</mark></h1>
-          <p className="h-lede">Here is what happens after you text Mano a photo of your renewal letter. Mano is free in this demo, and today it files only on a practice portal, not a real office.</p>
+          <p className="h-lede">Here is what happens after you text Mano a photo of your renewal letter. Mano is free, and today it files only on a practice portal, not a real office.</p>
           <ol className="hw-path">
             {STEPS.map((s, n) => (
               <li key={s.short}>

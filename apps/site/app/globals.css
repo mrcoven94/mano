@@ -79,9 +79,8 @@ section{padding:128px 0}
 .menu[open] summary span::before,.menu[open] summary span::after{content:"";position:absolute;left:0;top:0;width:16px;height:1.5px;background:var(--text);transform:rotate(45deg)}
 .menu[open] summary span::after{transform:rotate(-45deg)}
 /* The header is sticky, so a panel taller than the screen could never be scrolled into view. It scrolls itself: 78px is
-   the panel's top in the header plus a gutter, and a visible renewal banner above the header takes up to 66px more. */
+   the panel's top in the header plus a gutter. */
 .menu-panel{position:absolute;right:0;top:54px;width:min(300px,calc(100vw - 36px));max-height:calc(100vh - 78px);max-height:calc(100dvh - 78px);overflow-y:auto;overscroll-behavior:contain;background:var(--card);border-radius:14px;padding:8px;box-shadow:var(--shadow-lg)}
-:root:not([data-rb-off]):has(.rb) .menu-panel{max-height:calc(100vh - 144px);max-height:calc(100dvh - 144px)}
 .menu-panel a{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-radius:12px;text-decoration:none;font-size:1rem}
 .menu-panel a[aria-current="page"]{background:var(--fill2)}
 .menu-panel a small{color:var(--faint);font-size:.78rem}
@@ -158,15 +157,3 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
 .faq-ask small{display:block;margin-top:2px;font-size:.9rem;color:var(--muted);line-height:1.4}
 @media (max-width:1080px){.faq-side{position:static}}
 .dv-stage .btn-ghost,.h-open .btn-ghost,.h-share .btn-ghost,.t-steps .btn-ghost,.t-vf .btn-ghost{background:#fff}
-
-/* renewal banner: a slim bar above the header, gone for good once dismissed */
-.rb{position:relative;display:flex;align-items:center;justify-content:center;min-height:40px;padding:6px 48px;background:var(--bg2);font-size:.9rem;color:var(--text)}
-html[data-rb-off] .rb{display:none}
-.rb-text{display:flex;align-items:center;gap:8px;color:var(--text);line-height:1.3}
-.rb-text mark{background:linear-gradient(var(--hl),var(--hl)) 0 85%/100% 45% no-repeat;color:inherit;font-weight:600;padding:0 .1em}
-.rb-mark{flex:none;transform:rotate(-8deg)}
-.rb-link{flex:none;font-weight:600;text-underline-offset:3px;text-decoration-thickness:1px}
-.rb-link::after{content:" \2192"}
-.rb-x{position:absolute;right:8px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer}
-.rb-x:hover{background:var(--fill2);color:var(--text)}
-@media (max-width:720px){.rb{padding:6px 44px 6px 12px;justify-content:flex-start;font-size:.84rem}.rb-mark{display:none}.rb-text{flex-wrap:wrap;gap:2px 8px}}

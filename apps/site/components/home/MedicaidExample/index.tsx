@@ -1,5 +1,4 @@
 "use client";
-import Link from "next/link";
 import { Stage } from "@/components/stageshow";
 import reading from "@/public/home/medicaid-reading.json";
 import "./card.css";
@@ -7,7 +6,7 @@ import "./card.css";
 /* The static-card Stageshow composition, adapted to the source paper and its
    recorded extraction. This is one real Mail read of a synthetic notice,
    not a live request, a saved deadline or an eligibility decision. Read the
-   source and result together; /try runs a new document check. */
+   source and result together. */
 const fields = reading.fields;
 const NUMBERED_ITEM = /^\d+\.\s*/;
 
@@ -37,15 +36,15 @@ export default function MedicaidExample() {
               <div className="md-paper">
                 {layout === "compact" ? (
                   <>
-                    <div className="md-paper-top"><span>From the synthetic letter</span><a href="/try/letters/datecheck.jpg">Open photo</a></div>
+                    <div className="md-paper-top"><span>From the synthetic letter</span><a href="/letters/datecheck.jpg">Open photo</a></div>
                     <p className="md-office">{fields.sender.value}</p>
                     <p className="md-source-quote">&ldquo;{fields.deadlineText.value}&rdquo;</p>
                     <p className="md-source-case">Case {fields.referenceNo.value}</p>
                   </>
                 ) : (
-                  <a href="/try/letters/datecheck.jpg" aria-label="Open Maria's full synthetic Medi-Cal letter">
+                  <a href="/letters/datecheck.jpg" aria-label="Open Maria's full synthetic Medi-Cal letter">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/try/letters/datecheck.jpg" alt="Synthetic Medi-Cal renewal notice. It asks for a packet by November 20, 2026." width={1831} height={2324} loading="lazy" />
+                    <img src="/letters/datecheck.jpg" alt="Synthetic Medi-Cal renewal notice. It asks for a packet by November 20, 2026." width={1831} height={2324} loading="lazy" />
                   </a>
                 )}
               </div>
@@ -72,7 +71,6 @@ export default function MedicaidExample() {
           <div>
             <p>Mano reads the notice and asks you to check the date. Medicaid forms and work reporting are not built yet. This example is not connected to a state system. The office decides eligibility.</p>
           </div>
-          <Link className="btn btn-primary" href="/try#try-docs-h">Try a live document check</Link>
         </div>
       </div>
     </section>

@@ -2,8 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Schibsted_Grotesk } from "next/font/google";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
-import RenewalBanner from "@/components/RenewalBanner";
-import { BANNER_ATTR, BANNER_KEY } from "@/lib/site";
 import "./globals.css";
 import "./home.css";
 import "./teams.css";
@@ -15,7 +13,7 @@ const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: 
 export const metadata: Metadata = {
   metadataBase: new URL("https://withmano.com"),
   title: { default: "Mano", template: "%s | Mano" },
-  description: "Text Mano a photo of your renewal letter. It reads the letter, tracks the deadline and files the renewal after your yes. Mano is free in this demo and files only on a practice portal.",
+  description: "Text Mano a photo of your renewal letter. It reads the letter, tracks the deadline and files the renewal after your yes. Mano is free and files only on a practice portal.",
   openGraph: { siteName: "Mano", type: "website" },
 };
 
@@ -23,13 +21,9 @@ export const viewport: Viewport = { themeColor: "#FFFFFF", colorScheme: "light" 
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem(${JSON.stringify(BANNER_KEY)})==="off")document.documentElement.setAttribute(${JSON.stringify(BANNER_ATTR)},"")}catch(e){}` }} />
-      </head>
+    <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <a href="#main" className="skip">Skip to content</a>
-        <RenewalBanner />
         <Header />
         <main id="main">{children}</main>
         <Footer />

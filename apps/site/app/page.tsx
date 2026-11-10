@@ -14,7 +14,7 @@ import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: find, apply for and track your benefits" },
-  description: "Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Today it reads your letters, tracks your deadlines and files food benefits renewals after your yes. Mano is free in this demo and files only on a practice portal.",
+  description: "Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Today it reads your letters, tracks your deadlines and files food benefits renewals after your yes. Mano is free and files only on a practice portal.",
   alternates: { canonical: "/" },
 };
 
@@ -25,7 +25,7 @@ const TODAY: [icon: string, title: string, text: string][] = [
 ];
 
 const faqs: [string, string][] = [
-  ["Is Mano free?", "Yes. Mano is free in this demo. There is no card and no sign up."],
+  ["Is Mano free?", "Yes. Mano is free. There is no card and no sign up."],
   ["Does Mano file with a real office?", "No. Today Mano files only on a practice portal. If you have a real renewal due, you still need to send it to your office yourself."],
   ["Does Mano decide if I get help?", "No. The office that runs the program decides."],
   ["Who can see what I send?", "Mano uses it to answer you and keeps it in your own private record. Nothing goes out without your yes, and Mano never sells your data."],

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import HeroThread, { threadSeconds, type ThreadScene } from "./HeroThread";
 import Mascot from "@/components/Mascot";
@@ -115,9 +116,9 @@ export default function HeroStage() {
         <p className="h-lede">Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Some of this works today and the rest is coming soon. Mano files only after your yes, on a practice portal, not a real office.</p>
         <div className="btn-row h-ctas">
           <TextMano className="btn btn-primary btn-lg" />
-          <a className="btn btn-ghost btn-lg" href="/try">Test it live, no login</a>
+          <Link className="btn btn-ghost btn-lg" href="/how-it-works">How Mano works</Link>
         </div>
-        <p className="h-note">Mano is free in this demo. No card, no sign up.</p>
+        <p className="h-note">Mano is free. No card, no sign up.</p>
       </div>
 
       <div className="wrap h-stage-wrap" ref={stage}>

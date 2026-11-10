@@ -248,12 +248,6 @@ importers:
       '@mano/accounts':
         specifier: workspace:*
         version: link:../../packages/accounts
-      '@mano/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@mano/quality':
-        specifier: workspace:*
-        version: link:../../packages/quality
       next:
         specifier: 15.5.28
         version: 15.5.28(babel-plugin-react-compiler@1.0.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)

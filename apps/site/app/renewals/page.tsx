@@ -12,7 +12,7 @@ import { SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/lib/site";
 import "./renewals.css";
 
 const title = "Keep your benefits: renewals";
-const description = "Your renewal letter came. Text Mano a photo of it. Mano reads the date, asks before it holds it, reminds you and fills out the form. Nothing is sent without your yes, and in this demo it goes only to a practice portal.";
+const description = "Your renewal letter came. Text Mano a photo of it. Mano reads the date, asks before it holds it, reminds you and fills out the form. Nothing is sent without your yes, and today it goes only to a practice portal.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/renewals" }, openGraph: { title, description } };
 
@@ -33,7 +33,7 @@ const PROMISES: [string, string][] = [
 ];
 
 const faqs: [string, string][] = [
-  ["Does Mano cost anything?", "No. Mano is free in this demo, with no card and no sign up."],
+  ["Does Mano cost anything?", "No. Mano is free, with no card and no sign up."],
   ["Does Mano file with a real office?", "No. Today Mano files only on a practice portal. If you have a real renewal due, you still need to send it to your office yourself."],
   ["Do I need an app?", `No. Text Mano at ${SMS_NUMBER} from any phone that can text.`],
   ["Is it safe to give Mano my Social Security number?", "Mano never asks for it through a link. If a text or letter asks for it at a link, send it to Mano first and it will check."],
@@ -49,12 +49,12 @@ export default function Renewals() {
         <div className="wrap rw-hero-grid">
           <div className="rw-hero-copy">
             <h1>Your renewal is due. <mark className="rw-phrase">Text Mano a photo of the letter.</mark></h1>
-            <p className="h-lede">Mano reads it, tracks the deadline and fills out your food benefits renewal. In this demo it files on a practice portal, not a real office.</p>
+            <p className="h-lede">Mano reads it, tracks the deadline and fills out your food benefits renewal. Today it files on a practice portal, not a real office.</p>
             <div className="btn-row h-ctas">
               <TextMano className="btn btn-primary btn-lg" align="start" />
               <a className="btn btn-ghost btn-lg" href="#letter">How it works</a>
             </div>
-            <p className="h-note">Mano is free in this demo. No card, no sign up.</p>
+            <p className="h-note">Mano is free. No card, no sign up.</p>
           </div>
           <div className="rw-hero-art">
             <Mascot tile wave tone="orange" size={72} className="rw-hero-mascot" />
