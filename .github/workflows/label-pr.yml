@@ -12,7 +12,7 @@ jobs:
   label:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@v9
         with:
           script: |
             const sessions = ["accounts", "agent", "app", "channels", "engine", "eval", "extensions", "forms", "guardian", "lead", "mail", "orgs", "pages", "phone", "platform", "program", "quality", "results", "screens", "ship", "site", "spine", "vault"];
