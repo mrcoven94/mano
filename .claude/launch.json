@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "site",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@mano/site", "dev", "--port", "3793"],
+      "port": 3793
+    }
+  ]
+}
