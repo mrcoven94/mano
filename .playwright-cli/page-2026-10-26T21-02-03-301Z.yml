@@ -1,0 +1,131 @@
+- generic [active] [ref=f10e1]:
+  - link "Skip to content" [ref=f10e2] [cursor=pointer]:
+    - /url: "#main"
+  - banner [ref=f10e3]:
+    - generic [ref=f10e4]:
+      - link "Mano home" [ref=f10e5] [cursor=pointer]:
+        - /url: /
+        - img "Mano, an open helping hand" [ref=f10e6]
+        - text: Mano
+      - navigation "Main" [ref=f10e15]:
+        - link "For you" [ref=f10e16] [cursor=pointer]:
+          - /url: /
+        - link "Government" [ref=f10e17] [cursor=pointer]:
+          - /url: /government
+        - link "Organizations" [ref=f10e18] [cursor=pointer]:
+          - /url: /organizations
+        - link "Get started" [ref=f10e19] [cursor=pointer]:
+          - /url: /#get-started
+  - main [ref=f10e20]:
+    - generic [ref=f10e22]:
+      - paragraph [ref=f10e23]: For agencies and program offices
+      - heading "Your office, claimed. Every staff member gets an agent." [level=1] [ref=f10e25]
+      - paragraph [ref=f10e26]: Cases arrive complete, with every finding cited to the rule. Approved cases get typed into the system you already have. Your staff stop retyping and start deciding.
+      - generic [ref=f10e27]:
+        - link "Talk to us" [ref=f10e28] [cursor=pointer]:
+          - /url: mailto:agencies@withmano.com?subject=Claiming%20our%20office%20profile
+        - link "See Mano for residents" [ref=f10e29] [cursor=pointer]:
+          - /url: /
+    - region [ref=f10e30]:
+      - generic [ref=f10e31]:
+        - paragraph [ref=f10e32]: How it works
+        - heading "From profile to running program." [level=2] [ref=f10e33]
+        - generic [ref=f10e34]:
+          - article [ref=f10e35]:
+            - paragraph [ref=f10e36]: "01"
+            - heading "Every office has a profile" [level=3] [ref=f10e37]
+            - paragraph [ref=f10e38]: Your office already has a labeled profile with its programs, hours and required documents. The profile is public information only. It cannot converse, request records or send notices until you claim it.
+          - article [ref=f10e39]:
+            - paragraph [ref=f10e40]: "02"
+            - heading "Claim it, and staff get agents" [level=3] [ref=f10e41]
+            - paragraph [ref=f10e42]: Claiming the profile turns it into your organization agent. Every staff member gets their own agent with your programs, rules and templates built in. Staff approve every outside action their agent prepares.
+          - article [ref=f10e43]:
+            - paragraph [ref=f10e44]: "03"
+            - heading "Turn policy into a running program" [level=3] [ref=f10e45]
+            - paragraph [ref=f10e46]: "Give Mano a policy document. Mano drafts the program: eligibility questions, required evidence and notices. A person on your staff reviews and approves it before it serves a single resident."
+          - article [ref=f10e47]:
+            - paragraph [ref=f10e48]: "04"
+            - heading "Cases arrive complete" [level=3] [ref=f10e49]
+            - paragraph [ref=f10e50]: Applications show up with the evidence attached and every finding cited to the rule it rests on. Staff see what is missing before they open a case, and residents get asked once, through their own agent.
+    - region [ref=f10e51]:
+      - generic [ref=f10e52]:
+        - paragraph [ref=f10e53]: In the workday
+        - heading "What changes for your staff." [level=2] [ref=f10e54]
+        - generic [ref=f10e55]:
+          - article [ref=f10e56]:
+            - heading "Complete cases, cited findings" [level=3] [ref=f10e57]
+            - paragraph [ref=f10e58]: Each application lists the evidence and the rule behind every finding. Staff verify instead of hunting through uploads.
+          - article [ref=f10e59]:
+            - heading "One request for what is missing" [level=3] [ref=f10e60]
+            - paragraph [ref=f10e61]: Your agent asks the resident's agent for the missing document. The resident approves the share. Nobody mails a second letter asking for the same page.
+          - article [ref=f10e62]:
+            - heading "Typed into your existing system" [level=3] [ref=f10e63]
+            - paragraph [ref=f10e64]: After a staff member approves a case, the agent enters it into your current system by computer. Staff watch it happen and can stop it at any point.
+          - article [ref=f10e65]:
+            - heading "Notices people can read" [level=3] [ref=f10e66]
+            - paragraph [ref=f10e67]: Decisions go out in plain language and in the resident's language, from templates your office approved.
+          - article [ref=f10e68]:
+            - heading "Calls that identify themselves" [level=3] [ref=f10e69]
+            - paragraph [ref=f10e70]: When an agent calls a resident or another office, it says whose automated assistant it is and that the call is transcribed. It never claims to be a person.
+          - article [ref=f10e71]:
+            - heading "An audit trail by default" [level=3] [ref=f10e72]
+            - paragraph [ref=f10e73]: Every prepared action, approval and send is logged with the exact document version that was approved.
+    - region [ref=f10e74]:
+      - generic [ref=f10e76]:
+        - generic [ref=f10e77]:
+          - paragraph [ref=f10e78]: Pricing
+          - heading "Priced per staff seat." [level=2] [ref=f10e79]
+          - paragraph [ref=f10e80]: Residents never pay to apply, renew or file. Your office pays per staff seat, based on office size and call volume.
+        - link "Talk to us" [ref=f10e81] [cursor=pointer]:
+          - /url: mailto:agencies@withmano.com?subject=Mano%20for%20our%20agency
+    - region [ref=f10e82]:
+      - generic [ref=f10e83]:
+        - generic [ref=f10e84]:
+          - paragraph [ref=f10e85]: Questions
+          - heading "For agency staff." [level=2] [ref=f10e86]
+        - generic [ref=f10e97]:
+          - group [ref=f10e98]:
+            - generic "Do we have to replace our current system? +" [ref=f10e99] [cursor=pointer]
+          - group [ref=f10e100]:
+            - generic "Who makes the decision on a case? +" [ref=f10e101] [cursor=pointer]
+          - group [ref=f10e102]:
+            - generic "How do notices read for residents? +" [ref=f10e103] [cursor=pointer]
+          - group [ref=f10e104]:
+            - generic "What does a resident see about us? +" [ref=f10e105] [cursor=pointer]
+          - group [ref=f10e106]:
+            - generic "How is this priced? +" [ref=f10e107] [cursor=pointer]
+          - group [ref=f10e108]:
+            - generic "Is Mano a government system? +" [ref=f10e109] [cursor=pointer]
+  - contentinfo [ref=f10e110]:
+    - generic [ref=f10e111]:
+      - generic [ref=f10e112]:
+        - generic [ref=f10e113]:
+          - generic [ref=f10e114]:
+            - img "Mano, an open helping hand" [ref=f10e115]
+            - text: Mano
+          - paragraph [ref=f10e124]: Apply once, for anything that makes your life better.
+        - navigation "Footer" [ref=f10e125]:
+          - generic [ref=f10e126]:
+            - paragraph [ref=f10e127]: Product
+            - list [ref=f10e128]:
+              - listitem [ref=f10e129]:
+                - link "For you" [ref=f10e130] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=f10e131]:
+                - link "Government" [ref=f10e132] [cursor=pointer]:
+                  - /url: /government
+              - listitem [ref=f10e133]:
+                - link "Organizations" [ref=f10e134] [cursor=pointer]:
+                  - /url: /organizations
+              - listitem [ref=f10e135]:
+                - link "Pricing" [ref=f10e136] [cursor=pointer]:
+                  - /url: /#pricing
+          - generic [ref=f10e137]:
+            - paragraph [ref=f10e138]: Trust
+            - list [ref=f10e139]:
+              - listitem [ref=f10e140]: You approve every step
+              - listitem [ref=f10e141]: You choose who sees your case
+              - listitem [ref=f10e142]: Take access back any time
+      - paragraph [ref=f10e143]: Mano is an independent service. Mano is not a government agency and is not affiliated with any government office. Program decisions are made by the agency that runs each program.
+      - paragraph [ref=f10e144]: © 2026 Mano. Made with synthetic people in every example on this site. No real resident data is shown.
+  - alert [ref=f10e145]

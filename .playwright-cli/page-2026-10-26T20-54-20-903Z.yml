@@ -1,0 +1,131 @@
+- generic [active] [ref=f3e1]:
+  - link "Skip to content" [ref=f3e2] [cursor=pointer]:
+    - /url: "#main"
+  - banner [ref=f3e3]:
+    - generic [ref=f3e4]:
+      - link "Mano home" [ref=f3e5] [cursor=pointer]:
+        - /url: /
+        - img "Mano, an open helping hand" [ref=f3e6]
+        - text: Mano
+      - navigation "Main" [ref=f3e15]:
+        - link "For you" [ref=f3e16] [cursor=pointer]:
+          - /url: /
+        - link "Government" [ref=f3e17] [cursor=pointer]:
+          - /url: /government
+        - link "Organizations" [ref=f3e18] [cursor=pointer]:
+          - /url: /organizations
+        - link "Get started" [ref=f3e19] [cursor=pointer]:
+          - /url: /#get-started
+  - main [ref=f3e20]:
+    - generic [ref=f3e22]:
+      - paragraph [ref=f3e23]: For nonprofits and case managers
+      - heading "Every case manager gets an agent that knows their caseload." [level=1] [ref=f3e25]
+      - paragraph [ref=f3e26]: The agent prepares the paperwork, chases the missing documents and keeps every deadline in view. Your team spends its time with people.
+      - generic [ref=f3e27]:
+        - link "Talk to us" [ref=f3e28] [cursor=pointer]:
+          - /url: mailto:organizations@withmano.com?subject=Mano%20for%20our%20team
+        - link "See Mano for residents" [ref=f3e29] [cursor=pointer]:
+          - /url: /
+    - region [ref=f3e30]:
+      - generic [ref=f3e31]:
+        - paragraph [ref=f3e32]: How it works
+        - heading "From caseload to launched program." [level=2] [ref=f3e33]
+        - generic [ref=f3e34]:
+          - article [ref=f3e35]:
+            - paragraph [ref=f3e36]: "01"
+            - heading "An agent that knows the caseload" [level=3] [ref=f3e37]
+            - paragraph [ref=f3e38]: Each case manager gets an agent loaded with their cases, deadlines and program rules. The agent prepares renewals and applications from the case file and shows the manager the exact draft before anything moves.
+          - article [ref=f3e39]:
+            - paragraph [ref=f3e40]: "02"
+            - heading "Paperwork prepared, documents chased" [level=3] [ref=f3e41]
+            - paragraph [ref=f3e42]: When a case needs a pay stub or a signed form, the manager's agent asks the resident's agent. The resident approves the share. The chase happens between agents, and the manager sees status instead of making reminder calls.
+          - article [ref=f3e43]:
+            - paragraph [ref=f3e44]: "03"
+            - heading "Launch a cash assistance program" [level=3] [ref=f3e45]
+            - paragraph [ref=f3e46]: Describe the program and give Mano the rules. Mano drafts the application, the evidence list and the notices. Your team reviews and approves, then residents apply through their own Mano.
+          - article [ref=f3e47]:
+            - paragraph [ref=f3e48]: "04"
+            - heading "Extensions residents can turn on" [level=3] [ref=f3e49]
+            - paragraph [ref=f3e50]: A marketplace of partner extensions adds services like document scanning or appointment booking. An extension states the exact data it asks for and who pays. The resident turns it on, approves each use and can remove it.
+    - region [ref=f3e51]:
+      - generic [ref=f3e52]:
+        - paragraph [ref=f3e53]: In the week
+        - heading "What the agent takes off the list." [level=2] [ref=f3e54]
+        - generic [ref=f3e55]:
+          - article [ref=f3e56]:
+            - heading "Renewals drafted ahead" [level=3] [ref=f3e57]
+            - paragraph [ref=f3e58]: The agent sees a renewal coming, pulls the case file and drafts the packet. The manager reviews one draft instead of rebuilding the case.
+          - article [ref=f3e59]:
+            - heading "Documents chased between agents" [level=3] [ref=f3e60]
+            - paragraph [ref=f3e61]: Missing evidence goes out as one clear request to the resident's agent. Replies land in the case file, matched to the requirement.
+          - article [ref=f3e62]:
+            - heading "Deadlines in one view" [level=3] [ref=f3e63]
+            - paragraph [ref=f3e64]: Every case deadline across the caseload, sorted by what is due first, with the owner of the next step named.
+          - article [ref=f3e65]:
+            - heading "Programs you can launch" [level=3] [ref=f3e66]
+            - paragraph [ref=f3e67]: Turn your assistance rules into a working application without hiring engineers or buying a portal.
+          - article [ref=f3e68]:
+            - heading "Extensions with clear terms" [level=3] [ref=f3e69]
+            - paragraph [ref=f3e70]: Each extension in the marketplace states what data it uses and who pays. Residents opt in. Your team sees which extensions a case uses.
+          - article [ref=f3e71]:
+            - heading "Approvals stay human" [level=3] [ref=f3e72]
+            - paragraph [ref=f3e73]: Sends, shares and submissions wait for a named person's approval, bound to the exact document version.
+    - region [ref=f3e74]:
+      - generic [ref=f3e76]:
+        - generic [ref=f3e77]:
+          - paragraph [ref=f3e78]: Pricing
+          - heading "Priced per seat." [level=2] [ref=f3e79]
+          - paragraph [ref=f3e80]: One seat per case manager. Residents never pay to apply, renew or file. Pricing scales with team size and program volume.
+        - link "Talk to us" [ref=f3e81] [cursor=pointer]:
+          - /url: mailto:organizations@withmano.com?subject=Mano%20for%20our%20organization
+    - region [ref=f3e82]:
+      - generic [ref=f3e83]:
+        - generic [ref=f3e84]:
+          - paragraph [ref=f3e85]: Questions
+          - heading "For nonprofit teams." [level=2] [ref=f3e86]
+        - generic [ref=f3e97]:
+          - group [ref=f3e98]:
+            - generic "What does a case manager actually do in Mano? +" [ref=f3e99] [cursor=pointer]
+          - group [ref=f3e100]:
+            - generic "Can we run our own assistance program? +" [ref=f3e101] [cursor=pointer]
+          - group [ref=f3e102]:
+            - generic "How do residents share cases with us? +" [ref=f3e103] [cursor=pointer]
+          - group [ref=f3e104]:
+            - generic "What are partner extensions? +" [ref=f3e105] [cursor=pointer]
+          - group [ref=f3e106]:
+            - generic "How is this priced? +" [ref=f3e107] [cursor=pointer]
+          - group [ref=f3e108]:
+            - generic "Does Mano replace case managers? +" [ref=f3e109] [cursor=pointer]
+  - contentinfo [ref=f3e110]:
+    - generic [ref=f3e111]:
+      - generic [ref=f3e112]:
+        - generic [ref=f3e113]:
+          - generic [ref=f3e114]:
+            - img "Mano, an open helping hand" [ref=f3e115]
+            - text: Mano
+          - paragraph [ref=f3e124]: Apply once, for anything that makes your life better.
+        - navigation "Footer" [ref=f3e125]:
+          - generic [ref=f3e126]:
+            - paragraph [ref=f3e127]: Product
+            - list [ref=f3e128]:
+              - listitem [ref=f3e129]:
+                - link "For you" [ref=f3e130] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=f3e131]:
+                - link "Government" [ref=f3e132] [cursor=pointer]:
+                  - /url: /government
+              - listitem [ref=f3e133]:
+                - link "Organizations" [ref=f3e134] [cursor=pointer]:
+                  - /url: /organizations
+              - listitem [ref=f3e135]:
+                - link "Pricing" [ref=f3e136] [cursor=pointer]:
+                  - /url: /#pricing
+          - generic [ref=f3e137]:
+            - paragraph [ref=f3e138]: Trust
+            - list [ref=f3e139]:
+              - listitem [ref=f3e140]: You approve every step
+              - listitem [ref=f3e141]: You choose who sees your case
+              - listitem [ref=f3e142]: Take access back any time
+      - paragraph [ref=f3e143]: Mano is an independent service. Mano is not a government agency and is not affiliated with any government office. Program decisions are made by the agency that runs each program.
+      - paragraph [ref=f3e144]: © 2026 Mano. Made with synthetic people in every example on this site. No real resident data is shown.
+  - alert [ref=f3e145]

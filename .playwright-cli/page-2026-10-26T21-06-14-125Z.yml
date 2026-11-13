@@ -1,0 +1,207 @@
+- generic [active] [ref=f17e1]:
+  - link "Skip to content" [ref=f17e2] [cursor=pointer]:
+    - /url: "#main"
+  - banner [ref=f17e3]:
+    - generic [ref=f17e4]:
+      - link "Mano home" [ref=f17e5] [cursor=pointer]:
+        - /url: /
+        - img "Mano, an open helping hand" [ref=f17e6]
+        - text: Mano
+      - navigation "Main" [ref=f17e15]:
+        - link "For you" [ref=f17e16] [cursor=pointer]:
+          - /url: /
+        - link "Government" [ref=f17e17] [cursor=pointer]:
+          - /url: /government
+        - link "Organizations" [ref=f17e18] [cursor=pointer]:
+          - /url: /organizations
+        - link "Get started" [ref=f17e19] [cursor=pointer]:
+          - /url: /#get-started
+  - main [ref=f17e20]:
+    - generic [ref=f17e24]:
+      - paragraph [ref=f17e25]: Your own agent, free to apply
+      - heading "Apply once, for anything that makes your life better." [level=1] [ref=f17e27]
+      - paragraph [ref=f17e28]: Mano applies for benefits, cash assistance, jobs, scholarships and training. Mano fills out any form you hand it, reads your mail from a photo, renews on time and waits on hold for you.
+      - generic [ref=f17e29]:
+        - link "Text Mano" [ref=f17e30] [cursor=pointer]:
+          - /url: sms:+15550100147
+        - link "Get started" [ref=f17e31] [cursor=pointer]:
+          - /url: "#get-started"
+      - paragraph [ref=f17e32]: "Demo placeholder number: (555) 010-0147. The live number will replace it at launch. You approve every decision Mano prepares."
+    - region [ref=f17e43]:
+      - generic [ref=f17e44]:
+        - paragraph [ref=f17e45]: See it work
+        - heading "A letter comes in. Mano handles the rest, with your yes at each step." [level=2] [ref=f17e46]
+        - generic [ref=f17e48]:
+          - tablist "Example conversations" [ref=f17e49]:
+            - tab "Renewal from a photo" [selected] [ref=f17e50] [cursor=pointer]
+            - tab "Wait on hold for me" [ref=f17e51] [cursor=pointer]
+            - button "Replay conversation" [ref=f17e52] [cursor=pointer]: ↻ Replay
+          - generic [ref=f17e53]:
+            - paragraph [ref=f17e54]: Maria is a synthetic person. This is a demo conversation.
+            - generic [ref=f17e56]:
+              - generic [ref=f17e57]:
+                - generic [aria-hidden] [ref=f17e58]: ▣
+                - text: Photo of county letter
+              - text: I got this letter. I do not know what it wants.
+    - region [ref=f17e64]:
+      - generic [ref=f17e65]:
+        - paragraph [ref=f17e66]: Connected help
+        - heading "Your agent talks to theirs." [level=2] [ref=f17e67]
+        - paragraph [ref=f17e68]: Agencies and nonprofits have agents too. Yours ask, hand off and confirm, so you stop carrying paper between offices.
+        - generic [ref=f17e70]:
+          - 'img "Diagram: Maria''s agent, the county agent and a case manager''s agent pass a document request and a decision between each other, with Maria approving the share." [ref=f17e71]':
+            - generic [ref=f17e72]:
+              - img "Mano, an open helping hand" [ref=f17e74]
+              - heading "Maria's agent" [level=3] [ref=f17e84]
+              - paragraph [ref=f17e85]: Works for Maria
+            - generic [ref=f17e86]:
+              - img "Mano, an open helping hand" [ref=f17e88]
+              - heading "County agent" [level=3] [ref=f17e98]
+              - paragraph [ref=f17e99]: Works for the county office
+            - generic [ref=f17e100]:
+              - img "Mano, an open helping hand" [ref=f17e102]
+              - heading "Case manager's agent" [level=3] [ref=f17e112]
+              - paragraph [ref=f17e113]: Works for her case manager
+          - generic [ref=f17e116]:
+            - generic [ref=f17e118]:
+              - paragraph [ref=f17e119]: County agent to Maria's agent
+              - paragraph [ref=f17e120]: We need one pay stub for March.
+            - generic [ref=f17e121]:
+              - button "Show message 1" [ref=f17e122] [cursor=pointer]: "1"
+              - button "Show message 2" [ref=f17e123] [cursor=pointer]: "2"
+              - button "Show message 3" [ref=f17e124] [cursor=pointer]: "3"
+              - button "Show message 4" [ref=f17e125] [cursor=pointer]: "4"
+              - button "Show message 5" [ref=f17e126] [cursor=pointer]: "5"
+          - paragraph [ref=f17e127]: Agents share a case only when the resident says yes, for one purpose, and the resident can take that access back. Every message above is an example with synthetic people.
+    - region [ref=f17e128]:
+      - generic [ref=f17e129]:
+        - paragraph [ref=f17e130]: What Mano does
+        - heading "One agent for the paperwork in your life." [level=2] [ref=f17e131]
+        - generic [ref=f17e132]:
+          - article [ref=f17e133]:
+            - heading "Apply for help" [level=3] [ref=f17e135]
+            - paragraph [ref=f17e136]: Benefits, cash assistance, jobs, scholarships and training. Mano finds programs you may qualify for and applies with your approval.
+          - article [ref=f17e137]:
+            - heading "Fill out any form" [level=3] [ref=f17e139]
+            - paragraph [ref=f17e140]: Hand Mano any form, on paper or online. Mano fills it from what you have already shared and shows you the exact version before it goes anywhere.
+          - article [ref=f17e141]:
+            - heading "Renew on time" [level=3] [ref=f17e143]
+            - paragraph [ref=f17e144]: Mano tracks renewal dates, gathers what is needed and prepares the packet early, so a missed date does not end your help.
+          - article [ref=f17e145]:
+            - heading "Read your mail" [level=3] [ref=f17e147]
+            - paragraph [ref=f17e148]: Take a photo of a letter. Mano reads it, says what it asks for and adds every deadline to your list.
+          - article [ref=f17e149]:
+            - heading "Wait on hold" [level=3] [ref=f17e151]
+            - paragraph [ref=f17e152]: Mano waits on hold and calls you when a person picks up. On calls, Mano says it is calling for you and that it is your automated assistant, and says the call is transcribed.
+          - article [ref=f17e153]:
+            - heading "Track every deadline" [level=3] [ref=f17e155]
+            - paragraph [ref=f17e156]: One list of what is due, what was sent and what came back. Mano reminds you before anything is late.
+          - article [ref=f17e157]:
+            - heading "Job updates by text" [level=3] [ref=f17e159]
+            - paragraph [ref=f17e160]: Mano watches for openings that fit, drafts applications and texts you when there is something to approve.
+          - article [ref=f17e161]:
+            - heading "Any language" [level=3] [ref=f17e163]
+            - paragraph [ref=f17e164]: Talk to Mano in the language you use at home. Notices and letters are explained in that language too.
+    - region [ref=f17e165]:
+      - generic [ref=f17e167]:
+        - generic [ref=f17e168]:
+          - paragraph [ref=f17e169]: You stay in charge
+          - heading "Nothing happens without your approval." [level=2] [ref=f17e170]
+        - generic [ref=f17e171]:
+          - heading "You approve every step" [level=3] [ref=f17e172]
+          - paragraph [ref=f17e173]: Every send, call and share shows you the exact document and recipient first. A changed document needs a fresh yes.
+        - generic [ref=f17e174]:
+          - heading "You choose who sees your case" [level=3] [ref=f17e175]
+          - paragraph [ref=f17e176]: Share a case with one office or one case manager, for one purpose. Your agent and theirs only see what the share covers.
+        - generic [ref=f17e177]:
+          - heading "You can take access back" [level=3] [ref=f17e178]
+          - paragraph [ref=f17e179]: Revoke a share at any time. Future access stops at once, and Mano tells you what was already sent.
+    - region [ref=f17e180]:
+      - generic [ref=f17e181]:
+        - paragraph [ref=f17e182]: Pricing
+        - heading "Free for the help itself." [level=2] [ref=f17e183]
+        - generic [ref=f17e184]:
+          - article [ref=f17e185]:
+            - heading "Free" [level=3] [ref=f17e186]
+            - paragraph [ref=f17e187]: $0
+            - paragraph [ref=f17e188]: Free forever
+            - list [ref=f17e189]:
+              - listitem [ref=f17e190]: Applying for programs
+              - listitem [ref=f17e191]: Renewals and deadlines
+              - listitem [ref=f17e192]: Reminders before anything is due
+              - listitem [ref=f17e193]: Filing and tracking
+              - listitem [ref=f17e194]: Reading your mail from a photo
+          - article [ref=f17e195]:
+            - heading "Mano Plus" [level=3] [ref=f17e196]
+            - paragraph [ref=f17e197]: $8/month
+            - paragraph [ref=f17e198]: or $60 a year
+            - list [ref=f17e199]:
+              - listitem [ref=f17e200]: Everything in Free
+              - listitem [ref=f17e201]: Calls on your behalf, including waiting on hold
+              - listitem [ref=f17e202]: Mailed and faxed letters
+              - listitem [ref=f17e203]: A priority line when you need a person fast
+        - paragraph [ref=f17e204]: Nothing that keeps you from losing help sits behind the paid plan.
+    - region [ref=f17e205]:
+      - generic [ref=f17e206]:
+        - generic [ref=f17e207]:
+          - paragraph [ref=f17e208]: Questions
+          - heading "Plain answers." [level=2] [ref=f17e209]
+        - generic [ref=f17e210]:
+          - group [ref=f17e211]:
+            - generic "What does Mano cost? +" [ref=f17e212] [cursor=pointer]
+          - group [ref=f17e213]:
+            - generic "Who decides if I get help? +" [ref=f17e214] [cursor=pointer]
+          - group [ref=f17e215]:
+            - generic "Do I have to approve everything? +" [ref=f17e216] [cursor=pointer]
+          - group [ref=f17e217]:
+            - generic "Who can see my information? +" [ref=f17e218] [cursor=pointer]
+          - group [ref=f17e219]:
+            - generic "What happens on a phone call? +" [ref=f17e220] [cursor=pointer]
+          - group [ref=f17e221]:
+            - generic "What if a letter tells Mano to do something? +" [ref=f17e222] [cursor=pointer]
+          - group [ref=f17e223]:
+            - generic "Is Mano a government service? +" [ref=f17e224] [cursor=pointer]
+    - region [ref=f17e225]:
+      - generic [ref=f17e227]:
+        - img "Mano, an open helping hand" [ref=f17e229]
+        - heading "Text Mano and hand over the paperwork." [level=2] [ref=f17e238]
+        - paragraph [ref=f17e239]: Send a photo of the letter sitting on your counter. Mano reads it and tells you what happens next.
+        - generic [ref=f17e240]:
+          - link "Text Mano" [ref=f17e241] [cursor=pointer]:
+            - /url: sms:+15550100147
+          - link "Mano for agencies" [ref=f17e242] [cursor=pointer]:
+            - /url: /government
+        - paragraph [ref=f17e243]: "Demo placeholder number: (555) 010-0147."
+  - contentinfo [ref=f17e244]:
+    - generic [ref=f17e245]:
+      - generic [ref=f17e246]:
+        - generic [ref=f17e247]:
+          - generic [ref=f17e248]:
+            - img "Mano, an open helping hand" [ref=f17e249]
+            - text: Mano
+          - paragraph [ref=f17e258]: Apply once, for anything that makes your life better.
+        - navigation "Footer" [ref=f17e259]:
+          - generic [ref=f17e260]:
+            - paragraph [ref=f17e261]: Product
+            - list [ref=f17e262]:
+              - listitem [ref=f17e263]:
+                - link "For you" [ref=f17e264] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=f17e265]:
+                - link "Government" [ref=f17e266] [cursor=pointer]:
+                  - /url: /government
+              - listitem [ref=f17e267]:
+                - link "Organizations" [ref=f17e268] [cursor=pointer]:
+                  - /url: /organizations
+              - listitem [ref=f17e269]:
+                - link "Pricing" [ref=f17e270] [cursor=pointer]:
+                  - /url: /#pricing
+          - generic [ref=f17e271]:
+            - paragraph [ref=f17e272]: Trust
+            - list [ref=f17e273]:
+              - listitem [ref=f17e274]: You approve every step
+              - listitem [ref=f17e275]: You choose who sees your case
+              - listitem [ref=f17e276]: Take access back any time
+      - paragraph [ref=f17e277]: Mano is an independent service. Mano is not a government agency and is not affiliated with any government office. Program decisions are made by the agency that runs each program.
+      - paragraph [ref=f17e278]: © 2026 Mano. Made with synthetic people in every example on this site. No real resident data is shown.
+  - alert [ref=f17e279]
