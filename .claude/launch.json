@@ -1,0 +1,46 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "site",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@mano/site",
+        "dev",
+        "--port",
+        "3007"
+      ],
+      "port": 3007
+    },
+    {
+      "name": "site-live",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@mano/site",
+        "dev",
+        "--port",
+        "3008"
+      ],
+      "port": 3008,
+      "env": {
+        "NEXT_PUBLIC_SMS_NUMBER": "+18015550100"
+      }
+    },
+    {
+      "name": "site-renewals",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--dir",
+        "/Users/coven/Desktop/code/.worktrees/mano/lap-496-renewals",
+        "--filter",
+        "@mano/site",
+        "dev",
+        "--port",
+        "3010"
+      ],
+      "port": 3010
+    }
+  ]
+}
