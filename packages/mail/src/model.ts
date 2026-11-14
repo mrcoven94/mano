@@ -28,6 +28,10 @@ export const HOSTED_READING_MODELS = Object.freeze([
   "google/gemini-3.8-flash",
 ] as const);
 export type HostedReadingModel = (typeof HOSTED_READING_MODELS)[number];
+// Anthropic compiles a strict schema and refuses one with more than 16 nullable
+// fields; a page's schema has 26. These models get the schema in words only,
+// which every request already carries, and readPage's parser and retry.
+const SCHEMA_IN_WORDS_ONLY: ReadonlySet<string> = new Set(["anthropic/claude-haiku-5.5", "anthropic/claude-sonnet-5.5"]);
 
 // The reading model a setting names, the default when it names none, or null
 // when it names one Mail does not allow, so the reader calls no model.
@@ -440,7 +444,7 @@ function openWeightBody(req: ResponsesRequest, route: OpenWeightRoute): OpenWeig
     model: route.model,
     messages,
     ...(req.max_output_tokens === undefined ? {} : { max_tokens: req.max_output_tokens }),
-    ...(format ? { response_format: { type: "json_schema" as const, json_schema: { name: format.name, schema: format.schema, ...(format.strict === undefined ? {} : { strict: format.strict }) } } } : {}),
+    ...(format && !SCHEMA_IN_WORDS_ONLY.has(route.model) ? { response_format: { type: "json_schema" as const, json_schema: { name: format.name, schema: format.schema, ...(format.strict === undefined ? {} : { strict: format.strict }) } } } : {}),
     ...route.pin,
   };
 }

@@ -6,7 +6,7 @@
 //
 // Protocol for third-party system entries (no import needed):
 // - Parent to child once, when the broker is enabled:
-//   { channel: "mano-eval-broker-hello", keyAvailable: bool, route: "openrouter" | "meta" | null }
+//   { channel: "mano-eval-broker-hello", keyAvailable: bool, route: "openrouter" | "meta" | null, model?: string }
 // - Child to parent per fetch:
 //   { channel: "mano-eval-broker", id, url, method, headers, body?, timeoutMs? }
 // - Child to parent to stop a fetch: { channel: "mano-eval-broker", cancel: id }
@@ -38,7 +38,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
     if (msg.channel === HELLO && helloResolve) {
       const r = helloResolve;
       helloResolve = null;
-      r({ keyAvailable: msg.keyAvailable === true, route: msg.route ?? null, chatUrl: msg.chatUrl ?? null });
+      r({ keyAvailable: msg.keyAvailable === true, route: msg.route ?? null, chatUrl: msg.chatUrl ?? null, model: msg.model ?? null });
       return;
     }
     if (msg.channel !== CHANNEL || !pending.has(msg.id)) return;

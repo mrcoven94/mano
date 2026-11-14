@@ -180,6 +180,13 @@ describe("which client createModelClient builds", () => {
     expect(sent[0]!.body.provider).toEqual({ zdr: true, data_collection: "deny" });
   });
 
+  it("gives Anthropic's models the schema in words only, since they refuse a strict schema this large", async () => {
+    const { model, sent } = stub([answering(RENEWAL_PAGE)], { ...ENV, MANO_READER_MODEL: "anthropic/claude-sonnet-5.5" });
+    await read(model);
+    expect(sent[0]!.body.response_format).toBeUndefined();
+    expect(sent[0]!.body.messages[0]!.content).toContain("matching this JSON schema");
+  });
+
   it("calls no model when MANO_READER_MODEL names one Mail does not allow", () => {
     const { model } = stub([answering(RENEWAL_PAGE)], { ...ENV, MANO_READER_MODEL: "other/model" });
     expect(model).toBeInstanceOf(RecordedModelClient);

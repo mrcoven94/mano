@@ -273,8 +273,8 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
             reply({ ok: false, error: "broker denied: body is not JSON" });
             return;
           }
-          if (parsed.model !== undefined && parsed.model !== OPEN_WEIGHT_MODEL) {
-            reply({ ok: false, error: "broker denied: not the open-weight model" });
+          if (parsed.model !== undefined && parsed.model !== OPEN_WEIGHT_MODEL && parsed.model !== evalModel()) {
+            reply({ ok: false, error: "broker denied: not the chosen model" });
             return;
           }
           const sent = pinnedChatBody(parsed);
@@ -327,7 +327,7 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
     if (broker) {
       try {
         const route = modelRoute();
-        child.send({ channel: HELLO, keyAvailable: route !== null, route, ...(route === "modal" ? { chatUrl: modalChatUrl() } : {}) });
+        child.send({ channel: HELLO, keyAvailable: route !== null, route, ...(route === "modal" ? { chatUrl: modalChatUrl() } : {}), ...(route === "openrouter" ? { model: evalModel() } : {}) });
       } catch { /* child went away */ }
     }
     let stdout = "";

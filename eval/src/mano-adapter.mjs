@@ -59,12 +59,13 @@ class Meter {
 
 // Mail's own model client for the route the parent chose, over the broker. The
 // parent replaces the placeholder key, and every answer's usage is counted here,
-// retries included.
-export function brokeredModelClient({ route, chatUrl, fetchImpl, meter }) {
+// retries included. On OpenRouter, Mail builds its request for the model the
+// parent chose, as it would in production, and the parent sets that model again.
+export function brokeredModelClient({ route, chatUrl, model = null, fetchImpl, meter }) {
   const env = route === "modal"
     ? { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: chatUrl, MODAL_PROXY_TOKEN: BROKERED_KEY }
     : route === "openrouter"
-    ? { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: BROKERED_KEY }
+    ? { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: BROKERED_KEY, ...(model ? { MANO_READER_MODEL: model } : {}) }
     : { META_MODEL_API_KEY: BROKERED_KEY };
   const fetchFn = async (url, init) => {
     const res = await fetchImpl(url, init);
@@ -241,10 +242,10 @@ export async function letterResult(letter, reading, { client, fetchImpl, hasDocu
   return out;
 }
 
-export async function manoHousehold(input, { route, chatUrl, fetchImpl, sharp, read = readMail }) {
+export async function manoHousehold(input, { route, chatUrl, model = null, fetchImpl, sharp, read = readMail }) {
   const started = Date.now();
   const meter = new Meter();
-  const client = brokeredModelClient({ route, chatUrl, fetchImpl, meter });
+  const client = brokeredModelClient({ route, chatUrl, model, fetchImpl, meter });
   const output = {
     householdId: input.householdId,
     baseline: "mano",
