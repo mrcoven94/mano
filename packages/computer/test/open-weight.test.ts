@@ -50,6 +50,25 @@ describe("computer use on the open-weight model", () => {
     expect((bodies[0] as unknown as { instructions: string }).instructions).not.toContain("Coordinates are pixels");
   });
 
+  test("a model that aims in pixels is told pixels, and its points run and replay as sent", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const replies = [{ output: [fn("a", { actions: [{ type: "click", x: 865, y: 400 }] })] }, { output: [say("ACCEPTED")] }];
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init!.body)));
+      return Response.json({ id: `r${bodies.length}`, status: "completed", output: replies[bodies.length - 1]!.output });
+    }) as typeof fetch;
+    const client = new OpenWeightModelClient({ apiKey: "k", model: "anthropic/claude-haiku-5.5", fetchImpl, retryDelaysMs: [] });
+    const computer = new FakeComputer();
+    await runLoop(computer, client, "Fill the form.", { model: "anthropic/claude-haiku-5.5" });
+    expect(computer.actions[0]).toEqual([{ type: "click", button: "left", x: 865, y: 400 }]);
+    const replayed = (bodies[1]!.input as { type?: string; arguments?: string }[]).find((item) => item.type === "function_call");
+    expect(JSON.parse(replayed!.arguments!).actions[0]).toMatchObject({ x: 865, y: 400 });
+    expect(JSON.stringify((bodies[0]!.tools as unknown[])[0])).toContain("pixels in the screenshot");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).not.toContain("0 to 1000");
+    const off = new OpenWeightModelClient({ apiKey: "k", model: "openai/gpt-6-luna", fetchImpl: (async () => Response.json({ id: "r", status: "completed", output: [fn("a", { actions: [{ type: "click", x: 1280, y: 10 }] })] })) as typeof fetch, retryDelaysMs: [] });
+    await expect(runLoop(new FakeComputer(), off, "Fill the form.", { model: "openai/gpt-6-luna" })).rejects.toThrow("bad coordinate");
+  });
+
   test("a scroll with no point scrolls at the middle of the screen, and a scroll with half a point is refused", async () => {
     const { client } = scripted([{ output: [fn("a", { actions: [{ type: "scroll", scroll_y: 300 }] })] }, { output: [say("ACCEPTED")] }]);
     const computer = new FakeComputer();

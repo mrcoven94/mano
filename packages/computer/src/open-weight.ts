@@ -81,17 +81,28 @@ const GRID = 1000;
 const toPixel = (value: number, size: number): number => Math.min(size - 1, Math.round((value * size) / GRID));
 const toGrid = (value: number, size: number): number => Math.round((value * GRID) / size);
 const GRID_COORDINATES = "Coordinates are on a grid from 0 to 1000 across and down the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.";
+// Claude and GPT aim in the screenshot's own pixels. Asked for a field centred
+// at (865, 399) on a 1280 by 800 screenshot, each answered within a pixel, and
+// told the grid, both filled 0 of 49 fields on the layouts probe (November
+// 14, 2026). These keep the loop's pixel instructions and convert nothing.
+const PIXEL_AIMING_MODELS: ReadonlySet<string> = new Set(["anthropic/claude-haiku-5.5", "anthropic/claude-sonnet-5.5", "openai/gpt-6-luna", "openai/gpt-6.1-sol"]);
+interface Aim {
+  max: { x: number; y: number };
+  toPixel: (value: number, size: number) => number;
+  toModel: (value: number, size: number) => number;
+}
+const ON_GRID: Aim = { max: { x: GRID, y: GRID }, toPixel, toModel: toGrid };
+const IN_PIXELS: Aim = { max: { x: SCREEN.width - 1, y: SCREEN.height - 1 }, toPixel: (value) => value, toModel: (value) => value };
 // Far past any form, and short of the thousands of wheel clicks a huge value
 // would queue on the desktop.
 const MAX_SCROLL = 5000;
 
 // Forms need no dragging, hovering or other mouse buttons, so the model is not
 // offered them.
-const COMPUTER_TOOL = Object.freeze({
+const computerTool = (where: string) => ({
   type: "function",
   name: TOOL_NAME,
-  description:
-    "Act on the browser: runs these actions in order, then you are shown the new screen. x and y are on a grid from 0 to 1000 across and down the screen, with (0, 0) at the top-left, whatever the screen's size.",
+  description: `Act on the browser: runs these actions in order, then you are shown the new screen. ${where}`,
   parameters: {
     type: "object",
     properties: {
@@ -117,6 +128,8 @@ const COMPUTER_TOOL = Object.freeze({
     additionalProperties: false,
   },
 });
+const GRID_TOOL = Object.freeze(computerTool("x and y are on a grid from 0 to 1000 across and down the screen, with (0, 0) at the top-left, whatever the screen's size."));
+const PIXEL_TOOL = Object.freeze(computerTool("x and y are pixels in the screenshot, with (0, 0) at the top-left."));
 
 // Other computer-use actions a model may reach for, which this tool does not offer.
 const KNOWN_ACTIONS = new Set(["left_click", "right_click", "middle_click", "triple_click", "move", "mouse_move", "drag", "left_click_drag", "hover", "key", "press", "hotkey", "zoom", "cursor_position", "navigate", "goto", "open_url", "back", "forward", "select", "clear", "fill", "focus", "submit"]);
@@ -124,13 +137,13 @@ const KNOWN_ACTIONS = new Set(["left_click", "right_click", "middle_click", "tri
 // Every failure below is a fixed string: what the model sent can echo the
 // person's values, and errors get logged. Keys are checked by the loop, which
 // holds the list for both model paths.
-function parseAction(raw: unknown): ComputerAction {
+function parseAction(raw: unknown, aim: Aim): ComputerAction {
   const a = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const within = (value: unknown, min: number, max: number): number => {
     if (typeof value !== "number" || !(value >= min && value <= max)) throw new Error("the model sent an action with a bad coordinate");
     return Math.round(value);
   };
-  const point = () => ({ x: toPixel(within(a["x"], 0, GRID), SCREEN.width), y: toPixel(within(a["y"], 0, GRID), SCREEN.height) });
+  const point = () => ({ x: aim.toPixel(within(a["x"], 0, aim.max.x), SCREEN.width), y: aim.toPixel(within(a["y"], 0, aim.max.y), SCREEN.height) });
   switch (a["type"]) {
     case "click":
       // Never run a right click as a left one.
@@ -170,7 +183,7 @@ interface FunctionCall {
 // Every call in the reply is checked before any of them runs. OpenRouter's
 // schema leaves a call's status optional, so only a status that is present
 // and says otherwise is refused.
-function parseCall(item: Record<string, unknown>): FunctionCall {
+function parseCall(item: Record<string, unknown>, aim: Aim): FunctionCall {
   const { call_id: callId, name, status } = item;
   if (typeof callId !== "string" || callId === "") throw new Error("the model sent a call with no id");
   if (status !== undefined && status !== "completed") throw new Error("the model sent a call that did not complete");
@@ -183,7 +196,7 @@ function parseCall(item: Record<string, unknown>): FunctionCall {
   }
   const actions = (args as { actions?: unknown } | null)?.actions;
   if (!Array.isArray(actions)) throw new Error("the model sent no actions");
-  return { call_id: callId, actions: actions.map(parseAction) };
+  return { call_id: callId, actions: actions.map((a) => parseAction(a, aim)) };
 }
 
 // A closed list: anything else in a reply is a tool this path never offered,
@@ -192,10 +205,10 @@ const REPLY_ITEMS = new Set(["function_call", "message", "reasoning"]);
 
 // The loop runs one computer_call a turn, and a function call left unanswered
 // would be refused on replay, so calls made together become one batch.
-function fromOpenWeight(output: unknown[]): unknown[] {
+function fromOpenWeight(output: unknown[], aim: Aim): unknown[] {
   const items = output.map((item) => (typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {}));
   if (items.some((item) => typeof item["type"] !== "string" || !REPLY_ITEMS.has(item["type"]))) throw new Error("the model's reply holds something this path does not offer");
-  const calls = items.filter((item) => item["type"] === "function_call").map(parseCall);
+  const calls = items.filter((item) => item["type"] === "function_call").map((item) => parseCall(item, aim));
   const first = calls[0];
   if (!first) return output;
   const call: ComputerCall = {
@@ -218,10 +231,10 @@ function screen(imageUrl: unknown) {
 // A screenshot goes back in a user message, where OpenRouter documents image
 // input: a provider may flatten a function's result to text, which would
 // leave the model blind and still clicking.
-function toOpenWeight(input: unknown[]): unknown[] {
+function toOpenWeight(input: unknown[], aim: Aim): unknown[] {
   return input.flatMap((item) => {
     if (isComputerCall(item)) {
-      const actions = item.actions.map((a) => ("x" in a && "y" in a ? { ...a, x: toGrid(a.x, SCREEN.width), y: toGrid(a.y, SCREEN.height) } : a));
+      const actions = item.actions.map((a) => ("x" in a && "y" in a ? { ...a, x: aim.toModel(a.x, SCREEN.width), y: aim.toModel(a.y, SCREEN.height) } : a));
       return [{ type: "function_call", call_id: item.call_id, name: TOOL_NAME, arguments: JSON.stringify({ actions }) }];
     }
     const entry = item as { role?: unknown; content?: unknown; type?: unknown; call_id?: unknown; output?: { image_url?: unknown } };
@@ -256,10 +269,12 @@ export interface OpenWeightModelOptions {
 export class OpenWeightModelClient implements ModelClient {
   private inner: FetchModelClient;
   private modelId: string;
+  private aim: Aim;
 
   constructor({ modalUrl, model, ...options }: OpenWeightModelOptions) {
     // Only leaving it out means OpenRouter: an empty URL is refused below.
     this.modelId = modalUrl === undefined ? (model ?? OPEN_WEIGHT_MODEL_ID) : MODAL_MODEL_ID;
+    this.aim = PIXEL_AIMING_MODELS.has(this.modelId) ? IN_PIXELS : ON_GRID;
     this.inner = modalUrl !== undefined
       ? new FetchModelClient({ ...options, fetchImpl: refusingRedirects(options.fetchImpl ?? fetch), baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
       : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
@@ -267,9 +282,11 @@ export class OpenWeightModelClient implements ModelClient {
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
     if (request.model !== this.modelId) throw new Error("this path runs only the model it was built for: Meta's open-weight model unless another was chosen");
-    const response = await this.inner.createResponse({ ...request, instructions: request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES), tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
+    const onGrid = this.aim === ON_GRID;
+    const instructions = onGrid ? request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES) : request.instructions;
+    const response = await this.inner.createResponse({ ...request, instructions, tools: [onGrid ? GRID_TOOL : PIXEL_TOOL], input: toOpenWeight(request.input, this.aim), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
-    return { ...response, output: fromOpenWeight(response.output) };
+    return { ...response, output: fromOpenWeight(response.output, this.aim) };
   }
 }
