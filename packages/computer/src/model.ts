@@ -12,6 +12,8 @@ export interface ResponsePayload {
   id: string;
   status: string;
   output: unknown[];
+  /** Token counts and, on OpenRouter, what the answer cost. Only counted, never read for actions. */
+  usage?: { cost?: number; input_tokens?: number; output_tokens?: number };
 }
 
 export interface ModelClient {
@@ -64,9 +66,10 @@ export class FetchModelClient implements ModelClient {
         continue;
       }
       if (res.ok) {
-        const payload = (await res.json()) as { id?: unknown; status?: unknown; output?: unknown };
+        const payload = (await res.json()) as { id?: unknown; status?: unknown; output?: unknown; usage?: unknown };
         if (typeof payload.id !== "string" || !Array.isArray(payload.output)) throw new Error("model returned a malformed response");
-        return { id: payload.id, status: typeof payload.status === "string" ? payload.status : "unknown", output: payload.output };
+        const usage = typeof payload.usage === "object" && payload.usage !== null ? (payload.usage as ResponsePayload["usage"]) : undefined;
+        return { id: payload.id, status: typeof payload.status === "string" ? payload.status : "unknown", output: payload.output, ...(usage ? { usage } : {}) };
       }
       const detail = await res.text().catch(() => "");
       if (!RETRYABLE_STATUSES.has(res.status) || !(await this.backoff(attempt++))) {

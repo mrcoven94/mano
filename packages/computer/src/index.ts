@@ -45,7 +45,7 @@ export type { Computer, ComputerOptions } from "./computer";
 export { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "./form-fill";
 export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "./loop";
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
-export { MODAL_MODEL_ID, OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, type OpenWeightModelOptions } from "./open-weight";
+export { HOSTED_COMPUTER_MODELS, MODAL_MODEL_ID, OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, hostedComputerModel, type HostedComputerModel, type OpenWeightModelOptions } from "./open-weight";
 export { ModalComputer, type ModalComputerOptions } from "./modal";
 export { PlaywrightComputer, type BrowserLauncher, type LaunchedPage, type PageLike, type PlaywrightComputerOptions } from "./playwright";
 export { editsForm, recordFrames, type Frame } from "./recorder";

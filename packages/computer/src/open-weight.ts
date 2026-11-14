@@ -10,7 +10,8 @@
  * reply is accepted whole or not at all: it must say it completed, hold only
  * items this path offers, and every call and action in it must parse.
  *
- * The model, the zero-retention pin and the OpenRouter endpoint are constants.
+ * The zero-retention pin and the OpenRouter endpoint are constants, and the
+ * model is one of HOSTED_COMPUTER_MODELS.
  * The one other place this client can send a screenshot is a Modal Shared
  * Endpoint serving the same model, named by modalUrl and held to Modal's domain
  * (rule 7, November 4 entry in docs/decisions.md). This path never raises a safety check: there is no hosted
@@ -24,6 +25,25 @@ import { FetchModelClient, type ModelClient, type ResponsePayload, type Response
 
 export const OPEN_WEIGHT_BASE_URL = "https://openrouter.ai/api/v1";
 export const OPEN_WEIGHT_MODEL_ID = "meta/muse-spark-open";
+// The models this path may fill with on OpenRouter. Every request to any of
+// them carries the zero-retention pin below.
+export const HOSTED_COMPUTER_MODELS = Object.freeze([
+  OPEN_WEIGHT_MODEL_ID,
+  "anthropic/claude-haiku-5.5",
+  "anthropic/claude-sonnet-5.5",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
+  "google/gemini-3.8-flash",
+] as const);
+export type HostedComputerModel = (typeof HOSTED_COMPUTER_MODELS)[number];
+
+// The model a setting names, the open-weight model when it names none, or null
+// when it names one this path does not allow.
+export function hostedComputerModel(raw: string | undefined): HostedComputerModel | null {
+  const name = raw?.trim() ?? "";
+  if (name === "") return OPEN_WEIGHT_MODEL_ID;
+  return (HOSTED_COMPUTER_MODELS as readonly string[]).includes(name) ? (name as HostedComputerModel) : null;
+}
 
 const OPEN_WEIGHT_BODY = Object.freeze({
   // Only endpoints with zero data retention, and no provider that stores or
@@ -226,6 +246,8 @@ export interface OpenWeightModelOptions {
   apiKey: string;
   /** A Modal Shared Endpoint's URL, with apiKey as its proxy token. Without one, OpenRouter. */
   modalUrl?: string | undefined;
+  /** The model on OpenRouter. Defaults to the open-weight model. */
+  model?: HostedComputerModel;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
   retryDelaysMs?: number[];
@@ -235,16 +257,16 @@ export class OpenWeightModelClient implements ModelClient {
   private inner: FetchModelClient;
   private modelId: string;
 
-  constructor({ modalUrl, ...options }: OpenWeightModelOptions) {
+  constructor({ modalUrl, model, ...options }: OpenWeightModelOptions) {
     // Only leaving it out means OpenRouter: an empty URL is refused below.
-    this.modelId = modalUrl === undefined ? OPEN_WEIGHT_MODEL_ID : MODAL_MODEL_ID;
+    this.modelId = modalUrl === undefined ? (model ?? OPEN_WEIGHT_MODEL_ID) : MODAL_MODEL_ID;
     this.inner = modalUrl !== undefined
       ? new FetchModelClient({ ...options, fetchImpl: refusingRedirects(options.fetchImpl ?? fetch), baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
       : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
   }
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
-    if (request.model !== this.modelId) throw new Error("this path runs only Meta's open-weight model");
+    if (request.model !== this.modelId) throw new Error("this path runs only the model it was built for: Meta's open-weight model unless another was chosen");
     const response = await this.inner.createResponse({ ...request, instructions: request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES), tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
