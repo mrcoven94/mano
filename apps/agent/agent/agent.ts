@@ -40,9 +40,9 @@
 import { defineAgent } from "eve";
 import { mockModel } from "eve/evals";
 
-import { MODEL_CONTEXT_WINDOW_TOKENS, createMuseModel, selectModelRoute } from "./lib/muse.js";
+import { contextWindowFor, createMuseModel, selectModelRoute } from "./lib/muse.js";
 
-// Muse through the route muse.ts picks. Without a key for that route the
+// The model on the route muse.ts picks. Without a key for that route the
 // agent runs a stand-in that says so, so local dev and tests work with
 // no accounts; production always sets the key.
 const route = selectModelRoute();
@@ -65,7 +65,7 @@ if (!process.env.ENGINE_URL || !process.env.MANO_ENGINE_AGENT_TOKEN) {
 
 export default defineAgent({
   model,
-  modelContextWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS,
+  modelContextWindowTokens: contextWindowFor(route.modelId),
   // No default tools: no shell, no files, no sandbox. Every capability
   // below is an authored Mano tool with its own approval policy.
   defaultTools: false,

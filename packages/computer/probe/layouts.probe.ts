@@ -28,7 +28,7 @@ import { recordFrames } from "../src/recorder";
  * META_MODEL_API_KEY), open (Muse Spark Open, on Modal with MODAL_ENDPOINT_URL
  * and MODAL_PROXY_TOKEN, otherwise needs OPENROUTER_API_KEY) or route (whichever
  * the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter). On
- * OpenRouter, MANO_COMPUTER_MODEL picks the model, as it does for the agent.
+ * OpenRouter, MANO_FILL_MODEL picks the model, as it does for the agent.
  * MEASURE_LIMITS: agent (the fill's own step and time limits, and its recording
  * of each screen), probe (looser, to see what those limits cost) or both, the
  * default, which runs each layout twice and prints the rows side by side.
@@ -77,8 +77,8 @@ function modelFromEnv(): { label: string; id: string; client?: ModelClient } {
   if (openRoute) {
     const apiKey = process.env["OPENROUTER_API_KEY"];
     if (!apiKey) throw new Error("MEASURE_MODEL=open needs OPENROUTER_API_KEY");
-    const id = hostedComputerModel(process.env["MANO_COMPUTER_MODEL"]);
-    if (!id) throw new Error("MANO_COMPUTER_MODEL names a model this path does not allow");
+    const id = hostedComputerModel(process.env["MANO_FILL_MODEL"]);
+    if (!id) throw new Error("MANO_FILL_MODEL names a model this path does not allow");
     return { label: id, id, client: new Billed(new OpenWeightModelClient({ apiKey, model: id })) };
   }
   if (wanted === "meta" || wanted === "route") {

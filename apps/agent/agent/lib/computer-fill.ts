@@ -1,7 +1,8 @@
 // Fills a form on the person's own computer: the hosted desktop (Modal)
-// or, for local runs, the Playwright stand-in. The model is the agent's:
-// Meta's open-weight model when MANO_MODEL_PROVIDER=openrouter, otherwise
-// the Meta Model API. Each fill opens a fresh draft on the sandbox portal,
+// or, for local runs, the Playwright stand-in. The route is the agent's:
+// with MANO_MODEL_PROVIDER=openrouter, the model MANO_FILL_MODEL names
+// from the computer's allowed list (Meta's open-weight model when unset),
+// otherwise the Meta Model API. Each fill opens a fresh draft on the sandbox portal,
 // the model types the values the person will
 // approve and moves to the form's next step, which saves the draft. The
 // portal's own checks run on the values. The fill then reads the draft
@@ -20,6 +21,7 @@ import {
   FILL_MAX_STEPS,
   FetchModelClient,
   OpenWeightModelClient,
+  hostedComputerModel,
   computerFromEnv,
   editsForm,
   fillTask,
@@ -83,14 +85,16 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
   });
   // The hosted computer tool exists only on the Meta path.
   const openWeight = route.name === "openrouter" || route.name === "modal";
+  const hosted = route.name === "openrouter" ? hostedComputerModel(env.MANO_FILL_MODEL) : null;
+  if (route.name === "openrouter" && !hosted) return { unavailable: "computer model not allowed" };
   const model = openWeight
-    ? new OpenWeightModelClient({ apiKey: route.apiKey, modalUrl: route.name === "modal" ? env.MODAL_ENDPOINT_URL : undefined })
+    ? new OpenWeightModelClient({ apiKey: route.apiKey, ...(route.name === "modal" ? { modalUrl: env.MODAL_ENDPOINT_URL } : { model: hosted! }) })
     : new FetchModelClient({ baseUrl: route.baseURL, apiKey: route.apiKey });
   const deadline = Number(env.MANO_FILL_DEADLINE_MS);
   return {
     computer,
     model,
-    modelId: openWeight ? route.modelId : (env.MANO_COMPUTER_MODEL ?? DEFAULT_MODEL),
+    modelId: hosted ?? (openWeight ? route.modelId : (env.MANO_COMPUTER_MODEL ?? DEFAULT_MODEL)),
     deadlineMs: Number.isFinite(deadline) && deadline > 0 ? deadline : FILL_DEADLINE_MS,
     draftToken: env.SANDBOX_PORTAL_DRAFT_TOKEN,
   };
