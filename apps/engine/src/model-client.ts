@@ -232,8 +232,72 @@ export class StandInModelClient implements ModelComplete {
   }
 }
 
+// Engine's chat through OpenRouter, for MANO_MODEL_PROVIDER=openrouter with no
+// Meta key: one model from HOSTED_CHAT_MODELS, every request pinned to
+// zero-retention endpoints that collect no data, one try, fixed error words.
+export const HOSTED_CHAT_MODELS: readonly string[] = Object.freeze([
+  "meta/muse-spark-open",
+  "anthropic/claude-haiku-5.5",
+  "anthropic/claude-sonnet-5.5",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
+  "google/gemini-3.8-flash",
+]);
+const HOSTED_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+export class HostedChatClient implements ModelComplete {
+  constructor(
+    private readonly apiKey: string,
+    readonly model: string,
+    private readonly fetchFn: typeof fetch = boundFetch,
+    private readonly timeoutMs = 15000,
+  ) {
+    if (!apiKey) throw new Error("A model API key is required.");
+    if (!HOSTED_CHAT_MODELS.includes(model)) throw new Error("Unknown hosted model ID.");
+  }
+
+  async complete(req: ModelRequest): Promise<{ text: string; model: string }> {
+    let res: Response;
+    try {
+      res = await this.fetchFn(HOSTED_CHAT_URL, {
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.timeoutMs),
+        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: "user", content: req.input }],
+          max_tokens: 1024,
+          reasoning: { effort: "low", exclude: true },
+          provider: { zdr: true, data_collection: "deny" },
+        }),
+      });
+    } catch (err) {
+      throw safeError(err);
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new ModelFailure(failed(res.status));
+    }
+    const data = (await res.json().catch(() => null)) as { choices?: { finish_reason?: unknown; message?: { content?: unknown } }[] } | null;
+    const choice = data?.choices?.length === 1 ? data.choices[0] : undefined;
+    if (choice?.finish_reason !== "stop" || typeof choice.message?.content !== "string") throw new ModelFailure("Model run not completed.");
+    return { text: choice.message.content.trim(), model: this.model };
+  }
+}
+
+// The hosted model this environment chose, or null.
+export function hostedChatModel(env: ModelClientEnv): string | null {
+  if (env.META_MODEL_API_KEY || env.MANO_MODEL_PROVIDER !== "openrouter" || !env.OPENROUTER_API_KEY) return null;
+  const model = env.MANO_AGENT_MODEL?.trim() || "meta/muse-spark-open";
+  return HOSTED_CHAT_MODELS.includes(model) ? model : null;
+}
+
 export interface ModelClientEnv {
   META_MODEL_API_KEY?: string;
+  MANO_MODEL_PROVIDER?: string;
+  MANO_AGENT_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -251,6 +315,8 @@ export function setModelClientFactoryForTests(factory: ((env: ModelClientEnv) =>
 
 export function createModelClient(env: ModelClientEnv, fetchFn?: typeof fetch): ModelComplete {
   if (testFactory) return testFactory(env);
+  const hosted = hostedChatModel(env);
+  if (hosted) return new HostedChatClient(env.OPENROUTER_API_KEY!, hosted, fetchFn);
   if (!env.META_MODEL_API_KEY) {
     // The stand-in must be an explicit choice: development only. Outside
     // development with no key, fail loud instead of answering from a fake.

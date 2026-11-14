@@ -10,7 +10,7 @@ export interface Env {
   MANO_TRY_ORIGIN?: string;
   MANO_AGENT_URL?: string;
   MANO_AGENT_SECRET?: string;
-  META_MODEL_API_KEY: string;
+  META_MODEL_API_KEY?: string;
   ENCRYPTION_KEK_B64: string;
   SESSION_SECRET?: string;
   MANO_ENV?: string;
@@ -38,6 +38,15 @@ export interface Env {
   MANO_GUARDIAN_TOKEN?: string;
   MANO_GUARDIAN_KEY_ID?: string;
   MANO_GUARDIAN_KEY_SECRET?: string;
+  // Guardian on a hosted model instead, through OpenRouter: the model, from
+  // HOSTED_GUARDIAN_MODELS, with OPENROUTER_API_KEY. Only with none of the
+  // four above set. Keep it on a different model from the agent's.
+  MANO_GUARDIAN_MODEL?: string;
+  // "openrouter" with OPENROUTER_API_KEY answers Engine's own chat route with
+  // MANO_AGENT_MODEL through OpenRouter when no Meta key is set.
+  MANO_MODEL_PROVIDER?: string;
+  MANO_AGENT_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
   // Hold calls (src/calls/provider.ts parseCallConfig): our own numbers Mano
   // may dial, the one person who may use it and the one phone it rings.
   MANO_CALL_ALLOWED_NUMBERS?: string;

@@ -1,4 +1,4 @@
-import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker } from "@mano/guardian";
+import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, HOSTED_GUARDIAN_MODELS, MisconfiguredChecker, hostedGuardianFetch } from "@mano/guardian";
 import type { TryEvent } from "@mano/protocol";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
@@ -11,18 +11,24 @@ import { boundFetch } from "../fetch.js";
 // cold blocks with "try again in a few minutes" and leaves it starting,
 // and a check that finds it warm keeps it up for the person's yes, when
 // the gateway checks again. Guardian receives the action as proposed,
-// every value as written (docs/decisions.md, November 3, 2026).
+// every value as written (docs/decisions.md, November 3, 2026). Guardian
+// can also run on a hosted model through OpenRouter (MANO_GUARDIAN_MODEL),
+// with the same prompt, the same answer rules and the same blocks on any
+// failure; a hosted model is never cold.
 
 export interface GuardianEnv {
   MANO_GUARDIAN_URL?: string;
   MANO_GUARDIAN_TOKEN?: string;
   MANO_GUARDIAN_KEY_ID?: string;
   MANO_GUARDIAN_KEY_SECRET?: string;
+  MANO_GUARDIAN_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
 }
 
 export type CheckerSetting =
   | { kind: "local-rules" }
   | { kind: "guardian"; url: string; token: string; proxyAuth?: { keyId: string; secret: string } }
+  | { kind: "hosted-guardian"; model: string; apiKey: string }
   | { kind: "guardian-misconfigured" };
 
 const HTTP_URL = /^https?:\/\//i;
@@ -39,7 +45,13 @@ export function checkerSetting(env: GuardianEnv): CheckerSetting {
   const token = env.MANO_GUARDIAN_TOKEN?.trim() ?? "";
   const keyId = env.MANO_GUARDIAN_KEY_ID?.trim() ?? "";
   const secret = env.MANO_GUARDIAN_KEY_SECRET?.trim() ?? "";
-  if (url === "" && token === "" && keyId === "" && secret === "") return { kind: "local-rules" };
+  const model = env.MANO_GUARDIAN_MODEL?.trim() ?? "";
+  if (url === "" && token === "" && keyId === "" && secret === "") {
+    if (model === "") return { kind: "local-rules" };
+    const apiKey = env.OPENROUTER_API_KEY?.trim() ?? "";
+    return apiKey !== "" && HOSTED_GUARDIAN_MODELS.includes(model) ? { kind: "hosted-guardian", model, apiKey } : { kind: "guardian-misconfigured" };
+  }
+  if (model !== "") return { kind: "guardian-misconfigured" };
   if (!HTTP_URL.test(url) || token === "" || (keyId === "") !== (secret === "")) {
     return { kind: "guardian-misconfigured" };
   }
@@ -134,6 +146,17 @@ export function gatewayChecker(
       return { checker: new LocalRulesChecker() };
     case "guardian-misconfigured":
       return { checker: new MisconfiguredChecker() };
+    case "hosted-guardian": {
+      const timeoutMs = opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
+      const guardian: GuardianOptions = {
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        token: "unused: the hosted call carries its own key",
+        model: setting.model,
+        timeoutMs,
+        fetchImpl: hostedGuardianFetch({ apiKey: setting.apiKey, model: setting.model }),
+      };
+      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian, opts.trace), checkerTimeoutMs: timeoutMs + 1000 };
+    }
     case "guardian": {
       const timeoutMs = opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
       const guardian: GuardianOptions = {
