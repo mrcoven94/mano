@@ -40,7 +40,7 @@ Plain code then blocked 12 more unsafe letters by their links for every model. P
 
 Luna matches Muse on packets and readable copies, asks for more evidence, and costs about a thirteenth as much, but takes longer per household. Flash misses the fewest deadlines and never asks for a readable copy. The other parts were measured on their own tests:
 
-- **Mano's computer: Claude Haiku 5.5.** On seven layouts of our sandbox portal it had not seen (five fixed, two scrambled), Haiku and Claude Sonnet 5.5 each filled all 7 with 49 of 49 fields right. Haiku took a median of 13.8 s and $0.02 for all seven, Sonnet 14.9 s and $0.59. Gemini 3.8 Flash filled 5, GPT-6.1 Sol 4 and GPT-6 Luna 2.
+- **Mano's computer: Claude Haiku 5.5.** On seven layouts of our sandbox portal it had not seen (five fixed, two scrambled), Haiku and Claude Sonnet 5.5 each filled all 7 with 49 of 49 fields right. Haiku took a median of 13.8 s and $0.02 for all seven, Sonnet 14.9 s and $0.59. Muse Spark Open, as it ran in production, also filled all 7 and was faster, at 9.1 s. Gemini 3.8 Flash filled 5, GPT-6.1 Sol 4 and GPT-6 Luna 2.
 - **Guardian: Gemini 3.8 Flash**, a different model from the agent's and the computer's, so the model that proposes an action never checks it. On Guardian's own 44 actions and 15 renewal forms it matched Muse Glimmer 30B case for case (precision 0.923, recall 1.000, 15 of 15 renewals), at a median of 2.1 s against 1.9 s.
 - **Voice notes: ElevenLabs Scribe**, only in its zero-retention mode, which our current ElevenLabs plan does not include, so Gemini 3.8 Flash on zero-retention endpoints listens today. Both heard six synthetic notes word for word. The old fallback, Muse Spark Open, answered a crisis note instead of writing it down.
 
