@@ -55,6 +55,11 @@ MANO_REPLY_MODEL = "muse-spark-1.3"
 # model to turn it off again with a push.
 MANO_MODEL_PROVIDER = "openrouter"
 MANO_OPEN_WEIGHT_MODEL = "openai/gpt-6-luna"
+# "on" with the SPEECHIFY_API_KEY secret: a voice note sent to Mano gets its
+# reply spoken too, by Simba 3.5, after the text. Speechify receives Mano's
+# reply words and offers no zero-retention mode, which David accepted
+# (November 14, 2026 entry in docs/decisions.md).
+MANO_VOICE_REPLIES = "on"
 # One switch for every reaction and the eyes; "false" turns them all off.
 MANO_REACTIONS_ENABLED = "true"
 

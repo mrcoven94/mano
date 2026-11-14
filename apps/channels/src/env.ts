@@ -24,6 +24,10 @@ export interface Env {
   // "openrouter" with no Meta key sends every reply and crisis check to
   // MANO_OPEN_WEIGHT_MODEL; "modal" asks a Modal Shared Endpoint first.
   MANO_MODEL_PROVIDER?: string;
+  // "on" with SPEECHIFY_API_KEY: a voice note sent to Mano gets its reply
+  // as a voice note too, after the text.
+  MANO_VOICE_REPLIES?: string;
+  SPEECHIFY_API_KEY?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

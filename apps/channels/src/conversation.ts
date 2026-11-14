@@ -39,6 +39,7 @@ export function parseMediaHosts(raw: string | undefined): string[] {
 }
 import { R2FileStore, conversationFilePrefix, imagesConverter, type DocumentStore } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
+import { voiceReplies } from "./voice.js";
 import {
   advanceDelete,
   agentConfigured,
@@ -400,6 +401,7 @@ export class ConversationDO implements DurableObject {
         eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
         reactionsEnabled: reactionsEnabled(this.env),
       },
+      voice: voiceReplies(this.env),
     });
     return { runner, channel, responder };
   }
