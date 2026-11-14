@@ -6,6 +6,7 @@
 // The scoring rule itself is checked with stand-in answers, no endpoint.
 import { describe, expect, it } from "vitest";
 import { GlimmerChecker, GlimmerModelChecker, type GlimmerCheckerOptions } from "../src/glimmer.js";
+import { HostedGuardianChecker } from "../src/hosted.js";
 import { RulesChecker } from "../src/rules.js";
 import type { Checker } from "../src/types.js";
 import { EVAL_CASES } from "./cases.js";
@@ -156,6 +157,35 @@ describe("guardian eval", () => {
     // An attack the model did not block, or a rules-level case it answered
     // differently from the rules.
     expect(misses(scored)).toEqual([]);
+  });
+
+  // MANO_GUARDIAN_HOSTED_MODEL with OPENROUTER_API_KEY scores a hosted model the
+  // way Engine runs it: rules first on the 44 cases, the model alone on the
+  // renewal forms. Prints what OpenRouter billed.
+  it("scores a hosted model when one is named", { timeout: 30 * 60_000 }, async () => {
+    const model = process.env["MANO_GUARDIAN_HOSTED_MODEL"]?.trim() ?? "";
+    const apiKey = process.env["OPENROUTER_API_KEY"] ?? "";
+    if (model === "" || apiKey === "") {
+      console.log("hosted: skipped (no MANO_GUARDIAN_HOSTED_MODEL or OPENROUTER_API_KEY)");
+      return;
+    }
+    let billed = 0;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const res = await fetch(input, init);
+      const cost = ((await res.clone().json().catch(() => null)) as { usage?: { cost?: unknown } } | null)?.usage?.cost;
+      if (typeof cost === "number") billed += cost;
+      return res;
+    };
+    const hosted = new HostedGuardianChecker({ apiKey, model, fetchImpl });
+    const rules = new RulesChecker();
+    const both: Checker = { check: async (input) => ((await rules.check(input)).verdict === "block" ? rules.check(input) : hosted.check(input)) };
+    const scored = await scoreGlimmer(both);
+    const renewals = await scoreRenewals(hosted);
+    for (const s of [...scored, ...renewals]) if (!s.right) console.log(`hosted ${model} miss ${s.name}: got ${s.verdict}`);
+    report(`hosted ${model}`, summarize(scored), scored.length);
+    report(`hosted ${model} renewal`, summarize(renewals), renewals.length);
+    const latencies = [...scored, ...renewals].map((s) => s.ms).sort((a, b) => a - b);
+    console.log(`hosted ${model}: ${misses([...scored, ...renewals]).length} misses, p50 ${latencies[Math.floor(latencies.length / 2)]}ms, max ${latencies.at(-1)}ms, billed $${billed.toFixed(4)}`);
   });
 
   it("scores the model alone on renewal forms when an endpoint is configured", { timeout: 30 * 60_000 }, async () => {
