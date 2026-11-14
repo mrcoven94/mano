@@ -8,8 +8,9 @@ import {
   ModelCrisisCheck,
   OpenWeightClient,
   OpenWeightFailed,
+  HostedOnlyBreaker,
   PrimaryBreaker,
-  isMetaModelId,
+  isAllowedModelId,
   reportPresentation,
   saveDocumentInEngine,
   BlooioChannel,
@@ -128,12 +129,13 @@ export function buildChannel(env: Env): Channel {
 // once, finds it down and skips it from then on.
 const primaryBreaker = new PrimaryBreaker();
 
-// Meta's open-weight model on zero-retention endpoints, for when the Meta
-// Model API is down. It sends real texts outside the Standard model IDs,
+// The hosted model on zero-retention endpoints, for when the Meta Model API is
+// down, or for every call with MANO_MODEL_PROVIDER=openrouter and no Meta key
+// (hostedOnly below). It sends real texts outside the Standard model IDs,
 // so it stays off until OPENROUTER_API_KEY is set; MANO_OPEN_WEIGHT_MODEL
-// names the model and must be a Meta one (AGENTS.md rule 13), never a
-// -contributor ID. Off, every reply and crisis check works exactly as
-// before.
+// names the model and must be a Meta one or one of HOSTED_MODELS (AGENTS.md
+// rule 13), never a -contributor ID. Off, every reply and crisis check works
+// exactly as before.
 //
 // MANO_MODEL_PROVIDER=modal, with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN,
 // asks the same model on a Modal Shared Endpoint instead (AGENTS.md rule 7).
@@ -149,7 +151,7 @@ const primaryBreaker = new PrimaryBreaker();
 // at run time, on the same model under its pin. Nothing else is ever tried.
 export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreaker): OpenWeightFallback | undefined {
   const model = env.MANO_OPEN_WEIGHT_MODEL?.trim() ?? "";
-  if (!isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  if (!isAllowedModelId(model) || model.endsWith("-contributor")) return undefined;
   const modal = env as Env & ModalSettings;
   if (modal.MANO_MODEL_PROVIDER === "modal") {
     const baseUrl = modalBaseUrl(modal.MODAL_ENDPOINT_URL);
@@ -222,10 +224,23 @@ function modalBaseUrl(raw: string | undefined): string | undefined {
   }
 }
 
-// Real texts go only to a Standard model ID (AGENTS.md rule 7). A
-// missing or -contributor ID fails closed to the stand-in, which calls
-// no model.
+// With MANO_MODEL_PROVIDER=openrouter and no Meta key, the hosted model is the
+// only model: the Meta Model API is never asked, so its key is a placeholder
+// no request carries. Chosen without a usable hosted model, there is none.
+const HOSTED_ONLY = new HostedOnlyBreaker();
+const UNUSED_META_KEY = "unused: the hosted model answers";
+function hostedOnly(env: Env): OpenWeightFallback | undefined {
+  const provider = (env as Env & ModalSettings).MANO_MODEL_PROVIDER;
+  if (provider !== "openrouter" || env.META_MODEL_API_KEY) return undefined;
+  return buildOpenWeight(env, HOSTED_ONLY);
+}
+
+// Real texts go only to a Standard model ID or the hosted model (AGENTS.md
+// rule 7). A missing or -contributor ID fails closed to the stand-in, which
+// calls no model.
 function buildFallbackResponder(env: Env, breaker?: PrimaryBreaker): Responder {
+  const hosted = hostedOnly(env);
+  if (hosted) return new SparkResponder({ apiKey: UNUSED_META_KEY, model: hosted.client.model, openWeight: hosted });
   const model = env.MANO_REPLY_MODEL ?? "";
   if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return new StandInResponder();
   const endpoint = buildModelBaseUrl({
@@ -248,6 +263,8 @@ function buildFallbackResponder(env: Env, breaker?: PrimaryBreaker): Responder {
 // ID, there is no check, and every such question gets the crisis line
 // (fail closed).
 export function buildCrisisCheck(env: Env, breaker?: PrimaryBreaker): ModelCrisisCheck | null {
+  const hosted = hostedOnly(env);
+  if (hosted) return new ModelCrisisCheck({ apiKey: UNUSED_META_KEY, model: hosted.client.model, openWeight: hosted });
   const model = env.MANO_REPLY_MODEL ?? "";
   if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return null;
   const endpoint = buildModelBaseUrl({

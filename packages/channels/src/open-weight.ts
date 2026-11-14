@@ -1,9 +1,10 @@
-// The text line's fallback when the Meta Model API cannot answer: Meta's
-// open-weight model through OpenRouter's OpenAI-compatible chat API. Every
-// request is pinned to zero-retention endpoints that collect no data. The
-// body is built in one place below, with the pin as a frozen constant and
-// no option to change it, so this package cannot send a request without
-// it. Only Meta model IDs are accepted (AGENTS.md rule 13).
+// The text line's hosted model through OpenRouter's OpenAI-compatible chat
+// API: the fallback when the Meta Model API cannot answer, or the only model
+// when MANO_MODEL_PROVIDER=openrouter. Every request is pinned to
+// zero-retention endpoints that collect no data. The body is built in one
+// place below, with the pin as a frozen constant and no option to change it,
+// so this package cannot send a request without it. Only Meta model IDs and
+// the models in HOSTED_MODELS are accepted (AGENTS.md rule 13).
 import { boundFetch } from "./fetch.js";
 import type { ModelMessage, ReasoningEffort } from "./responder.js";
 
@@ -21,6 +22,19 @@ const TRAILING_SLASH_RE = /\/$/;
 
 export function isMetaModelId(model: string): boolean {
   return META_MODEL_ID_RE.test(model);
+}
+
+// The other models the text line may ask, each on zero-retention endpoints.
+export const HOSTED_MODELS: readonly string[] = Object.freeze([
+  "anthropic/claude-haiku-5.5",
+  "anthropic/claude-sonnet-5.5",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
+  "google/gemini-3.8-flash",
+]);
+
+export function isAllowedModelId(model: string): boolean {
+  return isMetaModelId(model) || HOSTED_MODELS.includes(model);
 }
 
 // The Meta Model API is down for a call when it answers 402 (billing) or
@@ -99,7 +113,7 @@ export class OpenWeightClient {
 
   constructor(opts: OpenWeightOptions) {
     if (!opts.apiKey) throw new Error("An open-weight API key is required.");
-    if (!isMetaModelId(opts.model)) throw new Error("The fallback runs on a Meta model ID only.");
+    if (!isAllowedModelId(opts.model)) throw new Error("The fallback runs on a Meta model ID or an allowed hosted model only.");
     this.apiKey = opts.apiKey;
     this.model = opts.model;
     this.baseUrl = (opts.baseUrl ?? OPEN_WEIGHT_BASE_URL).replace(TRAILING_SLASH_RE, "");
@@ -150,6 +164,16 @@ export class PrimaryBreaker {
   trip(): void {
     this.skipUntilMs = this.nowMs() + this.skipMs;
   }
+}
+
+// Skips the Meta Model API for good: with MANO_MODEL_PROVIDER=openrouter and
+// no Meta key, the hosted model answers every reply and crisis check.
+export class HostedOnlyBreaker extends PrimaryBreaker {
+  override skipPrimary(): boolean {
+    return true;
+  }
+
+  override trip(): void {}
 }
 
 export interface OpenWeightFallback {

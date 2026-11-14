@@ -364,3 +364,31 @@ describe("the worker turns the fallback on only with OPENROUTER_API_KEY", () => 
     expect(buildCrisisCheck({ OPENROUTER_API_KEY: "test-open-key-not-real", MANO_OPEN_WEIGHT_MODEL: OPEN } as Env)).toBeNull();
   });
 });
+
+describe("with MANO_MODEL_PROVIDER=openrouter and no Meta key, the hosted model is the only model", () => {
+  const hosted = { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key-not-real", MANO_OPEN_WEIGHT_MODEL: "openai/gpt-6-luna" } as Env;
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("answers a text and a crisis check without ever asking the Meta Model API", async () => {
+    const net = hosts({ open: [openAnswer("Here to help."), openAnswer("no")] });
+    vi.stubGlobal("fetch", net.fetchFn);
+    const responder = buildResponder(hosted);
+    expect(responder).toBeInstanceOf(SparkResponder);
+    expect((await responder.respond({ texts: ["hi"], attachmentCount: 0 })).text).toBe("Here to help.");
+    const check = buildCrisisCheck(hosted);
+    expect(check).not.toBeNull();
+    expect(await check!.ask("is it safe to stop my insulin", AbortSignal.timeout(5000))).toBe("no");
+    expect(net.count(PRIMARY_URL)).toBe(0);
+    expect(net.count(OPEN_URL)).toBeGreaterThan(0);
+    for (const body of net.bodies) {
+      expect(body.model).toBe("openai/gpt-6-luna");
+      expect(body.provider).toEqual({ zdr: true, data_collection: "deny" });
+    }
+  });
+
+  it("has no model at all when the hosted model is not allowed, and leaves a Meta key's path as it was", () => {
+    expect(buildResponder({ ...hosted, MANO_OPEN_WEIGHT_MODEL: "openai/gpt-4o" })).toBeInstanceOf(StandInResponder);
+    expect(buildCrisisCheck({ ...hosted, MANO_OPEN_WEIGHT_MODEL: "openai/gpt-4o" })).toBeNull();
+    expect(buildCrisisCheck({ ...hosted, META_MODEL_API_KEY: "test-key-not-real", MANO_REPLY_MODEL: PRIMARY })).toBeInstanceOf(ModelCrisisCheck);
+  });
+});
