@@ -226,7 +226,8 @@ export class BlooioChannel implements Channel {
     const path = input.chatId
       ? `/chats/${encodeURIComponent(input.chatId)}/messages`
       : `/channels/${encodeURIComponent(this.channelId)}/messages`;
-    const body: Record<string, string> = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
+    const content: Record<string, string | string[]> = input.attachment ? { attachments: [input.attachment] } : { text: input.text };
+    const body: Record<string, string | string[]> = input.chatId ? content : { to: input.to, ...content };
     if (input.replyTo) body.reply_to = input.replyTo;
     const maxAttempts = input.once ? 1 : SEND_MAX_ATTEMPTS;
     let lastErr: unknown = null;

@@ -10,6 +10,7 @@ import {
   HANDLE_BYTES_DAILY,
   INPUT_SLACK_CHARS,
   MAX_ATTACHMENTS_PER_TURN,
+  MAX_SPOKEN_CHARS,
   MAX_ATTACHMENT_BYTES,
   MAX_OUTPUT_CHARS,
   OUTBOUND_RANK,
@@ -175,6 +176,14 @@ export interface RunnerDeps {
     p: { approvalId: string; approval: string; generation: number },
     sentTexts: string[],
   ) => Promise<boolean>;
+  // Speaks a reply and keeps it at a public URL for one send. Null or
+  // missing: replies stay text only.
+  voice?: VoiceReplies | null;
+}
+
+export interface VoiceReplies {
+  // The URL of the reply spoken, or null when it could not be.
+  record(text: string): Promise<string | null>;
 }
 
 export type HandleResult =
@@ -1171,6 +1180,12 @@ export class ConversationRunner {
           if (tapback && target && chatId && answered.length > 0) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }
+          // A voice note heard gets the reply spoken too, after the words,
+          // never on a crisis turn, whose line must be read as written.
+          const spoken = answered.map((b) => b.text).join("\n");
+          if (heard && !crisis && this.deps.voice && spoken.length <= MAX_SPOKEN_CHARS) {
+            bubbles.push({ part: Math.max(0, ...bubbles.map((b) => b.part)) + 1, tag: "voice", text: spoken, epoch });
+          }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
@@ -1267,8 +1282,16 @@ export class ConversationRunner {
     let fresh = 0;
     // Whether the provider accepted at least one of the reply's own texts.
     let accepted = false;
-    // Words go first; a reaction is only ever added on top.
-    for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
+    // Words go first; a reaction or a voice note is only ever added on top.
+    const words = bubbles.filter((b) => !DECORATION_TAGS.has(b.tag));
+    for (const bubble of [...words, ...bubbles.filter((b) => DECORATION_TAGS.has(b.tag))]) {
+      if (bubble.tag === "voice") {
+        if (accepted && this.deps.voice) {
+          const voice = this.deps.voice;
+          this.decorations.run("voice", () => this.sendVoice(voice, turn, bubble, chatId, to, generation, bubble.epoch ?? epoch));
+        }
+        continue;
+      }
       if (bubble.tag === "react") {
         // Only on top of words the provider accepted, and only while
         // reactions are on (a replayed answer included); otherwise dropped.
@@ -1307,6 +1330,36 @@ export class ConversationRunner {
   // it again; an outcome that never comes back leaves it there, dropped.
   // It sends only while the generation and decoration epoch it was
   // scheduled under still hold, read fresh right before the call.
+  // One voice note, at most once, like a reaction: its row is written as
+  // "sending" before any call, so a resumed turn never speaks it again.
+  // Any failure leaves it unsent; the words already went.
+  private async sendVoice(voice: VoiceReplies, turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, to: string | null, generation: number, epoch: number): Promise<void> {
+    const { store, channel, logger, nowMs, config } = this.deps;
+    const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "voice");
+    if (store.outboundByKey(key)) return;
+    const block = !chatId && !to ? "unroutable" : this.decorationBlock(generation, epoch);
+    if (block === "generation") return;
+    store.addOutbound({
+      key, turn, part: bubble.part, tag: "voice", text: "", attempts: 0, state: block ? "refused" : "sending", code: block,
+      chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+    });
+    if (block) return;
+    const refuse = (code: string) => {
+      if (this.store.meta().generation === generation) store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+      logger.info("voice_unsent", { handle: this.logHandle(), turn, code });
+    };
+    try {
+      const url = await voice.record(bubble.text);
+      if (!url) return refuse("unspoken");
+      if (this.decorationBlock(generation, epoch)) return refuse("blocked");
+      const sent = await channel.send({ to: to ?? "", chatId, text: "", attachment: url, idempotencyKey: key, once: true });
+      if (this.store.meta().generation === generation) store.updateOutbound(key, { state: "sent", messageId: sent.messageId, updatedAtMs: nowMs() });
+      logger.info("voice_sent", { handle: this.logHandle(), turn });
+    } catch (err) {
+      refuse(errName(err));
+    }
+  }
+
   // Records a reaction as dropped, so no later run sends it.
   private dropTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, code: string): void {
     const { store, logger, nowMs, config } = this.deps;

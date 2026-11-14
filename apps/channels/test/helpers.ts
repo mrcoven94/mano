@@ -111,6 +111,7 @@ export function makeHarness(
     // The model check for one short health question; none fails closed.
     crisisCheck?: import("@mano/persona").CrisisCheck | null;
     photoConverter?: import("../src/files.js").PhotoConverter | null;
+    voice?: import("../src/runner.js").VoiceReplies | null;
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -167,6 +168,7 @@ export function makeHarness(
     reportPresentation: opts.reportPresentation,
     decorations: h.decorations,
     crisisCheck: opts.crisisCheck ?? null,
+    voice: opts.voice ?? null,
   });
   return h;
 }

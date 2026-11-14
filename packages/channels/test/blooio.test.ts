@@ -166,6 +166,15 @@ describe("BlooioChannel.send", () => {
     expect(JSON.parse(init.body as string)).toEqual({ text: "Hello" });
   });
 
+  it("sends an attachment as the whole message, so audio goes as a voice note", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_3", chat_id: "chat_aaa", status: "queued" }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.send({ ...input, text: "", attachment: "https://text.withmano.com/voice/a.mp3" });
+    await channel.send({ ...input, chatId: null, text: "", attachment: "https://text.withmano.com/voice/a.mp3" });
+    const bodies = fetchFn.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string));
+    expect(bodies).toEqual([{ attachments: ["https://text.withmano.com/voice/a.mp3"] }, { to: "+15551234567", attachments: ["https://text.withmano.com/voice/a.mp3"] }]);
+  });
+
   it("sends channel-scoped when the chat is unknown", async () => {
     const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_2", chat_id: "chat_bbb", status: "queued" }));
     const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });

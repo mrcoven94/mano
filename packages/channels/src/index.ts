@@ -24,3 +24,4 @@ export * from "./fetch.js";
 export * from "./finalize.js";
 export * from "./crisis-check.js";
 export * from "./open-weight.js";
+export * from "./speech.js";

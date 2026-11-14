@@ -115,6 +115,9 @@ export interface ChannelSendInput {
   // One try at the provider, with no retry inside this call: the sender holds
   // a rule that could change while a retry waited.
   once?: boolean;
+  // A public URL sent as the whole message, with no text: an audio file goes
+  // as a voice note.
+  attachment?: string;
 }
 
 export interface ChannelSendResult {

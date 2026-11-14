@@ -21,6 +21,7 @@ import {
 import type { Env } from "./env.js";
 import { globalStateStub } from "./conversation.js";
 import { R2FileStore, type FileStore } from "./files.js";
+import { serveVoice, sweepVoice } from "./voice.js";
 
 export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
@@ -436,6 +437,9 @@ export default {
       const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
       return stub.fetch("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash }) });
     }
+    if (request.method === "GET" && url.pathname.startsWith("/voice/")) {
+      return (await serveVoice(url.pathname, env.FILES, Date.now())) ?? new Response("Not found.", { status: 404 });
+    }
     // Ok and nothing else: strangers must not learn which keys are set.
     if (request.method === "GET" && url.pathname === "/health") {
       return Response.json({ ok: true });
@@ -462,6 +466,7 @@ export default {
     }
     try {
       await sweepExpiredFiles(new R2FileStore(env.FILES), Date.now());
+      await sweepVoice(new R2FileStore(env.FILES), Date.now());
     } catch (err) {
       logger.warn("sweep_failed", { err: errName(err) });
     }

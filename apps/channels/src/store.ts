@@ -243,8 +243,8 @@ export function defaultMeta(): ConversationMeta {
 
 export type TurnHistoryRow = Pick<PersistedTurn, "itemsJson" | "answerJson">;
 
-// Rows for reactions and the eyes, never for words.
-export const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);
+// Rows for reactions, the eyes and voice notes, never for words.
+export const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes", "voice"]);
 
 // A word send whose outcome is not known yet.
 export function openSend(r: Pick<OutboundRow, "tag" | "state">): boolean {
