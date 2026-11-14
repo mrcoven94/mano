@@ -17,6 +17,24 @@ export const SEGMENT_MODEL = "sam-3.1";
 export const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
 
 export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
+// The models Mail may read with on OpenRouter, chosen with MANO_READER_MODEL.
+// Every request to any of them carries the zero-retention pin below.
+export const HOSTED_READING_MODELS = Object.freeze([
+  OPEN_WEIGHT_MODEL,
+  "anthropic/claude-haiku-5.5",
+  "anthropic/claude-sonnet-5.5",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
+  "google/gemini-3.8-flash",
+] as const);
+export type HostedReadingModel = (typeof HOSTED_READING_MODELS)[number];
+
+// The reading model a setting names, the default when it names none, or null
+// when it names one Mail does not allow, so the reader calls no model.
+export function hostedReadingModel(raw: string | undefined): HostedReadingModel | null {
+  if (raw === undefined || raw.trim() === "") return OPEN_WEIGHT_MODEL;
+  return (HOSTED_READING_MODELS as readonly string[]).includes(raw.trim()) ? (raw.trim() as HostedReadingModel) : null;
+}
 const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 // OpenRouter provider routing: only endpoints with zero data retention,
 // and no provider that stores or trains on what it is sent.
@@ -389,9 +407,10 @@ interface ChatMessage {
 
 // Everything a request to the open-weight model can carry. Built field by
 // field, so nothing on a request reaches the body unmapped, and the model
-// and pin are constants no option or setting can change.
+// pin is a constant no option or setting can change. The model is one of
+// HOSTED_READING_MODELS on OpenRouter, or the open-weight model on Modal.
 interface OpenWeightBody {
-  model: typeof OPEN_WEIGHT_MODEL | typeof MODAL_OPEN_WEIGHT_MODEL;
+  model: HostedReadingModel | typeof MODAL_OPEN_WEIGHT_MODEL;
   messages: ChatMessage[];
   max_tokens?: number;
   response_format?: { type: "json_schema"; json_schema: Omit<JsonSchemaFormat, "type"> };
@@ -452,6 +471,8 @@ export interface OpenWeightClientOptions {
   modalUrl?: string;
   // OpenRouter's key, to read there when a Modal call fails at run time.
   backupApiKey?: string | undefined;
+  // The model to read with on OpenRouter. Defaults to the open-weight model.
+  model?: HostedReadingModel;
   timeoutMs?: number;
   maxRetries?: number;
   fetchFn?: typeof fetch;
@@ -481,7 +502,7 @@ export class OpenWeightModelClient implements ModelClient {
   constructor(opts: OpenWeightClientOptions) {
     this.transport = transportFrom(opts);
     if (opts.modalUrl === undefined) {
-      this.route = OPENROUTER_ROUTE;
+      this.route = opts.model ? { ...OPENROUTER_ROUTE, model: opts.model } : OPENROUTER_ROUTE;
       return;
     }
     const url = modalChatUrl(opts.modalUrl);
@@ -522,6 +543,7 @@ export interface ModelClientEnv {
   OPENROUTER_API_KEY?: string;
   MODAL_ENDPOINT_URL?: string;
   MODAL_PROXY_TOKEN?: string;
+  MANO_READER_MODEL?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -549,7 +571,9 @@ export function createModelClient(
     return new OpenWeightModelClient({ apiKey: env.MODAL_PROXY_TOKEN, modalUrl: env.MODAL_ENDPOINT_URL, backupApiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
   }
   if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) {
-    return new OpenWeightModelClient({ apiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
+    const model = hostedReadingModel(env.MANO_READER_MODEL);
+    if (!model) return new RecordedModelClient([]);
+    return new OpenWeightModelClient({ apiKey: env.OPENROUTER_API_KEY, model, fetchFn: opts.fetchFn });
   }
   if (!env.META_MODEL_API_KEY) return new RecordedModelClient([]);
   const allowExtra = (env.MODEL_ALLOWLIST_EXTRA ?? "")

@@ -16,7 +16,7 @@ import { buildMano, manoBundleHash } from "../src/build-mano.mjs";
 import { gradeAll } from "../src/grader.mjs";
 import { osSandboxAvailable, osSandboxProfile, runSystem } from "../src/harness.mjs";
 import { readRecord, verifyMano } from "../src/verify.mjs";
-import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION, MODAL_MODEL, modalCeilingUsd, modalChatBody, modalReserveUsd, modalSpendReport } from "../src/openrouter.mjs";
+import { OPEN_WEIGHT_MODEL, CANDIDATE_MODELS, evalModel, admitOpenRouterCall, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION, MODAL_MODEL, modalCeilingUsd, modalChatBody, modalReserveUsd, modalSpendReport } from "../src/openrouter.mjs";
 
 // The adapter imports @mano/mail, which is TypeScript, so it loads the way the
 // run loads it: bundled.
@@ -596,4 +596,28 @@ await writeFile(out, JSON.stringify([{ householdId: "hh-900", verdict }]));
     await built.cleanup();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("MANO_EVAL_MODEL picks a candidate reading model and refuses any other", () => {
+  const key = { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k" };
+  assert.equal(evalModel({}), OPEN_WEIGHT_MODEL);
+  assert.equal(evalModel({ MANO_EVAL_MODEL: "anthropic/claude-haiku-5.5" }), "anthropic/claude-haiku-5.5");
+  assert.equal(evalModel({ MANO_EVAL_MODEL: "other/model" }), null);
+  assert.equal(modelRoute({ ...key, MANO_EVAL_MODEL: "other/model" }), null);
+  assert.equal(modelRoute({ ...key, MANO_EVAL_MODEL: "openai/gpt-6-luna" }), "openrouter");
+  for (const prices of Object.values(CANDIDATE_MODELS)) assert.ok(prices.prompt > 0 && prices.completion > 0);
+  const saved = process.env.MANO_EVAL_MODEL;
+  process.env.MANO_EVAL_MODEL = "google/gemini-3.8-flash";
+  try {
+    assert.equal(pinnedChatBody({ model: OPEN_WEIGHT_MODEL, messages: [] }).model, "google/gemini-3.8-flash");
+  } finally {
+    if (saved === undefined) delete process.env.MANO_EVAL_MODEL;
+    else process.env.MANO_EVAL_MODEL = saved;
+  }
+});
+
+test("an unknown model is never admitted, and with no ceiling a call is counted, not limited", () => {
+  const env = { MANO_EVAL_MODEL: "anthropic/claude-sonnet-5.5", MANO_EVAL_CEILING_USD: "0.0001" };
+  assert.equal(admitOpenRouterCall({ messages: [{ role: "user", content: "x".repeat(1000) }], max_tokens: 4000 }, { ...env, MANO_EVAL_MODEL: "other/model" }), null);
+  assert.equal(admitOpenRouterCall({ messages: [], max_tokens: 1 }, { MANO_EVAL_MODEL: "anthropic/claude-haiku-5.5" }), 0);
 });

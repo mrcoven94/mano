@@ -15,6 +15,13 @@ export const SYSTEMS = [
   { name: "general agent (one generic prompt)", entry: here("./systems/general-agent.mjs"), broker: true, live: true },
 ];
 
+// MANO_EVAL_SYSTEMS=mano runs Mano alone, for comparing reading models: the
+// deterministic baselines do not change with the model and the general agent
+// spends credit on a model Mano does not use.
+export function selectedSystems(env = process.env) {
+  return env.MANO_EVAL_SYSTEMS === "mano" ? SYSTEMS.filter((s) => s.name === "Mano") : SYSTEMS;
+}
+
 // Why each household ended the way it did, in the systems' fixed words. Reasons
 // come from the eval's own code, never from a letter or a provider.
 function statusCounts(outputs) {
@@ -70,7 +77,7 @@ async function runOne(sys, inputs) {
 
 // Runs every system on a track and prints each report. perScenario adds cost
 // and time per household (dev only: the held-out report stays aggregate).
-export async function runTrack(trackName, inputs, answers, { label, perScenario = false, systems = SYSTEMS } = {}) {
+export async function runTrack(trackName, inputs, answers, { label, perScenario = false, systems = selectedSystems() } = {}) {
   console.log(`# ${trackName} (${inputs.length} households)`);
   const results = {};
   for (const sys of systems) {

@@ -15,7 +15,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { registerChild, registerTemp } from "./cleanup.mjs";
-import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, MODAL_MODEL, modalChatBody, modalChatUrl, admitModalCall, settleModalCall } from "./openrouter.mjs";
+import { OPEN_WEIGHT_MODEL, evalModel, modelRoute, pinnedChatBody, MODAL_MODEL, modalChatBody, modalChatUrl, admitModalCall, settleModalCall, admitOpenRouterCall, settleOpenRouterCall } from "./openrouter.mjs";
 
 // The harness refuses to run unless the runtime can deny network: a child
 // that cannot be kept offline invalidates every isolation claim. Checked
@@ -277,7 +277,14 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
             reply({ ok: false, error: "broker denied: not the open-weight model" });
             return;
           }
-          body = JSON.stringify(pinnedChatBody(parsed));
+          const sent = pinnedChatBody(parsed);
+          body = JSON.stringify(sent);
+          reserve = admitOpenRouterCall(sent);
+          if (reserve === null) {
+            reply({ ok: false, error: "broker denied: spending ceiling" });
+            return;
+          }
+          settled = false;
         }
         try {
           // Never follow redirects: a 302 off the allowlist must fail
@@ -302,13 +309,17 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
               return;
             }
           }
-          if (route.pinned && json?.model && json.model !== OPEN_WEIGHT_MODEL) {
+          if (route.pinned) {
+            settled = true;
+            settleOpenRouterCall(reserve, res.status, json?.usage);
+          }
+          if (route.pinned && json?.model && !json.model.startsWith(evalModel())) {
             reply({ ok: false, error: "broker denied: a different model answered" });
             return;
           }
           reply({ ok: true, statusOk: res.ok === true, status: res.status ?? 0, json });
         } catch (err) {
-          if (!settled) settleModalCall(reserve);
+          if (!settled) (route.pinned ? settleOpenRouterCall : settleModalCall)(reserve);
           reply({ ok: false, transport: true, error: "broker fetch failed" });
         }
       })();
