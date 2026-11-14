@@ -1,9 +1,14 @@
 name: guardian-check
 
-# Gates guardian pull requests: the Modal app must import under the pinned
+# Gates guardian pull requests. The hosted job tests Guardian as production
+# runs it, on a hosted model through OpenRouter (docs/decisions.md, November
+# 14, 2026). The modal job tests the stopped Modal server, kept because its
+# prompt is the one the hosted checker sends and guardian-modal can still
+# deploy it: the Modal app must import under the pinned
 # SDK, serve its one authenticated route as a Modal Server (whose requests
 # Modal does not store) with no Function taking a check as input, refuse
-# blank tokens, strictly parse verdicts, and match its pinned model and image.
+# blank tokens, strictly parse verdicts, and its pinned model revision and
+# image must still resolve.
 # Also fails if guardian-modal's keys, permissions, triggers, or any job's
 # keys, if, runner, environment or first step (a case-sensitive main-only
 # check) differ from an exact allowlist.
@@ -13,12 +18,18 @@ on:
   pull_request:
     paths:
       - "packages/guardian/**"
+      - "apps/engine/wrangler.toml"
+      - "apps/engine/src/gateway/guardian.ts"
+      - "apps/engine/test-node/guardian-production.test.ts"
       - ".github/workflows/guardian-check.yml"
       - ".github/workflows/guardian-modal.yml"
   push:
     branches: [main]
     paths:
       - "packages/guardian/**"
+      - "apps/engine/wrangler.toml"
+      - "apps/engine/src/gateway/guardian.ts"
+      - "apps/engine/test-node/guardian-production.test.ts"
       - ".github/workflows/guardian-check.yml"
       - ".github/workflows/guardian-modal.yml"
 
@@ -26,6 +37,26 @@ permissions:
   contents: read
 
 jobs:
+  # What production runs: Guardian on the hosted model Engine's wrangler.toml
+  # names, through OpenRouter. The hosted checker's tests (its prompt is the
+  # Modal server's word for word, the zero-retention pin, every fail-closed
+  # path), the eval's scoring, and Engine's deployed setting. No key and no
+  # model call: the live measurement is the eval, run by hand.
+  hosted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 25
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: The hosted checker and the eval's scoring
+        run: pnpm --filter @mano/guardian check
+      - name: Engine's deployed Guardian setting
+        run: pnpm --filter ./apps/engine exec vitest run --config vitest.node.config.ts test-node/guardian-production.test.ts test-node/guardian-gateway.test.ts
+
   modal:
     runs-on: ubuntu-latest
     steps:
@@ -271,12 +302,14 @@ jobs:
           ):
               assert banned not in source, banned
 
-          # The model pin matches Hugging Face, the image pin Docker Hub.
+          # The pinned model revision still exists on Hugging Face, and the
+          # image pin matches Docker Hub. The model's newest revision may
+          # move on: the server deploys the pinned one.
           with urllib.request.urlopen(
-              f"https://huggingface.co/api/models/{app.MODEL_ID}"
+              f"https://huggingface.co/api/models/{app.MODEL_ID}/revision/{app.MODEL_REVISION}"
           ) as response:
-              head = json.load(response)["sha"]
-          assert head == app.MODEL_REVISION, (head, app.MODEL_REVISION)
+              pinned = json.load(response)["sha"]
+          assert pinned == app.MODEL_REVISION, (pinned, app.MODEL_REVISION)
           with urllib.request.urlopen(
               "https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags/v0.32.0"
           ) as response:
