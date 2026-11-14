@@ -78,8 +78,9 @@ export const GUARDIAN_PROMPT = [
 // a verdict that contradicts its problems. The review is the model's own
 // working and never leaves here, so its length is not held: the Modal server
 // capped it only to bound decoding on its GPU, and hosted models write longer.
+const ANSWER_KEY = /"(review|verdict|problems)"\s*:/g;
 export function parseVerdict(text: string): { verdict: string; problems: string[] } | null {
-  const keys = [...text.matchAll(/"(review|verdict|problems)"\s*:/g)].map((m) => m[1]);
+  const keys = [...text.matchAll(ANSWER_KEY)].map((m) => m[1]);
   if (keys.length !== new Set(keys).size) return null;
   let data: unknown;
   try {
