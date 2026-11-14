@@ -21,7 +21,7 @@
     "eval/src/tools.mjs": "5ca5092c732461841cbe88722ad7546fb1f468559f12c95cff476d04934fcb64",
     "eval/src/ipc.mjs": "f25a4a163cd43931f566b37ca24183f779d367b4342668191f62c48dabd28582",
     "eval/src/cleanup.mjs": "03c5c31ce967de6c4d86c8e94b273d905b84a4c797c475ed5258c56e79ac27e0",
-    "eval/src/openrouter.mjs": "ff054df80b649939764b3a38bd52eb32a98dfab77f99c5086c1c7f9b67ebb268",
+    "eval/src/openrouter.mjs": "9d56cbad648684696520ef06fca694d022625daf31bcfe555e3bc204d7d8af08",
     "eval/src/pool.mjs": "31ef9b272246d88f0f6ec9e2cc4a34f91e10f38509208309640d2c20b4e56fd5",
     "eval/src/mano-adapter.mjs": "9a28a576563fc812af517272dff77bda9383b67132eb8233dfc305eaaa507d5e",
     "eval/src/build-mano.mjs": "06859d7ec5a30e1fa304c0aac931fd24dd1025c3c281bc7b047517dbbbebcb78",
