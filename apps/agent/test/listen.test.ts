@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
-import { ffmpegWav, handleListen, transcribe, type ListenDeps } from "../agent/lib/listen.js";
+import { LISTEN_MODEL, ffmpegWav, handleListen, transcribe, type ListenDeps } from "../agent/lib/listen.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 const AUDIO_BYTES = new TextEncoder().encode("synthetic-audio-bytes");
@@ -16,13 +16,13 @@ const deadline = () => Date.now() + 30_000;
 
 type Call = { url: string; init: RequestInit };
 
-// Stands in for the two providers. No test here reaches a real model.
-function providers(answers: { meta?: Response | Error; open?: Response | Error }) {
+// Stands in for the providers. No test here reaches a real model.
+function providers(answers: { scribe?: Response | Error; meta?: Response | Error; open?: Response | Error }) {
   const calls: Call[] = [];
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init! });
-    const answer = url.includes("/asr/transcribe") ? answers.meta : answers.open;
+    const answer = url.includes("elevenlabs.io") ? answers.scribe : url.includes("/asr/transcribe") ? answers.meta : answers.open;
     if (answer instanceof Error) throw answer;
     return answer ?? new Response("unexpected", { status: 500 });
   }) as typeof fetch;
@@ -51,11 +51,11 @@ describe("hearing a voice note", () => {
   it.each([
     ["answers 402", new Response("billing", { status: 402 })],
     ["cannot be reached", new TypeError("network")],
-  ])("falls back to the open-weight model on zero-retention endpoints when Meta %s", async (_name, meta) => {
+  ])("falls back to the hosted listener on zero-retention endpoints when Meta %s", async (_name, meta) => {
     const { calls, fetchFn } = providers({ meta, open: openSays(" se me acaban los beneficios ") });
     expect(await transcribe(AUDIO_BYTES, "audio/mp4", deadline(), deps({ fetchFn }))).toBe("se me acaban los beneficios");
     const body = JSON.parse(calls[1]!.init.body as string);
-    expect(body.model).toBe("meta/muse-spark-open");
+    expect(body.model).toBe(LISTEN_MODEL);
     expect(body.provider).toEqual({ zdr: true, data_collection: "deny" });
     expect(body.messages[0].content[1].input_audio).toEqual({ data: Buffer.from(WAV_BYTES).toString("base64"), format: "wav" });
   });
@@ -91,6 +91,37 @@ describe("hearing a voice note", () => {
   it("a note with no speech is no words, not a failure", async () => {
     const { fetchFn } = providers({ meta: new Response("no", { status: 402 }), open: openSays("NO_SPEECH") });
     expect(await transcribe(AUDIO_BYTES, "audio/mp4", deadline(), deps({ fetchFn }))).toBe("");
+  });
+});
+
+describe("hearing a voice note with Scribe", () => {
+  const scribeSays = (text: string) => Response.json({ language_code: "eng", text, words: [] });
+  const withScribe = (fetchFn: typeof fetch) => deps({ fetchFn, env: { ELEVENLABS_API_KEY: "test-eleven", META_MODEL_API_KEY: "test-meta", OPENROUTER_API_KEY: "test-open" } });
+
+  it("asks Scribe first, in zero-retention mode, with the WAV, and only Scribe", async () => {
+    const { calls, fetchFn } = providers({ scribe: scribeSays(" my rent is due on the third ") });
+    expect(await transcribe(AUDIO_BYTES, "audio/x-caf", deadline(), withScribe(fetchFn))).toBe("my rent is due on the third");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://api.elevenlabs.io/v1/speech-to-text?enable_logging=false");
+    expect((calls[0]!.init.headers as Record<string, string>)["xi-api-key"]).toBe("test-eleven");
+    const form = calls[0]!.init.body as FormData;
+    expect(form.get("model_id")).toBe("scribe_v2");
+    expect(new TextDecoder().decode(await (form.get("file") as Blob).arrayBuffer())).toBe("RIFFsynthetic-wav");
+  });
+
+  it("goes on to Meta, then the hosted listener, when Scribe refuses zero retention", async () => {
+    const { calls, fetchFn } = providers({ scribe: new Response("ZRM needs enterprise", { status: 403 }), meta: new Response("billing", { status: 402 }), open: openSays("hello") });
+    expect(await transcribe(AUDIO_BYTES, "audio/mp4", deadline(), withScribe(fetchFn))).toBe("hello");
+    expect(calls.map((c) => new URL(c.url).hostname)).toEqual(["api.elevenlabs.io", "api.meta.ai", "openrouter.ai"]);
+  });
+
+  it("sends an m4a as it came when nothing can convert it, and a note with no speech is no words", async () => {
+    const { calls, fetchFn } = providers({ scribe: scribeSays("") });
+    expect(await transcribe(AUDIO_BYTES, "audio/x-m4a", deadline(), { ...withScribe(fetchFn), toWav: async () => null })).toBe("");
+    expect(calls).toHaveLength(1);
+    const file = (calls[0]!.init.body as FormData).get("file") as Blob;
+    expect(file.type).toBe("audio/x-m4a");
+    expect(new TextDecoder().decode(await file.arrayBuffer())).toBe("synthetic-audio-bytes");
   });
 });
 

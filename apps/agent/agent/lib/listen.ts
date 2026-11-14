@@ -3,22 +3,29 @@
 // this runs in Node where ffmpeg can run and a Worker cannot; the words then
 // go through Channels' crisis floor and the agent's turn like any text.
 //
-// Muse Voice Transcribe on Meta's API takes mono 16-bit WAV, so anything else
-// is converted first. When Meta cannot answer, or nothing here can convert,
-// Muse Spark Open listens on zero-retention endpoints in the formats that
-// route takes. When neither can, the answer is no words at all, and Channels
-// says plainly that Mano could not listen. Only Meta models run here. Never
+// ElevenLabs Scribe listens first, and only in its zero-retention mode: an
+// account that cannot use that mode is refused, and the note goes on. Then
+// Muse Voice Transcribe on Meta's API, which takes mono 16-bit WAV, so
+// anything else is converted first. Then a hosted model on zero-retention
+// endpoints, in the formats that route takes. When none can, the answer is no
+// words at all, and Channels says plainly that Mano could not listen. Never
 // logs the words or the audio.
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DEFAULT_BASE_URL, OPEN_WEIGHT_MODEL, ZERO_RETENTION, makePrivateTmpDir, releasePrivateTmpDir } from "@mano/mail";
+import { DEFAULT_BASE_URL, ZERO_RETENTION, makePrivateTmpDir, releasePrivateTmpDir } from "@mano/mail";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { EngineError, type Engine } from "./engine.js";
 
 const TRANSCRIBE_MODEL = "muse-voice-transcribe-1.0";
+const SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text?enable_logging=false";
+const SCRIBE_MODEL = "scribe_v2";
+// The hosted listener: of the models Mano's eval allows, the one that heard
+// every synthetic note as said, the crisis note included (November 14 entry
+// in docs/decisions.md).
+export const LISTEN_MODEL = "google/gemini-3.8-flash";
 const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Under Channels' wait for this call.
 const LISTEN_BUDGET_MS = 55_000;
@@ -35,7 +42,7 @@ const LISTEN_PROMPT =
 
 // Each audio type Mano takes: the demuxer ffmpeg must use, named so a file
 // can never pick its own (a playlist that opens other files), and what the
-// open-weight route calls it, when it takes it as sent.
+// hosted route calls it, when it takes it as sent.
 const AUDIO: Record<string, { demuxer: string; format: string | null }> = {
   "audio/x-caf": { demuxer: "caf", format: null },
   "audio/mp4": { demuxer: "mov", format: "m4a" },
@@ -75,10 +82,30 @@ export const ffmpegWav: WavConverter = async (bytes, demuxer, timeoutMs) => {
 };
 
 export interface ListenDeps {
-  env: { META_MODEL_API_KEY?: string; OPENROUTER_API_KEY?: string };
+  env: { ELEVENLABS_API_KEY?: string; META_MODEL_API_KEY?: string; OPENROUTER_API_KEY?: string };
   fetchFn?: typeof fetch;
   toWav?: WavConverter;
   now?: () => number;
+}
+
+async function scribeWords(audio: Uint8Array, type: string, key: string, fetchFn: typeof fetch, deadline: number): Promise<string | null> {
+  const form = new FormData();
+  form.set("model_id", SCRIBE_MODEL);
+  form.set("tag_audio_events", "false");
+  form.set("file", new Blob([audio as BufferSource], { type }), "note");
+  const res = await fetchFn(SCRIBE_URL, {
+    method: "POST",
+    headers: { "xi-api-key": key, accept: "application/json" },
+    body: form,
+    signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+  });
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
+    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "scribe", status: res.status }));
+    return null;
+  }
+  const data = (await res.json()) as { text?: unknown };
+  return typeof data.text === "string" ? data.text.trim() : null;
 }
 
 async function metaWords(wav: Uint8Array, key: string, fetchFn: typeof fetch, deadline: number): Promise<string | null> {
@@ -100,12 +127,12 @@ async function metaWords(wav: Uint8Array, key: string, fetchFn: typeof fetch, de
   return typeof data.transcript === "string" ? data.transcript.trim() : null;
 }
 
-async function openWeightWords(audio: Uint8Array, format: string, key: string, fetchFn: typeof fetch, deadline: number): Promise<string | null> {
+async function hostedWords(audio: Uint8Array, format: string, key: string, fetchFn: typeof fetch, deadline: number): Promise<string | null> {
   const res = await fetchFn(OPEN_WEIGHT_URL, {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      model: OPEN_WEIGHT_MODEL,
+      model: LISTEN_MODEL,
       temperature: 0,
       provider: ZERO_RETENTION,
       messages: [
@@ -122,7 +149,7 @@ async function openWeightWords(audio: Uint8Array, format: string, key: string, f
   });
   if (!res.ok) {
     await res.body?.cancel().catch(() => undefined);
-    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "open_weight", status: res.status }));
+    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "hosted", status: res.status }));
     return null;
   }
   const data = (await res.json()) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] };
@@ -131,7 +158,7 @@ async function openWeightWords(audio: Uint8Array, format: string, key: string, f
   // Cut off before the end means a crisis sentence may be what was lost, so
   // only a finished transcript counts as heard.
   if (typeof words !== "string" || choice?.finish_reason !== "stop") {
-    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "open_weight", finish: typeof choice?.finish_reason === "string" ? choice.finish_reason : null }));
+    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "hosted", finish: typeof choice?.finish_reason === "string" ? choice.finish_reason : null }));
     return null;
   }
   const said = words.trim();
@@ -145,9 +172,17 @@ export async function transcribe(bytes: Uint8Array, mimeType: string, deadline: 
   if (!kind) return null;
   const fetchFn = deps.fetchFn ?? ((input, init) => fetch(input, init));
   const convert = deps.toWav ?? ffmpegWav;
-  const { META_MODEL_API_KEY: metaKey, OPENROUTER_API_KEY: openKey } = deps.env;
-  const wav = metaKey || kind.format === null ? await convert(bytes, kind.demuxer, Math.max(1, deadline - Date.now())).catch(() => null) : null;
+  const { ELEVENLABS_API_KEY: scribeKey, META_MODEL_API_KEY: metaKey, OPENROUTER_API_KEY: openKey } = deps.env;
+  const wav = scribeKey || metaKey || kind.format === null ? await convert(bytes, kind.demuxer, Math.max(1, deadline - Date.now())).catch(() => null) : null;
   if (wav && wav.byteLength > MAX_WAV_BYTES) return null;
+  const sent = wav ?? (kind.format && bytes.byteLength <= MAX_COMPRESSED_BYTES ? bytes : null);
+  if (scribeKey && sent) {
+    const words = await scribeWords(sent, wav ? "audio/wav" : mimeType, scribeKey, fetchFn, deadline).catch((err: unknown) => {
+      console.warn(JSON.stringify({ type: "mano_listen_failed", via: "scribe", err: err instanceof Error ? err.name : "unknown" }));
+      return null;
+    });
+    if (words !== null) return words;
+  }
   if (metaKey && wav) {
     const words = await metaWords(wav, metaKey, fetchFn, deadline).catch((err: unknown) => {
       console.warn(JSON.stringify({ type: "mano_listen_failed", via: "transcribe", err: err instanceof Error ? err.name : "unknown" }));
@@ -155,11 +190,9 @@ export async function transcribe(bytes: Uint8Array, mimeType: string, deadline: 
     });
     if (words !== null) return words;
   }
-  if (!openKey) return null;
-  const audio = wav ?? (kind.format && bytes.byteLength <= MAX_COMPRESSED_BYTES ? bytes : null);
-  if (!audio) return null;
-  return openWeightWords(audio, wav ? "wav" : kind.format!, openKey, fetchFn, deadline).catch((err: unknown) => {
-    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "open_weight", err: err instanceof Error ? err.name : "unknown" }));
+  if (!openKey || !sent) return null;
+  return hostedWords(sent, wav ? "wav" : kind.format!, openKey, fetchFn, deadline).catch((err: unknown) => {
+    console.warn(JSON.stringify({ type: "mano_listen_failed", via: "hosted", err: err instanceof Error ? err.name : "unknown" }));
     return null;
   });
 }
