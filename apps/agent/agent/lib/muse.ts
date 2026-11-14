@@ -10,11 +10,12 @@
 // value, request, or caller can select a cheaper contributor ID.
 //
 // MANO_MODEL_PROVIDER=openrouter (with OPENROUTER_API_KEY) switches the
-// agent to Meta's open-weight model through OpenRouter, pinned to
-// zero-retention endpoints that collect no data, the same pin as the text
-// line's fallback, sorted by latency and at low reasoning effort. It is
-// for testing while the Meta Model API is down. Filling a form follows the
-// same switch (computer-fill.ts), on a client of its own.
+// agent to a model through OpenRouter, pinned to zero-retention endpoints
+// that collect no data, the same pin as the text line's, sorted by latency
+// and at low reasoning effort. MANO_AGENT_MODEL names the model from
+// HOSTED_AGENT_MODELS; unset, it is Meta's open-weight model, and a name off
+// the list runs the stand-in. Filling a form follows the same switch
+// (computer-fill.ts), on a client of its own, with MANO_FILL_MODEL.
 //
 // MANO_MODEL_PROVIDER=modal (with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN)
 // switches turns to the same open-weight model on a Modal Shared Endpoint.
@@ -41,6 +42,15 @@ export const STANDARD_MODEL_ID = "muse-spark-1.3";
 export const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const OPEN_WEIGHT_MODEL_ID = "meta/muse-spark-open";
+// The models an agent turn may run on through OpenRouter.
+export const HOSTED_AGENT_MODELS: readonly string[] = Object.freeze([
+  OPEN_WEIGHT_MODEL_ID,
+  "anthropic/claude-haiku-5.5",
+  "anthropic/claude-sonnet-5.5",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
+  "google/gemini-3.8-flash",
+]);
 // OpenRouter provider routing: only endpoints with zero data retention,
 // and no provider that stores or trains on what it is sent.
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
@@ -67,6 +77,12 @@ function modalBaseUrl(raw: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// The window Eve compacts against: Anthropic's models publish 1,000,000
+// tokens, and the others at least the 1,048,576 Muse publishes.
+export function contextWindowFor(modelId: string): number {
+  return modelId.startsWith("anthropic/") ? 1_000_000 : MODEL_CONTEXT_WINDOW_TOKENS;
 }
 
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
@@ -265,15 +281,19 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
     // reaches no model rather than the Meta Model API.
     return { name: "modal", baseURL: baseURL ?? "", apiKey: baseURL ? (env.MODAL_PROXY_TOKEN ?? "") : "", modelId: MODAL_MODEL_ID, bodyExtra: MODAL_BODY };
   }
-  return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
-    ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
-    : {
-        name: "meta",
-        baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
-        apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "",
-        modelId: STANDARD_MODEL_ID,
-        bodyExtra: { store: false },
-      };
+  if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) {
+    const asked = env.MANO_AGENT_MODEL?.trim() || OPEN_WEIGHT_MODEL_ID;
+    const allowed = HOSTED_AGENT_MODELS.includes(asked);
+    // A name off the list leaves the key empty, so the agent runs its stand-in.
+    return { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: allowed ? env.OPENROUTER_API_KEY : "", modelId: allowed ? asked : OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY };
+  }
+  return {
+    name: "meta",
+    baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
+    apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "",
+    modelId: STANDARD_MODEL_ID,
+    bodyExtra: { store: false },
+  };
 }
 
 // On Modal's route a redirect must not carry a person's words to another host.

@@ -5,9 +5,11 @@
 // Held-out letters and answers stay in memory. Held-out photos go to a temp dir
 // outside the repo, removed when the run ends. Answers never reach a system.
 // Run: MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK set, plus either
-// MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY, or
+// MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY (MANO_EVAL_MODEL picks
+// a candidate reading model), or
 // MANO_MODEL_PROVIDER=modal with MODAL_ENDPOINT_URL, MODAL_PROXY_TOKEN and
-// MANO_EVAL_CEILING_USD (the run stops itself there), or META_MODEL_API_KEY:
+// with MANO_EVAL_CEILING_USD on either route (the run stops itself there), or
+// META_MODEL_API_KEY. MANO_EVAL_SYSTEMS=mano runs Mano alone:
 // pnpm --filter ./eval run heldout
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -87,4 +89,5 @@ try {
   unregister();
 }
 if (route === "modal") console.log(`model spend counted from tokens: ${JSON.stringify(modalSpendReport())}`);
+if (route === "openrouter") console.log(`model spend as OpenRouter billed it: ${JSON.stringify(modalSpendReport())}`);
 console.log("held-out: done");

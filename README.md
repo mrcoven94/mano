@@ -2,26 +2,51 @@
 
 [![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE)
 
-Mano is a text line for people renewing public benefits. Text it a photo of the letter, and Mano reads it, fills out the renewal, and files it only after you say yes. It is built for the hackathon problem statement Build for Your World.
+Mano is a text line for people renewing public benefits. Text it a photo of the letter, and Mano reads it, fills out the renewal, and files it only after you say yes. It was built for Meta's hackathon, problem statement Build for Your World, whose rules required Meta's models. Since November 14, 2026, each part runs on the model that did best on Mano's own held-out test, listed under [The real numbers](#the-real-numbers).
 
 Everything here uses synthetic people. Filings go only to our own sandbox agency portal, never to a real office.
 
-**After the hackathon.** Submissions closed on November 4, 2026. On November 9 the hosted models were switched off, so the text line answers with stand-in replies. On November 10 the live demo at withmano.com/try was retired and the site went back to residents, government and partners. Everything below describes the entry as it was submitted: links to withmano.com/try no longer open, and `apps/site/public/try/recording/run.json` is gone from the tree.
+**Status, November 14, 2026.** Submissions closed on November 4. Model spend was paused on November 9, so the text line has answered with stand-in replies since, and the judge demo at withmano.com/try was retired on November 10; old links to it now open the home page's Text Mano section. The models were then replaced role by role on the held-out test (below). The text line answers with a model again once Engine and Channels are deployed with these settings. The sections on the hackathon entry describe it as it was submitted.
 
-## For judges: try it in 60 seconds
+## Try it
 
-- **On the web, no login:** open [withmano.com/try](https://withmano.com/try) and press send. It runs a preset synthetic letter through the deployed agent, Engine, Guardian and sandbox portal, and lists every model call beside the steps. If Guardian is cold, the page counts down while it warms, which takes about 3 minutes. The same page shows the latest nightly test results below the demo ([withmano.com/try#results](https://withmano.com/try#results)).
+- **On the web:** [withmano.com](https://withmano.com) shows how Mano works. The no-login judge demo at withmano.com/try was retired on November 10, 2026.
 - **By text:** text (801) 920-3370.
 - **From a clone, no key:** run `pnpm install`, then `pnpm judge`. It runs nine labeled steps on recorded model responses and says which parts are real or simulated.
 - **From a clone, with your own Meta key:** run `META_MODEL_API_KEY=<your key> pnpm judge`. SAM 3.1 and Muse Spark 1.3 then run live on the Meta Model API. Details are in [How `pnpm judge` works](#how-pnpm-judge-works).
 
 ## A form Mano had never seen
 
-Open [withmano.com/try](https://withmano.com/try) and choose "Fill a form Mano has never seen". The sandbox portal generates a layout for that run. Mano has no integration with it: its computer reads screenshots, clicks points and types the person's values, then stops for approval.
+During judging, the demo at withmano.com/try (retired November 10, 2026) offered "Fill a form Mano has never seen". The sandbox portal generated a layout for that run. Mano has no integration with it: its computer reads screenshots, clicks points and types the person's values, then stops for approval.
 
 On November 4, 2026, all 6 production runs filled their own generated layout, and all 5 runs that pressed YES received a portal confirmation ([run table](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641669631)). These were six seeds on our own portal in one afternoon, not a rate for forms in general. One run finished filling and reached the question, but its client was interrupted and no YES was pressed. In a separate local measurement, 41 of 43 fills were fully correct, with two stopping at the step limit and saving nothing. The measurements and their limits are below.
 
 ## The real numbers
+
+### November 14, 2026: the same test on new models
+
+After the hackathon we ran the frozen held-out test again to pick a model for each part of Mano (LAP-501). These are the same 100 synthetic households as the second November 4 run, on the reader as it is now, refrozen at manifest `4282992194c290a5`. Muse Spark Open ran the same day as the baseline, because the reader changed since November 4. Every call went through OpenRouter's zero-retention endpoints, except Muse on its Modal Shared Endpoint.
+
+Text track, 100 synthetic households, Mano only:
+
+| Model reading for Mano | Correct packets | Missed deadlines | False deadlines | Readable copies asked for | Unsafe letters caught by the model | Evidence requested | Model cost, both tracks | Time per household |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| GPT-6 Luna (chosen) | 95 of 100 | 109 of 403 | 0 | 15 of 15 | 3 of 25 | 128 of 132 | $0.57 | 79 s |
+| Muse Spark Open, same day | 95 of 100 | 110 of 405 | 0 | 15 of 15 | 1 of 25 | 126 of 132 | $7.25 | 53 s |
+| Gemini 3.8 Flash | 94 of 100 | 83 of 405 | 0 | 0 of 15 | 4 of 25 | 125 of 132 | $8.08 | 80 s |
+| Claude Haiku 5.5 | 84 of 100 | 84 of 405 | 0 | 15 of 15 | 0 of 25 | 115 of 132 | $1.21 | 69 s |
+
+Plain code then blocked 12 more unsafe letters by their links for every model. Photo track, 10 households: Luna 10 of 10 packets and 3 of 14 deadlines missed, Muse 10 of 10 and 2 of 15, Flash 10 of 10 and 2 of 14, Haiku 9 of 10 and 2 of 15. Claude Sonnet 5.5 and GPT-6.1 Sol were dropped on the 20-household development split before the held-out run: 18 and 19 of 20 packets against Luna's 19, at $2.97 and $1.76 for that text track against Luna's $0.12.
+
+Luna matches Muse on packets and readable copies, asks for more evidence, and costs about a thirteenth as much, but takes longer per household. Flash misses the fewest deadlines and never asks for a readable copy. The other parts were measured on their own tests:
+
+- **Mano's computer: Claude Haiku 5.5.** On seven layouts of our sandbox portal it had not seen (five fixed, two scrambled), Haiku and Claude Sonnet 5.5 each filled all 7 with 49 of 49 fields right. Haiku took a median of 13.8 s and $0.02 for all seven, Sonnet 14.9 s and $0.59. Muse Spark Open, as it ran in production, also filled all 7 and was faster, at 9.1 s. Gemini 3.8 Flash filled 5, GPT-6.1 Sol 4 and GPT-6 Luna 2.
+- **Guardian: Gemini 3.8 Flash**, a different model from the agent's and the computer's, so the model that proposes an action never checks it. On Guardian's own 44 actions and 15 renewal forms it matched Muse Glimmer 30B case for case (precision 0.923, recall 1.000, 15 of 15 renewals), at a median of 2.1 s against 1.9 s.
+- **Voice notes: ElevenLabs Scribe**, only in its zero-retention mode, which our current ElevenLabs plan does not include, so Gemini 3.8 Flash on zero-retention endpoints listens today. Both heard six synthetic notes word for word. The old fallback, Muse Spark Open, answered a crisis note instead of writing it down.
+
+Choosing a model on the held-out households makes the chosen score optimistic, and these households have now been scored many times. The full method and limits are in the November 14 entry in `docs/decisions.md`.
+
+### November 4, 2026: the hackathon entry
 
 We ran the frozen held-out test twice on November 4, 2026, and both results stay published: the [first result](https://github.com/mrcoven94/mano/pull/1#issuecomment-6640378905) and the [disclosed second run](https://github.com/mrcoven94/mano/pull/1#issuecomment-6642247579). The second run does not replace the first. It is a second run on a changed reader, after the first result was seen, on the same wording pack with new households, so it is not a test on unseen wording.
 
@@ -55,24 +80,24 @@ How they were produced: the harness is in `eval/`, merged in [PR 1](https://gith
 
 ## The models as they run today
 
-Every model Mano calls at runtime is a Meta model. Meta's own API answered HTTP 402 (billing not set up) until the evening of November 4, 2026. Once it answered again, we ran the same renewal on production on both routes. Muse Spark 1.3 on the Meta Model API took 28 s to read the letter against 4.9 s on Muse Spark Open, 6 to 13 s per form step against about 2 s, and its form fill stopped before finishing. So production stays on the open-weight route below. The Meta Model API runs the nightly test: Muse Spark 1.3 answers and Muse Wonder grades. The measurement is in `docs/decisions.md` and on [withmano.com/try](https://withmano.com/try#results).
+Each part below runs the model that did best on its test on November 14, 2026, through OpenRouter pinned to zero-retention endpoints. Until then every model was a Meta model, as the hackathon required: Muse Spark Open on a Modal Shared Endpoint for turns, reading and forms, and Muse Glimmer 30B on our own GPU for Guardian. The parts in plain code did not change.
 
-| Step | Meta model | Where it runs | On production today |
+| Step | Model | Where it runs | Measured |
 | --- | --- | --- | --- |
-| Answering a text, with tools | Muse Spark Open (open weights), `meta-models/Muse-Spark-Open-816B-A42B` | Partner-provided inference on a Modal Shared Endpoint, with `meta/muse-spark-open` on OpenRouter as run-time backup | Running |
-| Reading a letter into cited fields, and saying which date the person must meet | Muse Spark Open | Modal Shared Endpoint, with OpenRouter as backup in the cases listed under [How model routing is set](#how-model-routing-is-set) | Running. If the read fails, the person gets no date and is asked to send the photo again |
-| Finding the letter in the photo | SAM 3.1 | Meta's API | Not called on the open-weight route, and it failed on the one Meta API run measured on November 4. On-device paper detection (plain code) takes its place |
-| Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, and not confirmed live on either route |
-| Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Running: three unbroken production runs, below. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
-| Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
-| Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed. Meta's API answers again since November 4. A failed check counts as a crisis |
-| Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby |
+| Answering a text, with tools | GPT-6 Luna, `openai/gpt-6-luna` | OpenRouter, zero-retention endpoints | Held-out test above |
+| Reading a letter into cited fields, and saying which date the person must meet | GPT-6 Luna | OpenRouter, zero-retention endpoints | Held-out test above. If the read fails, the person gets no date and is asked to send the photo again |
+| Finding the letter in the photo | None, on-device paper detection (plain code) | The agent | Held-out photo track above. SAM 3.1 is called only on the Meta route |
+| Listening to a voice note | ElevenLabs Scribe in zero-retention mode, then Gemini 3.8 Flash | ElevenLabs, then OpenRouter, zero-retention endpoints | Six synthetic notes, above |
+| Filling the form with Mano's computer | Claude Haiku 5.5, which reads screenshots and clicks points | OpenRouter, zero-retention endpoints, driving a desktop on Modal | Layouts probe above. When the computer or its model stops, Mano drafts the renewal without the computer and says so |
+| Guardian checks each action, before the question and again at the yes | Gemini 3.8 Flash | OpenRouter, zero-retention endpoints, called by Engine after its local rules | Guardian's eval above. Any failure blocks |
+| Crisis check, before the agent, on one short health question the keyword floor flags | GPT-6 Luna | OpenRouter, zero-retention endpoints | A failed check counts as a crisis |
+| Plain answer, when the agent cannot answer | GPT-6 Luna | OpenRouter, zero-retention endpoints | Standby |
 | Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running. The gate held the spine's letter in the production runs below. The reader's question was seen on production on two synthetic fixture letters ([PR 216](https://github.com/mrcoven94/mano/pull/216)), which is not a rate |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
 | Reminder the day before an interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed |
 
-These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
+These parts call no model: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
 
 At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. Mail's reply gives a date from the reader as a question to check, or says that it has already passed or that the letter also lists an interview. Mail saves a deadline automatically only from the gate in `packages/mail/src/gate.ts`.
 
@@ -138,7 +163,7 @@ flowchart LR
     gateway --> fax[Fax: off in production, our own number only]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
-    gateway --> guardian[Guardian: Muse Glimmer]
+    gateway --> guardian[Guardian: a separate model]
 ```
 
 | Path | What it does |
@@ -148,14 +173,14 @@ flowchart LR
 | `apps/engine` | The system of record on Cloudflare: one Durable Object per person, encrypted files in R2, deadlines, approvals, and the action gateway |
 | `packages/mail` | Turns a photo into letters and cited fields, then holds a deadline, names a date to check, or asks. It also screens for scams |
 | `packages/computer` | The screenshot and mouse loop for Mano's computer. It fills forms and never files them |
-| `packages/guardian` | Muse Glimmer on one Modal GPU, plus the local rules Engine runs first |
+| `packages/guardian` | Guardian on a hosted model, the earlier Muse Glimmer on one Modal GPU, and the local rules Engine runs first |
 | `packages/persona` | Mano's voice, the voice guard, and the crisis floor that always names 988 and 911 |
 | `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states. `pnpm --filter @mano/programs verify-sources` fetches every source again |
 | `packages/protocol` | The open message format for working a shared case. The spec is in `docs/protocol.md` |
 | `packages/accounts` | One person, one account: phone and email sign-in, linking and merge |
 | `packages/quality` | The answer-quality bench, `pnpm judge` and `pnpm spine:live` |
 | `apps/sandbox-portal` | The fake state benefits portal that every demo files to, under its own layout and generated ones |
-| `apps/site` | withmano.com, its pages for government, nonprofits and partners, and the live demo at `/try` |
+| `apps/site` | withmano.com and its pages for government, nonprofits and partners |
 | `apps/app` | The resident app in React Native with Expo |
 | `eval` | The held-out test and its baselines |
 | `apps/web` | One Cloudflare Worker that serves the app's web build, with email sign-in and chat with Mano's agent. A message is the same agent turn the text line runs. Run its checks with `pnpm --filter @mano/web check` |
@@ -180,7 +205,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 
 ## Why this exists
 
-In April 2026, [Propel tested general-purpose AI agents on the online SNAP application](https://www.propel.app/insights/can-ai-agents-help-people-apply-for-snap-part-1/) in two states, in an internal test with no real applicants and nothing submitted. Both agents guessed what they had not been told, entered a mistyped phone number without asking, and ticked the legal checkbox themselves. Mano asks one plain question instead of guessing, leaves the declaration to the person, and has Muse Glimmer check every action before anything is filed.
+In April 2026, [Propel tested general-purpose AI agents on the online SNAP application](https://www.propel.app/insights/can-ai-agents-help-people-apply-for-snap-part-1/) in two states, in an internal test with no real applicants and nothing submitted. Both agents guessed what they had not been told, entered a mistyped phone number without asking, and ticked the legal checkbox themselves. Mano asks one plain question instead of guessing, leaves the declaration to the person, and has Guardian, a separate model, check every action before anything is filed.
 
 A scam letter gets the warning first, and a single date in it appears only as the letter's claim, to check with the office.
 
@@ -208,7 +233,7 @@ The site does not offer these pieces. This is what is true of each one today:
 | Waiting on hold | On `main` and off in production ([Engine's health page](https://engine.withmano.com/health) shows `calls: off`). It has only a fake provider, with no real provider code, and has placed no real call |
 | Faxes and mailed letters | On `main` and off in production (the same page shows `fax: off` and `mail: off`). Faxes go only to our own number and letters only through a provider's test mode. No fax has been sent, and nothing has been mailed |
 | Sharing a case with a caseworker | On `main`. It ran on production with a synthetic person and a played model, with no real text and no live model |
-| Mano on the web | Built, but it needs an emailed sign-in code, so it is not part of the demo. Use [withmano.com/try](https://withmano.com/try) instead. It does not yet share memory with a person's texts |
+| Mano on the web | Built, but it needs an emailed sign-in code, so it is not part of the demo. It does not yet share memory with a person's texts |
 | iPhone app | The build is prepared and has not been made. It needs the maintainer's Apple account |
 
 ## How `pnpm judge` works
@@ -234,11 +259,11 @@ Three parts are simulated even with a key. Guardian's verdict is recorded, becau
 
 ## How model routing is set
 
-`MANO_MODEL_PROVIDER` in `apps/agent/agent/lib/muse.ts` picks the route, and production sets it to `modal`.
+`MANO_MODEL_PROVIDER` in `apps/agent/agent/lib/muse.ts` picks the route, and production sets it to `openrouter`.
 
 - `modal`, with `MODAL_ENDPOINT_URL` and `MODAL_PROXY_TOKEN`, sends turns, page reads and form fills to `meta-models/Muse-Spark-Open-816B-A42B` on a Modal Shared Endpoint. No request carries a pin on this route (see the November 4 entry in `docs/decisions.md`). With a setting missing or a URL off Modal's domain, it calls no model and does not fall back.
 - With `OPENROUTER_API_KEY` set as well, a turn or page read goes to `meta/muse-spark-open` on OpenRouter only when Modal fails before a response starts: no response within 30 seconds, a 429 or 5xx, or a lost connection. Once Modal has answered 200, a lost response does not go to OpenRouter, whether a turn is streaming, before or after its first token, or waiting on one whole answer, and the call fails. The one difference is a page read, whose 30 seconds also cover reading the body, so a body that stalls past them goes to OpenRouter. A log line with fixed words says which route answered. A form fill has no backup.
-- `openrouter`, with `OPENROUTER_API_KEY`, sends the same work to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight.
+- `openrouter`, with `OPENROUTER_API_KEY`, sends turns to `MANO_AGENT_MODEL`, letter reads to `MANO_READER_MODEL` and form fills to `MANO_FILL_MODEL`, each from a fixed list and `meta/muse-spark-open` when unset, with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. Engine's chat and Guardian (`MANO_AGENT_MODEL`, `MANO_GUARDIAN_MODEL`) and the text line's plain answer (`MANO_OPEN_WEIGHT_MODEL`) are set in each Worker's `wrangler.toml`.
 - With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. That route works again since November 4, and measured slower than the open-weight route (above).
 
 On either open-weight route, SAM 3.1 is not called. A fill has no hosted computer tool, so it never raises a safety check. The text line's own settings are in `apps/channels/wrangler.toml`. Its backup is OpenRouter only for now.
@@ -269,7 +294,7 @@ The sandbox portal also serves the renewal under other layouts (`/layouts`): fiv
 
 ## Team
 
-David Coven decides what gets built and owns the accounts. The code is written with coding agents, and every model Mano itself calls at runtime is a Meta model.
+David Coven decides what gets built and owns the accounts. The code is written with coding agents. Until November 14, 2026, every model Mano itself called at runtime was a Meta model; the models it calls now are listed under [The models as they run today](#the-models-as-they-run-today).
 
 - From October 26 to 29, Muse Code sessions built the first parts, one session per workstream.
 - From October 29, one Claude Code session leads: it plans the work, briefs a builder agent for each workstream, reads every diff and merges.

@@ -6,7 +6,7 @@ import { describe, it } from "vitest";
 import { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "../src/form-fill";
 import { runLoop, type LoopOutcome } from "../src/loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload } from "../src/model";
-import { MODAL_MODEL_ID, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
+import { MODAL_MODEL_ID, OpenWeightModelClient, hostedComputerModel } from "../src/open-weight";
 import { PlaywrightComputer } from "../src/playwright";
 import { recordFrames } from "../src/recorder";
 
@@ -27,7 +27,8 @@ import { recordFrames } from "../src/recorder";
  * proves the plumbing and measures nothing), meta (Muse Spark 1.3, needs
  * META_MODEL_API_KEY), open (Muse Spark Open, on Modal with MODAL_ENDPOINT_URL
  * and MODAL_PROXY_TOKEN, otherwise needs OPENROUTER_API_KEY) or route (whichever
- * the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter).
+ * the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter). On
+ * OpenRouter, MANO_FILL_MODEL picks the model, as it does for the agent.
  * MEASURE_LIMITS: agent (the fill's own step and time limits, and its recording
  * of each screen), probe (looser, to see what those limits cost) or both, the
  * default, which runs each layout twice and prints the rows side by side.
@@ -76,7 +77,9 @@ function modelFromEnv(): { label: string; id: string; client?: ModelClient } {
   if (openRoute) {
     const apiKey = process.env["OPENROUTER_API_KEY"];
     if (!apiKey) throw new Error("MEASURE_MODEL=open needs OPENROUTER_API_KEY");
-    return { label: OPEN_WEIGHT_MODEL_ID, id: OPEN_WEIGHT_MODEL_ID, client: new OpenWeightModelClient({ apiKey }) };
+    const id = hostedComputerModel(process.env["MANO_FILL_MODEL"]);
+    if (!id) throw new Error("MANO_FILL_MODEL names a model this path does not allow");
+    return { label: id, id, client: new Billed(new OpenWeightModelClient({ apiKey, model: id })) };
   }
   if (wanted === "meta" || wanted === "route") {
     const apiKey = process.env["META_MODEL_API_KEY"];
@@ -85,6 +88,18 @@ function modelFromEnv(): { label: string; id: string; client?: ModelClient } {
   }
   if (wanted !== "standin") throw new Error(`MEASURE_MODEL must be standin, meta, open or route, not ${wanted}`);
   return { label: "stand-in", id: "stand-in" };
+}
+
+// What OpenRouter billed for each answer, summed over the run.
+let billedUsd = 0;
+class Billed implements ModelClient {
+  constructor(private inner: ModelClient) {}
+  async createResponse(request: Parameters<ModelClient["createResponse"]>[0]): Promise<ResponsePayload> {
+    const payload = await this.inner.createResponse(request);
+    const cost = (payload as { usage?: { cost?: unknown } }).usage?.cost;
+    if (typeof cost === "number") billedUsd += cost;
+    return payload;
+  }
 }
 
 interface Screen {
@@ -287,6 +302,7 @@ describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
         );
       }
       if (seeds.length > 0) console.log(`Seeds: ${seeds.join(",")}`);
+      if (billedUsd > 0) console.log(`Billed by OpenRouter: $${billedUsd.toFixed(4)}`);
       if (out) writeFileSync(join(out, "results.json"), JSON.stringify({ portal: PORTAL, seeds, rows }, null, 2));
     },
     (LIMITS.agent.deadlineMs + LIMITS.probe.deadlineMs + 40_000) * (FIXED_LAYOUTS.length + MAX_SCRAMBLES),

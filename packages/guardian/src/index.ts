@@ -60,4 +60,5 @@ export {
   glimmerCheckerFromEnv,
 } from "./glimmer.js";
 export type { ProxyAuth, ServerInfo } from "./glimmer.js";
+export { HOSTED_GUARDIAN_MODELS, HostedGuardianChecker, hostedGuardianFetch } from "./hosted.js";
 export { canonicalRecipient } from "./rules.js";

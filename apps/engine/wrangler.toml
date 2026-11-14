@@ -43,9 +43,16 @@ MANO_DAILY_CHECK_SENDS = "off"
 # November 10, 2026 and its page is gone from the site, so this stays "off".
 MANO_TRY = "off"
 MANO_TRY_ORIGIN = "https://withmano.com"
+# Engine's chat and Guardian run on hosted models through OpenRouter, pinned
+# to zero-retention endpoints (OPENROUTER_API_KEY secret). Guardian is on a
+# different model from the agent's and from Mano's computer. The November 14,
+# 2026 entry in docs/decisions.md says why these.
+MANO_MODEL_PROVIDER = "openrouter"
+MANO_AGENT_MODEL = "openai/gpt-6-luna"
+MANO_GUARDIAN_MODEL = "google/gemini-3.8-flash"
 
 # Secrets (never commit values):
-#   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
+#   wrangler secret put OPENROUTER_API_KEY  (reads from stdin)
 #   wrangler secret put ENCRYPTION_KEK_B64
 #   wrangler secret put SESSION_SECRET
 #   wrangler secret put OPERATOR_SECRET  (marks people synthetic via the admin route)
@@ -63,10 +70,10 @@ MANO_TRY_ORIGIN = "https://withmano.com"
 #   TELNYX_FAX_CONNECTION_ID, TELNYX_PUBLIC_KEY, MANO_OWN_FAX_NUMBER,
 #   MANO_FAX_FROM_NUMBER (optional: faxes and letters stay off without them,
 #   see apps/engine/.dev.vars.example)
-#   MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN (optional: Guardian's check
-#   endpoint and bearer token; with none of the four set the checker is
-#   local rules only), MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET
-#   (the Modal proxy key pair the endpoint requires)
+#   MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN, MANO_GUARDIAN_KEY_ID and
+#   MANO_GUARDIAN_KEY_SECRET name Guardian on Modal, which is stopped. They
+#   must not be set beside MANO_GUARDIAN_MODEL: both together block every
+#   action, and the deploy deletes them.
 # Production sets all of these from the engine-production GitHub
 # environment in .github/workflows/deploy-engine.yml.
 # Optional model routing (see .dev.vars.example):

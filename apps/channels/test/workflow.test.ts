@@ -11,7 +11,7 @@ const REQUIRED = [
   "BLOOIO_CHANNEL_ID",
   "MANO_HANDLE_PEPPER",
   "ENCRYPTION_KEK_B64",
-  "META_MODEL_API_KEY",
+  "OPENROUTER_API_KEY",
 ];
 
 describe("deploy-channels workflow", () => {

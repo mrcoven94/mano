@@ -16,6 +16,8 @@ export const TEST_BINDINGS = {
   MANO_DAILY_CHECK_SENDS: "on",
   LOB_WEBHOOK_SECRET: "test-mail-webhook-secret-not-real",
   SANDBOX_PORTAL_TOKEN: "test-portal-token-not-real",
+  MANO_MODEL_PROVIDER: "",
+  MANO_GUARDIAN_MODEL: "",
 };
 
 export default defineConfig({

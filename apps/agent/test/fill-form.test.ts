@@ -825,6 +825,21 @@ describe("the computer and portal a deployment fills with", () => {
     expect(bodies).toEqual([expect.objectContaining({ person_id: "person-abc" })]);
   });
 
+  it("fills with the model MANO_FILL_MODEL names on OpenRouter, and with none when it names one off the list", async () => {
+    const bodies: Array<{ model?: string; provider?: unknown }> = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ id: "r", status: "completed", output: [] });
+    });
+    const hosted = { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key" };
+    const on = fillDepsFromEnv("person-abc", { ...hosted, MANO_FILL_MODEL: "anthropic/claude-sonnet-5.5" });
+    if ("unavailable" in on) throw new Error(on.unavailable);
+    expect(on.modelId).toBe("anthropic/claude-sonnet-5.5");
+    await on.model.createResponse({ instructions: "i", tools: [], input: [], store: false, model: on.modelId });
+    expect(bodies[0]).toMatchObject({ model: "anthropic/claude-sonnet-5.5", provider: { zdr: true, data_collection: "deny" } });
+    expect(fillDepsFromEnv("person-abc", { ...hosted, MANO_FILL_MODEL: "other/model" })).toEqual({ unavailable: "computer model not allowed" });
+  });
+
   it("follows the agent's model switch, and takes the open-weight key alone when the switch is on", async () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

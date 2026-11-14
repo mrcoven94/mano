@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const KEYS = ["MANO_MODEL_PROVIDER", "META_MODEL_API_KEY", "OPENROUTER_API_KEY", "MODAL_ENDPOINT_URL", "MODAL_PROXY_TOKEN"] as const;
+const KEYS = ["MANO_MODEL_PROVIDER", "META_MODEL_API_KEY", "OPENROUTER_API_KEY", "MODAL_ENDPOINT_URL", "MODAL_PROXY_TOKEN", "MANO_AGENT_MODEL"] as const;
 const MODAL_URL = "https://example--ep-test-server.us-west.modal.direct";
 
 async function startAgent(env: Partial<Record<(typeof KEYS)[number], string>>) {
@@ -29,6 +29,14 @@ describe("model path at startup", () => {
     const { modelId, pathLogs } = await startAgent({ MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-openrouter-key" });
     expect(modelId).toBe("meta/muse-spark-open");
     expect(pathLogs).toEqual(["mano: model path openrouter meta/muse-spark-open"]);
+  });
+
+  it("runs the model MANO_AGENT_MODEL names on OpenRouter, and the stand-in for one off the list", async () => {
+    const chosen = await startAgent({ MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key", MANO_AGENT_MODEL: "openai/gpt-6-luna" });
+    expect(chosen.modelId).toBe("openai/gpt-6-luna");
+    expect(chosen.pathLogs).toEqual(["mano: model path openrouter openai/gpt-6-luna"]);
+    const refused = await startAgent({ MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key", MANO_AGENT_MODEL: "other/model" });
+    expect(refused.modelId).toBe("stand-in");
   });
 
   it("answers with the stand-in when OpenRouter is chosen and no key is set", async () => {

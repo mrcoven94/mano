@@ -21,6 +21,9 @@ export interface Env {
   // until OPENROUTER_API_KEY is set; the model ID is in wrangler.toml.
   OPENROUTER_API_KEY?: string;
   MANO_OPEN_WEIGHT_MODEL?: string;
+  // "openrouter" with no Meta key sends every reply and crisis check to
+  // MANO_OPEN_WEIGHT_MODEL; "modal" asks a Modal Shared Endpoint first.
+  MANO_MODEL_PROVIDER?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

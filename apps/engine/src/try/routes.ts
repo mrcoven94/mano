@@ -429,7 +429,7 @@ async function guardian(env: Env, ledger: TryLedger, runId: string, send: typeof
   if (!run) return json({ error: "No such run." }, 404, headers);
   if (!SCENARIOS[run.scenario].needsGuardian) return json({ state: "failed", secondsLeft: 0 }, 409, headers);
   const setting = checkerSetting(env);
-  if (setting.kind !== "guardian") return json({ state: setting.kind === "local-rules" ? "ready" : "failed", secondsLeft: 0 }, 200, headers);
+  if (setting.kind !== "guardian") return json({ state: setting.kind === "local-rules" || setting.kind === "hosted-guardian" ? "ready" : "failed", secondsLeft: 0 }, 200, headers);
   const claim = await ledger.claimGuardian(runId);
   if (claim === "refused") return json({ state: "failed", secondsLeft: 0 }, 409, headers);
   if (claim === "ready") return json({ state: "ready", secondsLeft: 0 }, 200, headers);

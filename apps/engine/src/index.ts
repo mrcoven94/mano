@@ -192,6 +192,7 @@ import {
 } from "./fill-replay.js";
 import { parseDocumentMark } from "./documents.js";
 import { createCallServices } from "./calls/provider.js";
+import { hostedChatModel } from "./model-client.js";
 
 export { PersonAgent, OrgAgent };
 export { TryLedger } from "./try/ledger.js";
@@ -333,7 +334,7 @@ function bearerToken(request: Request): string | null {
 // Which parts are live and which are stand-ins. Labels only: this is
 // public, so it never carries values, only which side each part is on.
 export interface LiveStatus {
-  model: "meta" | "stand-in";
+  model: "meta" | "hosted" | "stand-in";
   modelVia: "ai-gateway" | "direct" | "none";
   executor: string;
   files: "bound" | "missing";
@@ -346,10 +347,11 @@ export interface LiveStatus {
 
 export function liveStatus(env: Env): LiveStatus {
   const hasKey = Boolean(env.META_MODEL_API_KEY);
+  const hosted = hostedChatModel(env) !== null;
   const calls = createCallServices();
   return {
-    model: hasKey ? "meta" : "stand-in",
-    modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
+    model: hasKey ? "meta" : hosted ? "hosted" : "stand-in",
+    modelVia: hosted ? "direct" : !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
     executor: env.EXECUTOR_MODE ?? "simulated",
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
@@ -365,7 +367,7 @@ export function liveStatus(env: Env): LiveStatus {
 // development running, but /health never reports a partial engine as ok.
 export function healthOk(env: Env): boolean {
   if (
-    !env.META_MODEL_API_KEY ||
+    (!env.META_MODEL_API_KEY && hostedChatModel(env) === null) ||
     !env.ENCRYPTION_KEK_B64 ||
     !env.FILES ||
     !sessionConfigured(env) ||
