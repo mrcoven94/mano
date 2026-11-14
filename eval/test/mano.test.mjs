@@ -412,6 +412,12 @@ test("a Modal reservation counts each image, however short its URL", () => {
   assert.ok(modalReserveUsd(two) - modalReserveUsd(plain) >= 2 * 3000 * 1.25e-6);
 });
 
+test("an inline page reserves what a short image URL does, not its bytes", () => {
+  const ask = (url) => modalChatBody({ messages: [{ role: "user", content: [{ type: "text", text: "read" }, { type: "image_url", image_url: { url } }] }], max_tokens: 100 });
+  const inline = ask(`data:image/jpeg;base64,${"A".repeat(400000)}`);
+  assert.equal(modalReserveUsd(inline), modalReserveUsd(ask("https://x.test/a.jpg")));
+});
+
 test("a call over the Modal ceiling never reaches the network and stops the run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mano-eval-ceiling-"));
   const script = join(dir, "over.mjs");

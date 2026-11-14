@@ -105,12 +105,14 @@ export function modalCostUsd(usage, prices = MODAL_USD_PER_TOKEN) {
 }
 
 // The most one request could cost: every token it allows, and a prompt estimated
-// from the body's size. Two bytes per token is more than text takes, but a short
-// image URL says nothing about the image, so each image part reserves its own tokens.
+// from the body's size. Two bytes per token is more than text takes. An image's
+// URL says nothing about what it costs, a short one or an inline page alike, so
+// each image part reserves its own tokens and its URL counts for nothing.
 export function modalReserveUsd(body, prices = MODAL_USD_PER_TOKEN) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const images = messages.flatMap((m) => (Array.isArray(m?.content) ? m.content : [])).filter((part) => part?.type === "image_url").length;
-  const promptTokens = Math.ceil(Buffer.byteLength(JSON.stringify(body)) / BODY_BYTES_PER_TOKEN) + images * RESERVED_TOKENS_PER_IMAGE;
+  const words = JSON.stringify(body, (key, value) => (key === "url" && typeof value === "string" ? "" : value));
+  const promptTokens = Math.ceil(Buffer.byteLength(words) / BODY_BYTES_PER_TOKEN) + images * RESERVED_TOKENS_PER_IMAGE;
   return promptTokens * prices.prompt + (body.max_tokens ?? MODAL_DEFAULT_MAX_TOKENS) * prices.completion;
 }
 
