@@ -208,7 +208,6 @@ class ModalOpenWeightClient extends OpenWeightClient {
 }
 
 interface ModalSettings {
-  MANO_MODEL_PROVIDER?: string;
   MODAL_ENDPOINT_URL?: string;
   MODAL_PROXY_TOKEN?: string;
 }
