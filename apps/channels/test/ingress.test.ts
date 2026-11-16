@@ -425,7 +425,7 @@ describe("reconcile", () => {
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_feed_y", ...sameMessage }), "reconcile")).toBe("duplicate");
   });
 
-  it("pauses a page on transient hydrate failure and resumes next run", async () => {
+  it("skips a row whose hydrate fails, and retries it on the next run", async () => {
     const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
     const { inboundEvent } = await import("./helpers.js");
     const sent: unknown[] = [];
@@ -450,9 +450,10 @@ describe("reconcile", () => {
       ...hookEnv(sent),
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
-    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 1 });
-    feed.hydrateErrors.delete("msg_p_b");
+    // One failing row does not hold back the row behind it.
     expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 2 });
+    feed.hydrateErrors.delete("msg_p_b");
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 1 });
     expect(sent).toHaveLength(3);
   });
 
@@ -537,6 +538,29 @@ describe("reconcile", () => {
     } as unknown as Env;
     expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 0 });
     expect(sent).toHaveLength(0);
+  });
+
+  it("stops a run after three hydrate failures in a row, and finishes on the next", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const at = THIN_NOW - 60_000;
+    const ids = ["evt_d1", "evt_d2", "evt_d3", "evt_d4"];
+    const feed = new RecordingChannel();
+    feed.feedPages = [ids.map((id) => inboundEvent({ id, messageId: `msg_${id}`, channelId: null as never, chatId: "chat_feed_aaa", occurredAtMs: at }))];
+    for (const id of ids) {
+      feed.hydrated.set(`msg_${id}`, inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: id, occurredAtMs: at }));
+      feed.hydrateErrors.set(`msg_${id}`, new Error("fetch failed"));
+    }
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 0 });
+    expect(feed.hydrateCalls).toEqual(["msg_evt_d1", "msg_evt_d2", "msg_evt_d3"]);
+    feed.hydrateErrors.clear();
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 4 });
   });
 
   it("logs a failing cron tick instead of throwing", async () => {

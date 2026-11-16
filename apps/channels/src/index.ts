@@ -27,6 +27,8 @@ import { DEFAULT_RUNNER_CONFIG } from "./runner.js";
 // finished by the next runs while it is still inside the window.
 import { RECONCILE_LIMIT, RECONCILE_MAX_PAGES, RECONCILE_MAX_READ_PAGES } from "./global.js";
 
+const RECONCILE_MAX_FAILURES_IN_A_ROW = 3;
+
 export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
 
@@ -191,6 +193,7 @@ export async function reconcile(
   let pages = 0;
   let enqueued = 0;
   let workPages = 0;
+  let failuresInARow = 0;
   let reachedEnd = false;
   while (pages < RECONCILE_MAX_READ_PAGES && workPages < RECONCILE_MAX_PAGES) {
     const batch = await feed.listEvents(cursor, RECONCILE_LIMIT);
@@ -203,12 +206,17 @@ export async function reconcile(
       if (!unseen.has(event.id)) continue;
       const full = await hydrateForReconcile(feed, event, env, logger, windowStartMs);
       if (full === "paused") {
-        // Transient fetch failure: this row stays unseen, and the next
-        // run, which rescans the window, retries it.
+        // A fetch failed: this row stays unseen, and the next run, which
+        // rescans the window, retries it. One message that keeps failing
+        // must not hold back the rows behind it, so the run goes on, and
+        // stops only when several fail in a row (the provider is down).
+        failuresInARow += 1;
+        if (failuresInARow < RECONCILE_MAX_FAILURES_IN_A_ROW) continue;
         await noteSeenIds(env, seen);
         logger.info("reconciled", { pages, enqueued });
         return { pages, enqueued };
       }
+      failuresInARow = 0;
       if (full) {
         await env.EVENTS.send(full);
         enqueued += 1;
