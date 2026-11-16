@@ -4,14 +4,14 @@
 
 Mano is a text line for people renewing public benefits. Text it a photo of the letter, and Mano reads it, fills out the renewal, and files it only after you say yes. It is built for the hackathon problem statement Build for Your World.
 
-Everything here uses synthetic people. Filings go only to our own sandbox agency portal, never to a real office.
+Tests, evals and demos use synthetic people only. Since November 15, 2026, real people may use Mano in one pilot, with consent (rule 2 in `AGENTS.md`). Mano's own computer files only to our sandbox agency portal, never to a real office.
 
-**After the hackathon.** Submissions closed on November 4, 2026. On November 9 the hosted models were switched off, so the text line answers with stand-in replies. On November 10 the live demo at withmano.com/try was retired and the site went back to residents, government and partners. Everything below describes the entry as it was submitted: links to withmano.com/try no longer open, and `apps/site/public/try/recording/run.json` is gone from the tree.
+**After the hackathon.** Submissions closed on November 4, 2026. On November 9 the hosted models were switched off; on November 15 Mano was restarted and the text line answers again, at (380) 277-6425. The earlier number, (801) 920-3370, was banned by the messaging provider on November 15 and no longer reaches Mano. On November 10 the live demo at withmano.com/try was retired and the site went back to residents, government and partners. Everything below describes the entry as it was submitted: links to withmano.com/try no longer open, and `apps/site/public/try/recording/run.json` is gone from the tree.
 
 ## For judges: try it in 60 seconds
 
 - **On the web, no login:** open [withmano.com/try](https://withmano.com/try) and press send. It runs a preset synthetic letter through the deployed agent, Engine, Guardian and sandbox portal, and lists every model call beside the steps. If Guardian is cold, the page counts down while it warms, which takes about 3 minutes. The same page shows the latest nightly test results below the demo ([withmano.com/try#results](https://withmano.com/try#results)).
-- **By text:** text (801) 920-3370.
+- **By text:** text (380) 277-6425.
 - **From a clone, no key:** run `pnpm install`, then `pnpm judge`. It runs nine labeled steps on recorded model responses and says which parts are real or simulated.
 - **From a clone, with your own Meta key:** run `META_MODEL_API_KEY=<your key> pnpm judge`. SAM 3.1 and Muse Spark 1.3 then run live on the Meta Model API. Details are in [How `pnpm judge` works](#how-pnpm-judge-works).
 
