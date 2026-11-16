@@ -54,7 +54,11 @@ const setClock = (ms: number) => {
 };
 
 // A local wall time on a fixed date in the person's zone, days after it.
-const DAY = "2026-11-10";
+// Only Date is faked: workerd runs Durable Object alarms on the real clock,
+// so a date in the past lets an earlier test's alarms fire on their own and
+// send into a later test's recorder. The date stays far in the future;
+// 2026-11-10 broke this file once the real date passed it.
+const DAY = "2037-11-10";
 const dayPlus = (days: number) => new Date(Date.parse(`${DAY}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 const at = (days: number, hour: number, minute: number, zone: string) => zonedInstant(dayPlus(days), hour, minute, zone);
 const PACIFIC = "America/Los_Angeles";
