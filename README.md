@@ -4,7 +4,7 @@
 
 Mano is a text line for people renewing public benefits. Text it a photo of the letter, and Mano reads it, fills out the renewal, and files it only after you say yes. It is built for the hackathon problem statement Build for Your World.
 
-Tests, evals and demos use synthetic people only. Since November 15, 2026, real people may use Mano in one pilot, with consent (rule 2 in `AGENTS.md`). Mano's own computer files only to our sandbox agency portal, never to a real office.
+Tests, evals and demos use synthetic people only. Since November 15, 2026, real people may use Mano in one pilot, with consent (rule 2 in `AGENTS.md`). Filling and filing stay synthetic only: Mano's own computer files only to our sandbox agency portal, never to a real office, and a real person's applications will go to Front Door once that handoff is built.
 
 **After the hackathon.** Submissions closed on November 4, 2026. On November 9 the hosted models were switched off; on November 15 Mano was restarted and the text line answers again, at (380) 277-6425. The earlier number, (801) 920-3370, was banned by the messaging provider on November 15 and no longer reaches Mano. On November 10 the live demo at withmano.com/try was retired and the site went back to residents, government and partners. Everything below describes the entry as it was submitted: links to withmano.com/try no longer open, and `apps/site/public/try/recording/run.json` is gone from the tree.
 
