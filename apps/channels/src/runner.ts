@@ -473,7 +473,12 @@ export class ConversationRunner {
       // message, a photo or voice note included, cancels a waiting ask.
       if (this.deps.deleteConversation && event.attachments.length === 0 && isDeleteRequest(text)) {
         const { deleteAskedAtMs: asked, deleteCancelledAtMs: cancelled } = store.meta();
-        if (asked > 0 && asked > cancelled && when > asked && when - asked <= DELETE_CONFIRM_WINDOW_MS) return this.confirmDelete(event, when);
+        if (asked > 0 && asked >= cancelled && when > asked && when - asked <= DELETE_CONFIRM_WINDOW_MS) return this.confirmDelete(event, when);
+        // Older than something the person sent after it: they moved on.
+        if (cancelled > when) {
+          logger.info("delete_ask_superseded", { handle: this.logHandle(), eventId: event.id });
+          return "recorded";
+        }
         return this.askDelete(event, when);
       }
       this.cancelDeleteAsk(event.id, when);
@@ -673,7 +678,7 @@ export class ConversationRunner {
     const sent = await this.sendBubble({ turn, part: 0, tag: "delete_ask", text: DELETE_ASK_BUBBLE, chatId, to });
     const now = store.meta();
     const accepted = sent.state === "sent" || sent.state === "delivered" || sent.state === "read";
-    if (accepted && now.generation === before.generation && now.deleteCancelledAtMs < when) {
+    if (accepted && now.generation === before.generation && now.deleteCancelledAtMs <= when) {
       store.patchMeta({ deleteAskedAtMs: Math.max(now.deleteAskedAtMs, when) });
       logger.info("delete_asked", { handle: this.logHandle(), eventId: event.id, turn });
     } else {
@@ -683,7 +688,9 @@ export class ConversationRunner {
   }
 
   // Anything else from the person, a STOP or a close, at its timestamp:
-  // clears a waiting ask, and no ask from at or before it can confirm.
+  // clears a waiting ask, and no ask from before it can confirm. One from
+  // the same instant can: timestamps may be whole seconds, and that one
+  // arrived after it.
   private cancelDeleteAsk(eventId: string, atMs: number): void {
     const meta = this.deps.store.meta();
     this.deps.store.patchMeta({ deleteAskedAtMs: 0, deleteCancelledAtMs: Math.max(meta.deleteCancelledAtMs, atMs) });

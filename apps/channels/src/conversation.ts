@@ -546,7 +546,10 @@ export class ConversationDO implements DurableObject {
     this.decorations.cancelAll("deleted");
     const intent = { ...newPendingDelete(this.env, handleHash, store.meta().generation), nextAtMs: Date.now() };
     savePendingDelete(sql, intent);
-    await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));
+    // The first attempt runs even when the retry alarm cannot be set.
+    await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1)).catch((err: unknown) =>
+      this.logger.warn("conversation_delete_alarm_failed", { handle: handleHash, err: errName(err) }),
+    );
     const result = await this.advancePendingDelete(intent);
     if (!result.pending) this.logger.info("conversation_deleted", { handle: handleHash, engineCleared: true, agentCleared: true });
     return result;

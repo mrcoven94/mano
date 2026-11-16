@@ -122,9 +122,23 @@ describe("delete by text", () => {
     h.advance(1000);
     const t3 = h.now;
     expect(await say(h, "never mind", { occurredAtMs: t2 })).toBe("queued");
-    expect(await say(h, "DELETE", { occurredAtMs: t1 })).toBe("delete-asked");
+    // The person moved on after it: no ask for the late DELETE.
+    expect(await say(h, "DELETE", { occurredAtMs: t1 })).toBe("recorded");
     expect(await say(h, "DELETE", { occurredAtMs: t3 })).toBe("delete-asked");
     expect(deletes).toEqual([]);
+    expect(sentTexts(h)).toEqual([DELETE_ASK_BUBBLE]);
+  });
+
+  it("arms an ask sent in the same second as an earlier text", async () => {
+    // Council review, C2: timestamps can be whole seconds.
+    const { h, deletes } = world();
+    h.store.patchMeta({ introduced: true });
+    const t = h.now;
+    expect(await say(h, "hi", { occurredAtMs: t })).toBe("queued");
+    expect(await say(h, "DELETE", { occurredAtMs: t })).toBe("delete-asked");
+    h.advance(1000);
+    expect(await say(h, "DELETE")).toBe("deleted");
+    expect(deletes).toHaveLength(1);
   });
 
   it("asks again when the second DELETE comes after the window", async () => {
