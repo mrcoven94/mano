@@ -31,10 +31,18 @@ export function defaultGlobalState(): GlobalStateRow {
   return { cursor: null, spendDay: "", spentUsd: 0, byteDay: "", bytesUsed: 0 };
 }
 
-// Feed event IDs remembered as already enqueued. Bounded: older pages
-// fall out and would requeue, but the conversation event log dedupes
-// them.
-export const SEEN_IDS_CAP = 500;
+// Reconcile's limits per run (apps/channels/src/index.ts): rows per feed
+// page, pages with rows to handle, and pages read in all. A page's ids
+// are checked against the seen store in one SQL statement, and a Durable
+// Object's SQLite binds at most 100 parameters, so a page stays at 100.
+export const RECONCILE_LIMIT = 100;
+export const RECONCILE_MAX_PAGES = 5;
+export const RECONCILE_MAX_READ_PAGES = 25;
+
+// Feed event IDs remembered as already handled. It holds every row one
+// reconcile run can read, so a row inside the inbound age window is not
+// forgotten while runs still rescan it (LAP-1262).
+export const SEEN_IDS_CAP = RECONCILE_MAX_READ_PAGES * RECONCILE_LIMIT;
 
 export interface GlobalStore {
   state(): GlobalStateRow;

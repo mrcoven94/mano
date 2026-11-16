@@ -21,14 +21,17 @@ import {
 import type { Env } from "./env.js";
 import { globalStateStub } from "./conversation.js";
 import { R2FileStore, type FileStore } from "./files.js";
+import { DEFAULT_RUNNER_CONFIG } from "./runner.js";
+// Per run: at most RECONCILE_MAX_PAGES pages with rows to handle and
+// RECONCILE_MAX_READ_PAGES read in all, so a burst past the first is
+// finished by the next runs while it is still inside the window.
+import { RECONCILE_LIMIT, RECONCILE_MAX_PAGES, RECONCILE_MAX_READ_PAGES } from "./global.js";
 
 export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
 
 const WEBHOOK_PATH = "/webhooks/blooio";
 const AGENT_SEND_PATH = "/internal/agent-send";
-const RECONCILE_LIMIT = 100;
-const RECONCILE_MAX_PAGES = 5;
 const SWEEP_LIMIT = 1000;
 
 function workerChannel(env: Env): Channel {
@@ -163,34 +166,45 @@ async function routeForChat(env: Env, chatId: string): Promise<string | null> {
 }
 
 // Reconciliation: read the provider's event feed from its newest page
-// and enqueue anything for our line. Blooio lists events newest first
-// and next_cursor pages back in time, so every run starts at the head
-// and walks back only until a page holds nothing unseen; a saved
+// and enqueue anything for our line that a runner could still answer.
+// Blooio lists events newest first and next_cursor pages back in time,
+// so every run starts at the head and walks back through the runner's
+// inbound age window (DEFAULT_RUNNER_CONFIG.maxInboundAgeMs); a saved
 // cursor would point into the past and miss every new text (LAP-1262).
-// Feed rows are thin (no channel, text or sender), so inbound receipts
-// hydrate their message before queueing; anything else for our line
-// queues directly. Skipped rows are still marked seen, so the next run
-// stops at them, and the DO event log dedupes the rest. A text older
-// than the runner's inbound age limit is recorded, never answered.
-export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: number; enqueued: number }> {
+// Each run rescans the whole window, so a row a paused or capped run
+// left behind is retried until it ages out. Rows outside the window, or
+// with no time, are never queued: the runner would not answer them, and
+// an old STOP must not be acknowledged again. Feed rows are thin (no
+// channel, text or sender), so inbound receipts hydrate their message
+// before queueing; anything else for our line queues directly. Handled
+// rows are marked seen so later runs skip them, and the conversation's
+// event log dedupes the rest.
+export async function reconcile(
+  env: Env,
+  channel?: Channel,
+  nowMs: number = Date.now(),
+): Promise<{ pages: number; enqueued: number }> {
   const logger = createLogger();
   const feed = channel ?? workerChannel(env);
+  const windowStartMs = nowMs - DEFAULT_RUNNER_CONFIG.maxInboundAgeMs;
   let cursor: string | null = null;
   let pages = 0;
   let enqueued = 0;
-  for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
+  let workPages = 0;
+  let reachedEnd = false;
+  while (pages < RECONCILE_MAX_READ_PAGES && workPages < RECONCILE_MAX_PAGES) {
     const batch = await feed.listEvents(cursor, RECONCILE_LIMIT);
     pages += 1;
-    const unseen = new Set(await checkUnseen(env, batch.events.map((event) => event.id)));
-    // Everything from here back was handled by an earlier run.
-    if (unseen.size === 0) break;
+    const fresh = batch.events.filter((event) => event.occurredAtMs !== null && event.occurredAtMs >= windowStartMs);
+    const unseen = new Set(await checkUnseen(env, fresh.map((event) => event.id)));
+    if (unseen.size > 0) workPages += 1;
     const seen: string[] = [];
-    for (const event of batch.events) {
+    for (const event of fresh) {
       if (!unseen.has(event.id)) continue;
-      const full = await hydrateForReconcile(feed, event, env, logger);
+      const full = await hydrateForReconcile(feed, event, env, logger, windowStartMs);
       if (full === "paused") {
-        // Transient fetch failure: the next run starts at the head again
-        // and retries this row; rows already handled stay marked.
+        // Transient fetch failure: this row stays unseen, and the next
+        // run, which rescans the window, retries it.
         await noteSeenIds(env, seen);
         logger.info("reconciled", { pages, enqueued });
         return { pages, enqueued };
@@ -204,9 +218,16 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
     // Noted only after the queue accepted them: a throw above leaves
     // the page unmarked, and the next run retries it.
     await noteSeenIds(env, seen);
-    if (!batch.nextCursor) break;
+    // The feed is newest first: a page that reaches past the window
+    // means everything older is outside it too.
+    const pastWindow = batch.events.some((event) => event.occurredAtMs !== null && event.occurredAtMs < windowStartMs);
+    if (pastWindow || !batch.nextCursor) {
+      reachedEnd = true;
+      break;
+    }
     cursor = batch.nextCursor;
   }
+  if (!reachedEnd) logger.warn("reconcile_capped", { pages });
   logger.info("reconciled", { pages, enqueued });
   return { pages, enqueued };
 }
@@ -220,12 +241,16 @@ async function hydrateForReconcile(
   event: NormalizedEvent,
   env: Env,
   logger: ReturnType<typeof createLogger>,
+  windowStartMs: number,
 ): Promise<NormalizedEvent | null | "paused"> {
   if (event.channelId === env.BLOOIO_CHANNEL_ID) return event;
   if (event.kind !== "message.received" || !event.chatId || !event.messageId) return null;
   try {
     const full = await feed.hydrateEvent(event);
     if (!full || full.channelId !== env.BLOOIO_CHANNEL_ID) return null;
+    // Hydrating takes the message's own time, which can be older than the
+    // feed row's: an old STOP must not be queued and acknowledged again.
+    if (full.occurredAtMs === null || full.occurredAtMs < windowStartMs) return null;
     return full;
   } catch (err) {
     logger.warn("reconcile_paused", { err: errName(err) });
