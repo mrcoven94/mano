@@ -162,43 +162,35 @@ async function routeForChat(env: Env, chatId: string): Promise<string | null> {
   return ((await res.json()) as { handleHash: string | null }).handleHash;
 }
 
-async function readCursor(env: Env): Promise<string | null> {
-  const res = await globalStateStub(env).fetch("https://state/internal/cursor");
-  if (!res.ok) throw new Error(`Cursor read failed: ${res.status}`);
-  return ((await res.json()) as { cursor: string | null }).cursor;
-}
-
-async function saveCursor(env: Env, cursor: string | null): Promise<void> {
-  await globalStateStub(env).fetch("https://state/internal/cursor", {
-    method: "POST",
-    body: JSON.stringify({ cursor }),
-  });
-}
-
-// Reconciliation: page the provider's event feed since the last cursor
-// and enqueue anything for our line. Feed rows are thin (no channel,
-// text or sender), so inbound receipts hydrate their message before
-// queueing; anything else for our line queues directly. Skipped rows
-// are still marked seen so the cursor keeps moving, and a page the
-// provider serves again is filtered through the seen high-watermark,
-// so only new events requeue; the DO event log dedupes the rest.
+// Reconciliation: read the provider's event feed from its newest page
+// and enqueue anything for our line. Blooio lists events newest first
+// and next_cursor pages back in time, so every run starts at the head
+// and walks back only until a page holds nothing unseen; a saved
+// cursor would point into the past and miss every new text (LAP-1262).
+// Feed rows are thin (no channel, text or sender), so inbound receipts
+// hydrate their message before queueing; anything else for our line
+// queues directly. Skipped rows are still marked seen, so the next run
+// stops at them, and the DO event log dedupes the rest. A text older
+// than the runner's inbound age limit is recorded, never answered.
 export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: number; enqueued: number }> {
   const logger = createLogger();
   const feed = channel ?? workerChannel(env);
-  let cursor = await readCursor(env);
+  let cursor: string | null = null;
   let pages = 0;
   let enqueued = 0;
   for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
     const batch = await feed.listEvents(cursor, RECONCILE_LIMIT);
     pages += 1;
     const unseen = new Set(await checkUnseen(env, batch.events.map((event) => event.id)));
+    // Everything from here back was handled by an earlier run.
+    if (unseen.size === 0) break;
     const seen: string[] = [];
     for (const event of batch.events) {
       if (!unseen.has(event.id)) continue;
       const full = await hydrateForReconcile(feed, event, env, logger);
       if (full === "paused") {
-        // Transient fetch failure: keep the cursor here so the next
-        // run retries this page; rows already handled stay marked.
+        // Transient fetch failure: the next run starts at the head again
+        // and retries this row; rows already handled stay marked.
         await noteSeenIds(env, seen);
         logger.info("reconciled", { pages, enqueued });
         return { pages, enqueued };
@@ -212,11 +204,8 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
     // Noted only after the queue accepted them: a throw above leaves
     // the page unmarked, and the next run retries it.
     await noteSeenIds(env, seen);
-    // No next cursor means the feed is drained; keep the last cursor so
-    // the next run resumes instead of rereading from the start.
     if (!batch.nextCursor) break;
     cursor = batch.nextCursor;
-    await saveCursor(env, cursor);
   }
   logger.info("reconciled", { pages, enqueued });
   return { pages, enqueued };

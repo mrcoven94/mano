@@ -308,7 +308,7 @@ describe("reconcile", () => {
     };
   }
 
-  it("enqueues missed events for our line and moves the cursor", async () => {
+  it("enqueues missed events for our line", async () => {
     const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
     const sent: unknown[] = [];
     const stub = stateStub();
@@ -324,7 +324,28 @@ describe("reconcile", () => {
     expect(result).toEqual({ pages: 2, enqueued: 1 });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ id: "evt_hook_1" });
-    expect(stub.cursor).toBe("1");
+  });
+
+  // Blooio's feed is newest first and next_cursor pages back in time, so
+  // a run that resumed from a saved cursor reread only old pages and
+  // never saw a text that arrived after it (LAP-1262).
+  it("sees a new event at the head of the feed after an earlier run paged back", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const ours = (id: string) => inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: id });
+    const feed = new RecordingChannel();
+    feed.feedPages = [[ours("evt_head_1")], [ours("evt_older_1")]];
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed)).toEqual({ pages: 2, enqueued: 2 });
+    feed.feedPages = [[ours("evt_new"), ours("evt_head_1")], [ours("evt_older_1")]];
+    // It reads the second page only to find it already handled.
+    expect(await reconcile(env, feed)).toEqual({ pages: 2, enqueued: 1 });
+    expect(sent.map((e) => (e as { id: string }).id)).toEqual(["evt_head_1", "evt_older_1", "evt_new"]);
   });
 
   it("does not requeue a page the feed serves again", async () => {
@@ -424,10 +445,8 @@ describe("reconcile", () => {
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
     expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
-    expect(stub.cursor).toBeNull();
     feed.hydrateErrors.delete("msg_p_b");
     expect(await reconcile(env, feed)).toEqual({ pages: 2, enqueued: 2 });
-    expect(stub.cursor).toBe("1");
     expect(sent).toHaveLength(3);
   });
 
