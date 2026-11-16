@@ -141,6 +141,47 @@ describe("delete by text", () => {
     expect(deletes).toHaveLength(1);
   });
 
+  it("never arms an ask that a text cancelled while it was sending, even at the same instant", async () => {
+    // Sol review 4, S4.
+    const { h, deletes } = world();
+    h.store.patchMeta({ introduced: true });
+    const send = h.channel.send.bind(h.channel);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held = true;
+    h.channel.send = async (input) => {
+      if (held) {
+        held = false;
+        await gate;
+      }
+      return send(input);
+    };
+    const t = h.now;
+    const asking = say(h, "DELETE", { occurredAtMs: t });
+    await Promise.resolve();
+    expect(await say(h, "never mind", { occurredAtMs: t })).toBe("queued");
+    release();
+    expect(await asking).toBe("delete-asked");
+    expect(h.store.meta().deleteAskedAtMs).toBe(0);
+    h.advance(1000);
+    expect(await say(h, "DELETE")).toBe("delete-asked");
+    expect(deletes).toEqual([]);
+  });
+
+  it("lets an undated reaction cancel without moving the cancel time", async () => {
+    // Council review, C3: a Worker clock ahead of the provider's must not swallow the next DELETE.
+    const { h, deletes } = world();
+    await say(h, "DELETE");
+    h.advance(1000);
+    const reaction: NormalizedEvent = { ...text(h, ""), kind: "reaction", rawType: "message.reaction", text: null, occurredAtMs: null, reaction: { value: "like", action: "add" } };
+    await h.runner.handleEvent(reaction, "webhook");
+    expect(h.store.meta().deleteAskedAtMs).toBe(0);
+    expect(await say(h, "DELETE", { occurredAtMs: h.now - 500 })).toBe("delete-asked");
+    h.advance(1000);
+    expect(await say(h, "DELETE")).toBe("deleted");
+    expect(deletes).toHaveLength(1);
+  });
+
   it("asks again when the second DELETE comes after the window", async () => {
     const { h, deletes } = world();
     await say(h, "DELETE");

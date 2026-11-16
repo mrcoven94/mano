@@ -557,7 +557,7 @@ export class ConversationRunner {
     // an approval here: Engine and the Agent own approvals, so Channels
     // records it and passes it on.
     if (event.kind === "reaction") {
-      if (event.direction !== "outbound") this.cancelDeleteAsk(event.id, when !== null && when > 0 ? when : nowMs());
+      if (event.direction !== "outbound") this.cancelDeleteAsk(event.id, when);
       const onMano = event.messageId ? store.outboundByMessageId(event.messageId) !== null : false;
       logger.info("reaction_received", {
         handle: this.logHandle(),
@@ -571,7 +571,7 @@ export class ConversationRunner {
 
     if (event.kind === "chat.closed") {
       store.patchMeta({ closed: true, decorationEpoch: store.meta().decorationEpoch + 1 });
-      this.cancelDeleteAsk(event.id, when !== null && when > 0 ? when : nowMs());
+      this.cancelDeleteAsk(event.id, when);
       this.decorations.cancelAll("closed");
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
@@ -675,10 +675,11 @@ export class ConversationRunner {
     const chatId = event.chatId ?? before.chatId;
     const to = event.handle ?? before.to;
     store.patchMeta({ chatId, to, closed: false, optedOut: false, turn });
+    const cancels = before.deleteCancels;
     const sent = await this.sendBubble({ turn, part: 0, tag: "delete_ask", text: DELETE_ASK_BUBBLE, chatId, to });
     const now = store.meta();
     const accepted = sent.state === "sent" || sent.state === "delivered" || sent.state === "read";
-    if (accepted && now.generation === before.generation && now.deleteCancelledAtMs <= when) {
+    if (accepted && now.generation === before.generation && now.deleteCancels === cancels && now.deleteCancelledAtMs <= when) {
       store.patchMeta({ deleteAskedAtMs: Math.max(now.deleteAskedAtMs, when) });
       logger.info("delete_asked", { handle: this.logHandle(), eventId: event.id, turn });
     } else {
@@ -687,13 +688,18 @@ export class ConversationRunner {
     return "delete-asked";
   }
 
-  // Anything else from the person, a STOP or a close, at its timestamp:
-  // clears a waiting ask, and no ask from before it can confirm. One from
-  // the same instant can: timestamps may be whole seconds, and that one
-  // arrived after it.
-  private cancelDeleteAsk(eventId: string, atMs: number): void {
+  // Anything else from the person, a STOP or a close: clears a waiting
+  // ask, and is counted, so an ask still sending when it lands never arms.
+  // Its timestamp, when it has one, blocks any ask from before it. One
+  // from the same instant still can: timestamps may be whole seconds,
+  // and that one arrived after it.
+  private cancelDeleteAsk(eventId: string, atMs: number | null): void {
     const meta = this.deps.store.meta();
-    this.deps.store.patchMeta({ deleteAskedAtMs: 0, deleteCancelledAtMs: Math.max(meta.deleteCancelledAtMs, atMs) });
+    this.deps.store.patchMeta({
+      deleteAskedAtMs: 0,
+      deleteCancelledAtMs: atMs !== null && atMs > 0 ? Math.max(meta.deleteCancelledAtMs, atMs) : meta.deleteCancelledAtMs,
+      deleteCancels: meta.deleteCancels + 1,
+    });
     if (meta.deleteAskedAtMs > 0) this.deps.logger.info("delete_cancelled", { handle: this.logHandle(), eventId });
   }
 

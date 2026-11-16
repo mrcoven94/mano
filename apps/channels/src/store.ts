@@ -201,6 +201,9 @@ export interface ConversationMeta {
   // The timestamp of the latest message, STOP or close that cancels a
   // DELETE, so a DELETE delivered late cannot revive a cancelled ask.
   deleteCancelledAtMs: number;
+  // How many cancels there have been. An ask arms only if none landed
+  // while its text was sending, whatever their timestamps.
+  deleteCancels: number;
 }
 
 // A chat background an earlier version of Mano set, keyed by a hash of
@@ -248,6 +251,7 @@ export function defaultMeta(): ConversationMeta {
     decorationEpoch: 0,
     deleteAskedAtMs: 0,
     deleteCancelledAtMs: 0,
+    deleteCancels: 0,
   };
 }
 
