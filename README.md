@@ -11,7 +11,7 @@ Tests, evals and demos use synthetic people only. Since November 15, 2026, real 
 ## For judges: try it in 60 seconds
 
 - **On the web, no login:** open [withmano.com/try](https://withmano.com/try) and press send. It runs a preset synthetic letter through the deployed agent, Engine, Guardian and sandbox portal, and lists every model call beside the steps. If Guardian is cold, the page counts down while it warms, which takes about 3 minutes. The same page shows the latest nightly test results below the demo ([withmano.com/try#results](https://withmano.com/try#results)).
-- **By text:** text (380) 277-6425.
+- **By text:** text (380) 277-6425. STOP ends all texts. DELETE, sent twice within 10 minutes, deletes everything Mano holds about you, and the next text starts over.
 - **From a clone, no key:** run `pnpm install`, then `pnpm judge`. It runs nine labeled steps on recorded model responses and says which parts are real or simulated.
 - **From a clone, with your own Meta key:** run `META_MODEL_API_KEY=<your key> pnpm judge`. SAM 3.1 and Muse Spark 1.3 then run live on the Meta Model API. Details are in [How `pnpm judge` works](#how-pnpm-judge-works).
 

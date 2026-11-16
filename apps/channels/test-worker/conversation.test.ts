@@ -280,6 +280,43 @@ describe("ConversationDO on SQLite", () => {
     expect(state.engineDeletePending).toMatchObject({ handleHash, generation: 1, engineDone: false });
   });
 
+  it("deletes by text: DELETE asks, a second DELETE runs the delete, and the next text is a first contact", async () => {
+    // LAP-1230 through the real Durable Object on SQLite. Engine is a
+    // closed port here, so the delete stays pending and says so.
+    const handleHash = "c".repeat(64);
+    const stub = stubFor(`do-del-text-${Date.now()}`);
+    const at = Date.now();
+    const rows = () =>
+      runInDurableObject(stub, async (_instance, state) =>
+        state.storage.sql.exec("SELECT tag, bubble_text AS text FROM outbounds ORDER BY created_at_ms, idem_key").toArray(),
+      ) as Promise<Array<{ tag: string; text: string }>>;
+    expect(await postEvent(stub, handleHash, { ...inbound("evt_dt_hi", "hi"), occurredAtMs: at })).toBe("queued");
+    expect(await postEvent(stub, handleHash, { ...inbound("evt_dt_1", " delete "), occurredAtMs: at + 1 })).toBe("delete-asked");
+    expect((await rows()).map((r) => r.tag)).toEqual(["delete_ask"]);
+    expect(await postEvent(stub, handleHash, { ...inbound("evt_dt_2", "DELETE"), occurredAtMs: at + 2 })).toBe("deleted");
+    const state = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
+      engineDeletePending: unknown;
+      pending: number;
+      introduced: boolean;
+    };
+    expect(state).toMatchObject({ pending: 0, introduced: false });
+    expect(state.engineDeletePending).toMatchObject({ handleHash, generation: 1, engineDone: false });
+    // Only the line saying the delete is finishing is left, in the new generation.
+    const after = await rows();
+    expect(after).toHaveLength(1);
+    expect(after[0].tag).toBe("delete_done");
+    expect(after[0].text).toContain("still finishing");
+    // A redelivery of the confirming DELETE is dropped by the cutoff.
+    expect(await postEvent(stub, handleHash, { ...inbound("evt_dt_2", "DELETE"), occurredAtMs: at + 2 })).toBe("dropped");
+    expect(await postEvent(stub, handleHash, { ...inbound("evt_dt_3", "hi again"), occurredAtMs: Date.now() + 5 })).toBe("queued");
+    await new Promise((r) => setTimeout(r, 3000));
+    const turn = await stub.fetch("https://conversation/internal/turn", { method: "POST", body: JSON.stringify({ handleHash }) });
+    expect(["ran", "idle"]).toContain(((await turn.json()) as { result: string }).result);
+    const fresh = await rows();
+    expect(fresh.map((r) => r.tag).slice(0, 2)).toEqual(["delete_done", ""]);
+    expect(fresh[1].text).toMatch(/^hey! I'm Mano/);
+  });
+
   it("delivers an agent-started text and dedupes its key", async () => {
     const stub = stubFor(`do-agent-${Date.now()}`);
     await postEvent(stub, "hash-agent", inbound("evt_do_agent", "Hello."));

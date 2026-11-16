@@ -199,7 +199,8 @@ describe("delete by text", () => {
     expect(deletes[0]).toBeGreaterThan(confirm.occurredAtMs!);
     h.advance(1000);
     expect(await h.runner.handleEvent(confirm, "webhook")).toBe("dropped");
-    expect(await h.runner.handleEvent({ ...confirm, id: `${confirm.id}_feed` }, "reconcile")).toBe("dropped");
+    // The feed's copy dedupes on the message ID the redelivery recorded.
+    expect(await h.runner.handleEvent({ ...confirm, id: `${confirm.id}_feed` }, "reconcile")).toBe("duplicate");
     expect(deletes).toHaveLength(1);
     expect(sentTexts(h)).toEqual([DELETE_ASK_BUBBLE, DELETE_DONE_BUBBLE]);
   });
