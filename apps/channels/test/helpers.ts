@@ -111,6 +111,8 @@ export function makeHarness(
     // The model check for one short health question; none fails closed.
     crisisCheck?: import("@mano/persona").CrisisCheck | null;
     photoConverter?: import("../src/files.js").PhotoConverter | null;
+    // What a confirmed DELETE text runs; the Durable Object's real delete in production.
+    deleteConversation?: import("../src/runner.js").RunnerDeps["deleteConversation"];
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -167,6 +169,7 @@ export function makeHarness(
     reportPresentation: opts.reportPresentation,
     decorations: h.decorations,
     crisisCheck: opts.crisisCheck ?? null,
+    deleteConversation: opts.deleteConversation,
   });
   return h;
 }
