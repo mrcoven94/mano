@@ -361,6 +361,7 @@ export class ConversationDO implements DurableObject {
       fetchFn: boundFetch,
       decorations: this.decorations,
       crisisCheck: this.crisisCheck(),
+      deleteConversation: async (cutoffMs) => ({ done: (await this.deleteConversation(handleHash, cutoffMs)).pending === null }),
       reportPresentation: agentConfigured(this.env)
         ? (p, sentTexts) =>
             reportPresentation({
@@ -497,21 +498,8 @@ export class ConversationDO implements DurableObject {
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
-      // One synchronous step, before any await: wipe Channels' store and
-      // record everything still owed. Until the record is cleared the
-      // agent stays off for this handle and the alarm keeps retrying.
-      const sql = this.ctx.storage.sql;
-      const store = new SqlConversationStore(sql);
-      store.wipe(Date.now());
-      this.decorations.cancelAll("deleted");
-      const intent = { ...newPendingDelete(this.env, body.handleHash, store.meta().generation), nextAtMs: Date.now() };
-      savePendingDelete(sql, intent);
-      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));
-      const { pending, engineRemoved } = await this.advancePendingDelete(intent);
-      if (!pending) {
-        this.logger.info("conversation_deleted", { handle: body.handleHash, engineCleared: true, agentCleared: true });
-        return Response.json({ ok: true, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
-      }
+      const { pending, engineRemoved } = await this.deleteConversation(body.handleHash, Date.now());
+      if (!pending) return Response.json({ ok: true, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
       return Response.json(
         {
           ok: false,
@@ -541,6 +529,30 @@ export class ConversationDO implements DurableObject {
       });
     }
     return new Response("Not found.", { status: 404 });
+  }
+
+  // The whole delete, for the development route and a confirmed DELETE
+  // text alike. One synchronous step, before any await: wipe Channels'
+  // store with the cutoff and record everything still owed. Until the
+  // record is cleared the agent stays off for this handle and the alarm
+  // keeps retrying.
+  private async deleteConversation(
+    handleHash: string,
+    cutoffMs: number,
+  ): Promise<{ pending: PendingDelete | null; engineRemoved: Record<string, number | boolean> | null }> {
+    const sql = this.ctx.storage.sql;
+    const store = new SqlConversationStore(sql);
+    store.wipe(cutoffMs);
+    this.decorations.cancelAll("deleted");
+    const intent = { ...newPendingDelete(this.env, handleHash, store.meta().generation), nextAtMs: Date.now() };
+    savePendingDelete(sql, intent);
+    // The first attempt runs even when the retry alarm cannot be set.
+    await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1)).catch((err: unknown) =>
+      this.logger.warn("conversation_delete_alarm_failed", { handle: handleHash, err: errName(err) }),
+    );
+    const result = await this.advancePendingDelete(intent);
+    if (!result.pending) this.logger.info("conversation_deleted", { handle: handleHash, engineCleared: true, agentCleared: true });
+    return result;
   }
 
   // Works through a recorded delete once. Clears the record when every

@@ -193,6 +193,17 @@ export interface ConversationMeta {
   // reaction) carry the epoch they were scheduled under and send only
   // while it still holds.
   decorationEpoch: number;
+  // The provider's timestamp of a DELETE Mano asked to have confirmed, 0
+  // when none is waiting. Only a second DELETE sent strictly after it and
+  // inside the window runs the delete; anything else from the person, a
+  // STOP or a close clears it. A delete wipes it with everything else.
+  deleteAskedAtMs: number;
+  // The timestamp of the latest message, STOP or close that cancels a
+  // DELETE, so a DELETE delivered late cannot revive a cancelled ask.
+  deleteCancelledAtMs: number;
+  // How many cancels there have been. An ask arms only if none landed
+  // while its text was sending, whatever their timestamps.
+  deleteCancels: number;
 }
 
 // A chat background an earlier version of Mano set, keyed by a hash of
@@ -238,6 +249,9 @@ export function defaultMeta(): ConversationMeta {
     optOutDated: false,
     optOutReceivedAtMs: 0,
     decorationEpoch: 0,
+    deleteAskedAtMs: 0,
+    deleteCancelledAtMs: 0,
+    deleteCancels: 0,
   };
 }
 
