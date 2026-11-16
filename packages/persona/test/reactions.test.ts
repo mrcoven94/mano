@@ -158,3 +158,13 @@ describe("the 20-message reaction set", () => {
     expect(checkReactionSet(runs)).toContain(`${REACTION_PROBES[i]!.id}:not-allowed`);
   });
 });
+
+// LAP-986: more natural laughs count as a laugh; bad news still vetoes.
+describe("laughs that allow a laugh", () => {
+  it("allows laugh on hehe, lmfao and rofl", () => {
+    for (const text of ["hehe", "hehehe", "lmfao", "rofl"]) expect(allowedReactions(text, false), text).toContain("laugh");
+  });
+  it("still allows nothing on a laugh beside bad news", () => {
+    expect(allowedReactions("hehe they cut my benefits", false)).toEqual([]);
+  });
+});

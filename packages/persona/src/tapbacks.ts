@@ -86,12 +86,12 @@ const PHRASES: ReadonlyArray<{ kind: MessageKind; phrases: readonly string[] }> 
     ],
   },
   { kind: "done", phrases: ["all done", "done", "i did it", "did it", "mailed it", "mailed", "sent it", "submitted it", "submitted", "i got approved", "got approved", "approved", "got it", "ya lo hice", "lo hice"] },
-  { kind: "joke", phrases: ["lol", "lmao", "😂"] },
+  { kind: "joke", phrases: ["lol", "lmao", "lmfao", "rofl", "😂"] },
   { kind: "ack", phrases: ["sounds good", "got it", "okay", "ok", "kk", "k", "cool", "perfect", "vale"] },
 ];
 // Words that may sit around a pure form without changing it.
 const FILLER = new Set(["so", "much", "a", "lot", "guys", "mano", "you", "again"]);
-const LAUGH = /^(?:(?:ha){2,}h?|(?:ja){2,}j?)$/;
+const LAUGH = /^(?:(?:ha){2,}h?|(?:he){2,}h?|(?:ja){2,}j?)$/;
 
 const ALLOWS: Record<MessageKind, readonly Tapback[]> = {
   thanks: ["love", "🙏"],

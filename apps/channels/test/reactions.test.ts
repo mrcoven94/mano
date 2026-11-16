@@ -298,3 +298,25 @@ describe("the SQL store keeps the background record", () => {
     expect(store.chatBackground("k1")?.state).toBe("clearing");
   });
 });
+
+// LAP-986: by default a slow turn no longer gets the eyes, so a real
+// tapback can go on; a photo still does.
+describe("eyes by default", () => {
+  it("puts no eyes on a slow text turn and lets its tapback through", async () => {
+    const h = introduced(makeHarness({ responder: slowTap("ha, fair", "laugh", 40) }));
+    await say(h, "evt_slow_default", "lol");
+    await h.decorations.idle();
+    expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["laugh"]);
+  });
+});
+
+function slowTap(text: string, tapback: string, ms: number): Responder {
+  return {
+    name: "slow-tap",
+    maxAttempts: 1,
+    respond: async () => {
+      await new Promise((r) => setTimeout(r, ms));
+      return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1, tapback: tapback as never };
+    },
+  };
+}

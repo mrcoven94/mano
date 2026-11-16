@@ -345,3 +345,39 @@ describe("deleting a conversation in Engine", () => {
     ).toBeNull();
   });
 });
+
+// LAP-986: the agent's plain replies may open with a REACT line, like the
+// text line's; a question waiting on approval keeps its exact text.
+describe("agent tapbacks", () => {
+  function answering(body: Record<string, unknown>): AgentResponder {
+    return new AgentResponder({
+      agentUrl: "https://agent.example",
+      secret: "secret",
+      grantSecret: "g",
+      handleHash: HANDLE,
+      fallback: new StandInResponder(["fallback reply"]),
+      fetchFn: (async () => Response.json(body)) as typeof fetch,
+    });
+  }
+  const turn = { texts: ["lol"], attachmentCount: 0, turnKey: KEY, receivedAtMs: 1_761_777_000_000 };
+
+  it("splits a REACT line off a plain reply", async () => {
+    const result = await answering({ status: "replied", text: "REACT: laugh\nha, fair. back to your renewal?" }).respond(turn);
+    expect(result.tapback).toBe("laugh");
+    expect(result.text).toBe("ha, fair. back to your renewal?");
+    expect(result.bubbles.join("\n")).not.toContain("REACT");
+  });
+
+  it("keeps a reply with no REACT line as it is, with no tapback", async () => {
+    const result = await answering({ status: "replied", text: "Agent says hi." }).respond(turn);
+    expect(result.tapback ?? null).toBeNull();
+    expect(result.text).toBe("Agent says hi.");
+  });
+
+  it("never reacts on a question waiting on approval", async () => {
+    const approval = "Ready to send: renewal. Name: Rosa Testcase. Reply YES to send exactly this, or NO to stop.";
+    const result = await answering({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval, approvalId: "appr_1" }).respond(turn);
+    expect(result.tapback ?? null).toBeNull();
+    expect(result.text).toContain(approval);
+  });
+});
