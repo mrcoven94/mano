@@ -7,11 +7,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { CRISIS_LINE } from "@mano/persona";
-import { OPT_OUT_BUBBLE, type NormalizedEvent } from "@mano/channels";
+import { OPT_OUT_BUBBLE, idempotencyKeyFor, type NormalizedEvent } from "@mano/channels";
 import { DELETE_CONFIRM_WINDOW_MS, isDeleteRequest } from "../src/runner.js";
 import { SqlConversationStore } from "../src/store-sql.js";
 import { DELETE_ASK_BUBBLE, DELETE_DONE_BUBBLE, DELETE_PENDING_BUBBLE, INTRO_BUBBLE } from "../src/text.js";
-import { TEST_CHAT, TEST_HANDLE, inboundEvent, makeHarness, runTurnAfterBatch, sqliteStorage, type Harness } from "./helpers.js";
+import { TEST_CHAT, TEST_HANDLE, TEST_HANDLE_HASH, inboundEvent, makeHarness, runTurnAfterBatch, sqliteStorage, type Harness } from "./helpers.js";
 
 interface World {
   h: Harness;
@@ -97,6 +97,34 @@ describe("delete by text", () => {
     expect(await say(h, "DELETE")).toBe("deleted");
     expect(deletes).toHaveLength(1);
     expect(sentTexts(h)).toEqual([DELETE_ASK_BUBBLE, DELETE_PENDING_BUBBLE]);
+  });
+
+  it("never confirms an ask whose text the provider did not accept", async () => {
+    // Sol review 1, S1: the ask was armed before its text went out.
+    const { h, deletes } = world();
+    h.channel.failures.set(idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 0, "delete_ask"), { kind: "refuse", status: 400, code: "refused" });
+    expect(await say(h, "DELETE")).toBe("delete-asked");
+    expect(h.channel.sends).toEqual([]);
+    expect(h.store.meta().deleteAskedAtMs).toBe(0);
+    h.advance(1000);
+    expect(await say(h, "DELETE")).toBe("delete-asked");
+    expect(deletes).toEqual([]);
+    expect(sentTexts(h)).toEqual([DELETE_ASK_BUBBLE]);
+  });
+
+  it("never lets a DELETE delivered late revive an ask a later text cancelled", async () => {
+    // Sol review 1, S2: sent DELETE, never mind, DELETE; delivered never mind first.
+    const { h, deletes } = world();
+    h.store.patchMeta({ introduced: true });
+    const t1 = h.now;
+    h.advance(1000);
+    const t2 = h.now;
+    h.advance(1000);
+    const t3 = h.now;
+    expect(await say(h, "never mind", { occurredAtMs: t2 })).toBe("queued");
+    expect(await say(h, "DELETE", { occurredAtMs: t1 })).toBe("delete-asked");
+    expect(await say(h, "DELETE", { occurredAtMs: t3 })).toBe("delete-asked");
+    expect(deletes).toEqual([]);
   });
 
   it("asks again when the second DELETE comes after the window", async () => {

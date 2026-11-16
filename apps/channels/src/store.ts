@@ -198,6 +198,9 @@ export interface ConversationMeta {
   // inside the window runs the delete; anything else from the person, a
   // STOP or a close clears it. A delete wipes it with everything else.
   deleteAskedAtMs: number;
+  // The timestamp of the latest message, STOP or close that cancels a
+  // DELETE, so a DELETE delivered late cannot revive a cancelled ask.
+  deleteCancelledAtMs: number;
 }
 
 // A chat background an earlier version of Mano set, keyed by a hash of
@@ -244,6 +247,7 @@ export function defaultMeta(): ConversationMeta {
     optOutReceivedAtMs: 0,
     decorationEpoch: 0,
     deleteAskedAtMs: 0,
+    deleteCancelledAtMs: 0,
   };
 }
 

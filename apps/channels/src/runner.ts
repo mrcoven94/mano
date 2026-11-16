@@ -472,11 +472,11 @@ export class ConversationRunner {
       // pre-delete or pre-STOP DELETE never asks or confirms. Any other
       // message, a photo or voice note included, cancels a waiting ask.
       if (this.deps.deleteConversation && event.attachments.length === 0 && isDeleteRequest(text)) {
-        const asked = store.meta().deleteAskedAtMs;
-        if (asked > 0 && when > asked && when - asked <= DELETE_CONFIRM_WINDOW_MS) return this.confirmDelete(event, when);
+        const { deleteAskedAtMs: asked, deleteCancelledAtMs: cancelled } = store.meta();
+        if (asked > 0 && asked > cancelled && when > asked && when - asked <= DELETE_CONFIRM_WINDOW_MS) return this.confirmDelete(event, when);
         return this.askDelete(event, when);
       }
-      if (store.meta().deleteAskedAtMs > 0) this.cancelDeleteAsk(event.id);
+      this.cancelDeleteAsk(event.id, when);
       // Bound what waits for the batch alarm before buffering it. Past
       // the cap the new input is recorded and dropped; the turn answers
       // what already waits.
@@ -552,7 +552,7 @@ export class ConversationRunner {
     // an approval here: Engine and the Agent own approvals, so Channels
     // records it and passes it on.
     if (event.kind === "reaction") {
-      if (event.direction !== "outbound" && store.meta().deleteAskedAtMs > 0) this.cancelDeleteAsk(event.id);
+      if (event.direction !== "outbound") this.cancelDeleteAsk(event.id, when !== null && when > 0 ? when : nowMs());
       const onMano = event.messageId ? store.outboundByMessageId(event.messageId) !== null : false;
       logger.info("reaction_received", {
         handle: this.logHandle(),
@@ -565,7 +565,8 @@ export class ConversationRunner {
     }
 
     if (event.kind === "chat.closed") {
-      store.patchMeta({ closed: true, decorationEpoch: store.meta().decorationEpoch + 1, deleteAskedAtMs: 0 });
+      store.patchMeta({ closed: true, decorationEpoch: store.meta().decorationEpoch + 1 });
+      this.cancelDeleteAsk(event.id, when !== null && when > 0 ? when : nowMs());
       this.decorations.cancelAll("closed");
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
@@ -628,8 +629,8 @@ export class ConversationRunner {
         optOutDated: before.optOutDated && dated,
         optOutReceivedAtMs: nowMs(),
         decorationEpoch: before.decorationEpoch + 1,
-        deleteAskedAtMs: 0,
       });
+      this.cancelDeleteAsk(event.id, dated ? event.occurredAtMs! : nowMs());
       this.decorations.cancelAll("opted_out");
       return "opted-out";
     }
@@ -642,7 +643,8 @@ export class ConversationRunner {
       to: event.handle ?? before.to,
       turn: before.turn + 1,
     };
-    store.patchMeta({ ...meta, decorationEpoch: before.decorationEpoch + 1, deleteAskedAtMs: 0 });
+    store.patchMeta({ ...meta, decorationEpoch: before.decorationEpoch + 1 });
+    this.cancelDeleteAsk(event.id, meta.optOutAtMs);
     // Nothing decorative goes out after STOP, not even work already started.
     this.decorations.cancelAll("opted_out");
     logger.info("opted_out", { handle: this.logHandle(), eventId: event.id, turn: meta.turn });
@@ -658,22 +660,34 @@ export class ConversationRunner {
     return "opted-out";
   }
 
-  // The first DELETE: one text asking for a second, nothing deleted.
+  // The first DELETE: one text asking for a second, nothing deleted. The
+  // ask counts only once the provider accepted that text, and only if
+  // nothing cancelled it or deleted the conversation during the send.
   private async askDelete(event: NormalizedEvent, when: number): Promise<HandleResult> {
     const { store, logger } = this.deps;
     const before = store.meta();
     const turn = before.turn + 1;
     const chatId = event.chatId ?? before.chatId;
     const to = event.handle ?? before.to;
-    store.patchMeta({ chatId, to, closed: false, optedOut: false, deleteAskedAtMs: when, turn });
-    logger.info("delete_asked", { handle: this.logHandle(), eventId: event.id, turn });
-    await this.sendBubble({ turn, part: 0, tag: "delete_ask", text: DELETE_ASK_BUBBLE, chatId, to });
+    store.patchMeta({ chatId, to, closed: false, optedOut: false, turn });
+    const sent = await this.sendBubble({ turn, part: 0, tag: "delete_ask", text: DELETE_ASK_BUBBLE, chatId, to });
+    const now = store.meta();
+    const accepted = sent.state === "sent" || sent.state === "delivered" || sent.state === "read";
+    if (accepted && now.generation === before.generation && now.deleteCancelledAtMs < when) {
+      store.patchMeta({ deleteAskedAtMs: Math.max(now.deleteAskedAtMs, when) });
+      logger.info("delete_asked", { handle: this.logHandle(), eventId: event.id, turn });
+    } else {
+      logger.info("delete_ask_unsent", { handle: this.logHandle(), eventId: event.id, turn, state: sent.state });
+    }
     return "delete-asked";
   }
 
-  private cancelDeleteAsk(eventId: string): void {
-    this.deps.store.patchMeta({ deleteAskedAtMs: 0 });
-    this.deps.logger.info("delete_cancelled", { handle: this.logHandle(), eventId });
+  // Anything else from the person, a STOP or a close, at its timestamp:
+  // clears a waiting ask, and no ask from at or before it can confirm.
+  private cancelDeleteAsk(eventId: string, atMs: number): void {
+    const meta = this.deps.store.meta();
+    this.deps.store.patchMeta({ deleteAskedAtMs: 0, deleteCancelledAtMs: Math.max(meta.deleteCancelledAtMs, atMs) });
+    if (meta.deleteAskedAtMs > 0) this.deps.logger.info("delete_cancelled", { handle: this.logHandle(), eventId });
   }
 
   // The confirming DELETE. The cutoff is never at or before the DELETE's
