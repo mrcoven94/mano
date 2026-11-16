@@ -213,6 +213,7 @@ export async function reconcile(
         failuresInARow += 1;
         if (failuresInARow < RECONCILE_MAX_FAILURES_IN_A_ROW) continue;
         await noteSeenIds(env, seen);
+        logger.warn("reconcile_stopped", { failuresInARow });
         logger.info("reconciled", { pages, enqueued });
         return { pages, enqueued };
       }
@@ -243,7 +244,7 @@ export async function reconcile(
 // One feed row to zero or one queueable event. Thin inbound rows fetch
 // their message; rows already naming our line queue as parsed. Null
 // means seen and skipped (gone, unreadable, or another line's);
-// "paused" means the fetch failed transiently and the run must stop.
+// "paused" means the fetch failed transiently: the row stays unseen.
 async function hydrateForReconcile(
   feed: Channel,
   event: NormalizedEvent,
@@ -261,7 +262,7 @@ async function hydrateForReconcile(
     if (full.occurredAtMs === null || full.occurredAtMs < windowStartMs) return null;
     return full;
   } catch (err) {
-    logger.warn("reconcile_paused", { err: errName(err) });
+    logger.warn("reconcile_hydrate_failed", { err: errName(err) });
     return "paused";
   }
 }
