@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeSignatureHex, type NormalizedEvent } from "@mano/channels";
 import worker, { handleWebhook, reconcile, routeEvent } from "../src/index.js";
+import { MemoryGlobalStore, RECONCILE_LIMIT } from "../src/global.js";
 import type { Env } from "../src/env.js";
 
 const SECRET = "test-webhook-secret-not-real";
@@ -282,9 +283,13 @@ describe("routeEvent", () => {
 });
 
 describe("reconcile", () => {
+  // Each run's clock: just after the fixtures' own times, inside the window.
+  const ENVELOPE_NOW = 1_790_000_000_000 + 1_000;
+  const THIN_NOW = 1793243237808 + 1_000;
+  // Seen ids live in the real in-memory store, with production's cap.
   function stateStub() {
     let cursor: string | null = null;
-    const seen = new Set<string>();
+    const seen = new MemoryGlobalStore();
     return {
       get cursor() {
         return cursor;
@@ -297,10 +302,10 @@ describe("reconcile", () => {
         }
         if (url.endsWith("/internal/seen-check")) {
           const ids = body.ids ?? [];
-          return new Response(JSON.stringify({ unseen: ids.filter((id) => !seen.has(id)) }));
+          return new Response(JSON.stringify({ unseen: seen.filterUnseen(ids) }));
         }
         if (url.endsWith("/internal/seen-note")) {
-          for (const id of body.ids ?? []) seen.add(id);
+          seen.noteSeen(body.ids ?? []);
           return new Response(JSON.stringify({ ok: true }));
         }
         return new Response(JSON.stringify({ cursor }));
@@ -308,7 +313,7 @@ describe("reconcile", () => {
     };
   }
 
-  it("enqueues missed events for our line and moves the cursor", async () => {
+  it("enqueues missed events for our line", async () => {
     const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
     const sent: unknown[] = [];
     const stub = stateStub();
@@ -320,11 +325,33 @@ describe("reconcile", () => {
       ...hookEnv(sent),
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
-    const result = await reconcile(env, feed);
+    const result = await reconcile(env, feed, ENVELOPE_NOW);
     expect(result).toEqual({ pages: 2, enqueued: 1 });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ id: "evt_hook_1" });
-    expect(stub.cursor).toBe("1");
+  });
+
+  // Blooio's feed is newest first and next_cursor pages back in time, so
+  // a run that resumed from a saved cursor reread only old pages and
+  // never saw a text that arrived after it (LAP-1262).
+  it("sees a new event at the head of the feed after an earlier run paged back", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const ours = (id: string) =>
+      inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: id, occurredAtMs: THIN_NOW - 60_000 });
+    const feed = new RecordingChannel();
+    feed.feedPages = [[ours("evt_head_1")], [ours("evt_older_1")]];
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, ENVELOPE_NOW)).toEqual({ pages: 2, enqueued: 2 });
+    feed.feedPages = [[ours("evt_new"), ours("evt_head_1")], [ours("evt_older_1")]];
+    // It reads the second page only to find it already handled.
+    expect(await reconcile(env, feed, ENVELOPE_NOW)).toEqual({ pages: 2, enqueued: 1 });
+    expect(sent.map((e) => (e as { id: string }).id)).toEqual(["evt_head_1", "evt_older_1", "evt_new"]);
   });
 
   it("does not requeue a page the feed serves again", async () => {
@@ -338,8 +365,8 @@ describe("reconcile", () => {
       ...hookEnv(sent),
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
-    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
-    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 0 });
+    expect(await reconcile(env, feed, ENVELOPE_NOW)).toEqual({ pages: 1, enqueued: 1 });
+    expect(await reconcile(env, feed, ENVELOPE_NOW)).toEqual({ pages: 1, enqueued: 0 });
     expect(sent).toHaveLength(1);
   });
 
@@ -371,22 +398,22 @@ describe("reconcile", () => {
     feed.feedPages = [[thin("evt_feed_a", "msg_a"), thin("evt_feed_b", "msg_b"), thin("evt_feed_gone", "msg_gone")]];
     feed.hydrated.set(
       "msg_a",
-      inboundEvent({ id: "evt_feed_a", chatId: "chat_feed_aaa", messageId: "msg_a", channelId: "ch_test_line", text: "Hydrated." }),
+      inboundEvent({ id: "evt_feed_a", chatId: "chat_feed_aaa", messageId: "msg_a", channelId: "ch_test_line", text: "Hydrated.", occurredAtMs: THIN_NOW - 1_000 }),
     );
     feed.hydrated.set(
       "msg_b",
-      inboundEvent({ id: "evt_feed_b", chatId: "chat_feed_aaa", messageId: "msg_b", channelId: "ch_someone_else", text: "Theirs." }),
+      inboundEvent({ id: "evt_feed_b", chatId: "chat_feed_aaa", messageId: "msg_b", channelId: "ch_someone_else", text: "Theirs.", occurredAtMs: THIN_NOW - 1_000 }),
     );
     const env = {
       ...hookEnv(sent),
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
-    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 1 });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ id: "evt_feed_a", text: "Hydrated.", handle: "+15550001001" });
     expect(feed.hydrateCalls).toEqual(["msg_a", "msg_b", "msg_gone"]);
     // Gone and other-line rows are marked seen: the next run skips them.
-    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 0 });
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 0 });
     expect(sent).toHaveLength(1);
   });
 
@@ -398,7 +425,7 @@ describe("reconcile", () => {
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_feed_y", ...sameMessage }), "reconcile")).toBe("duplicate");
   });
 
-  it("pauses a page on transient hydrate failure and resumes next run", async () => {
+  it("skips a row whose hydrate fails, and retries it on the next run", async () => {
     const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
     const { inboundEvent } = await import("./helpers.js");
     const sent: unknown[] = [];
@@ -415,20 +442,125 @@ describe("reconcile", () => {
       })!;
     const feed = new RecordingChannel();
     feed.feedPages = [[thin("evt_p_a", "msg_p_a"), thin("evt_p_b", "msg_p_b")], [thin("evt_p_c", "msg_p_c")]];
-    feed.hydrated.set("msg_p_a", inboundEvent({ id: "evt_p_a", messageId: "msg_p_a", channelId: "ch_test_line", text: "First." }));
-    feed.hydrated.set("msg_p_b", inboundEvent({ id: "evt_p_b", messageId: "msg_p_b", channelId: "ch_test_line", text: "Second." }));
-    feed.hydrated.set("msg_p_c", inboundEvent({ id: "evt_p_c", messageId: "msg_p_c", channelId: "ch_test_line", text: "Third." }));
+    feed.hydrated.set("msg_p_a", inboundEvent({ id: "evt_p_a", messageId: "msg_p_a", channelId: "ch_test_line", text: "First.", occurredAtMs: THIN_NOW - 1_000 }));
+    feed.hydrated.set("msg_p_b", inboundEvent({ id: "evt_p_b", messageId: "msg_p_b", channelId: "ch_test_line", text: "Second.", occurredAtMs: THIN_NOW - 1_000 }));
+    feed.hydrated.set("msg_p_c", inboundEvent({ id: "evt_p_c", messageId: "msg_p_c", channelId: "ch_test_line", text: "Third.", occurredAtMs: THIN_NOW - 1_000 }));
     feed.hydrateErrors.set("msg_p_b", new Error("fetch failed"));
     const env = {
       ...hookEnv(sent),
       CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
     } as unknown as Env;
-    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
-    expect(stub.cursor).toBeNull();
+    // One failing row does not hold back the row behind it.
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 2 });
     feed.hydrateErrors.delete("msg_p_b");
-    expect(await reconcile(env, feed)).toEqual({ pages: 2, enqueued: 2 });
-    expect(stub.cursor).toBe("1");
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 1 });
     expect(sent).toHaveLength(3);
+  });
+
+  it("retries a row a run paused on, even on a page after one it finished", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const at = THIN_NOW - 60_000;
+    const thin = (id: string) => inboundEvent({ id, messageId: `msg_${id}`, channelId: null as never, chatId: "chat_feed_aaa", occurredAtMs: at });
+    const full = (id: string) => inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: id, occurredAtMs: at });
+    const feed = new RecordingChannel();
+    feed.feedPages = [[thin("evt_q_a")], [thin("evt_q_b")]];
+    feed.hydrated.set("msg_evt_q_a", full("evt_q_a"));
+    feed.hydrated.set("msg_evt_q_b", full("evt_q_b"));
+    feed.hydrateErrors.set("msg_evt_q_b", new Error("fetch failed"));
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 1 });
+    feed.hydrateErrors.delete("msg_evt_q_b");
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 1 });
+    expect(sent.map((e) => (e as { id: string }).id)).toEqual(["evt_q_a", "evt_q_b"]);
+  });
+
+  it("finishes a burst longer than one run's page budget on the next run", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const feed = new RecordingChannel();
+    // Seven full pages: more than one run's five pages with work.
+    feed.feedPages = Array.from({ length: 7 }, (_, p) =>
+      Array.from({ length: RECONCILE_LIMIT }, (_, r) => {
+        const i = p * RECONCILE_LIMIT + r;
+        return inboundEvent({ id: `evt_burst_${i}`, messageId: `msg_burst_${i}`, channelId: "ch_test_line", text: "hi", occurredAtMs: THIN_NOW - 1_000 - i });
+      }),
+    );
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 5, enqueued: 5 * RECONCILE_LIMIT });
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 7, enqueued: 2 * RECONCILE_LIMIT });
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 7, enqueued: 0 });
+    expect(new Set(sent.map((e) => (e as { id: string }).id)).size).toBe(7 * RECONCILE_LIMIT);
+  });
+
+  it("never queues a row older than the runner's window or with no time, so an old STOP is not acknowledged", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const feed = new RecordingChannel();
+    const stop = (id: string, occurredAtMs: number | null) =>
+      inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: "STOP", occurredAtMs });
+    feed.feedPages = [[stop("evt_undated", null), stop("evt_fresh", THIN_NOW - 60_000)], [stop("evt_old", THIN_NOW - 10 * 60_000)], [stop("evt_older", THIN_NOW - 60 * 60_000)]];
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    // It stops at the page that reaches past the window and never reads the next.
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 2, enqueued: 1 });
+    expect(sent.map((e) => (e as { id: string }).id)).toEqual(["evt_fresh"]);
+  });
+
+  it("never queues a recent feed row whose message, once hydrated, is an old STOP", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const feed = new RecordingChannel();
+    feed.feedPages = [[inboundEvent({ id: "evt_thin_stop", messageId: "msg_old_stop", channelId: null as never, chatId: "chat_feed_aaa", occurredAtMs: THIN_NOW - 60_000 })]];
+    feed.hydrated.set(
+      "msg_old_stop",
+      inboundEvent({ id: "evt_thin_stop", messageId: "msg_old_stop", channelId: "ch_test_line", text: "STOP", occurredAtMs: THIN_NOW - 60 * 60_000 }),
+    );
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("stops a run after three hydrate failures in a row, and finishes on the next", async () => {
+    const { RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const at = THIN_NOW - 60_000;
+    const ids = ["evt_d1", "evt_d2", "evt_d3", "evt_d4"];
+    const feed = new RecordingChannel();
+    feed.feedPages = [ids.map((id) => inboundEvent({ id, messageId: `msg_${id}`, channelId: null as never, chatId: "chat_feed_aaa", occurredAtMs: at }))];
+    for (const id of ids) {
+      feed.hydrated.set(`msg_${id}`, inboundEvent({ id, messageId: `msg_${id}`, channelId: "ch_test_line", text: id, occurredAtMs: at }));
+      feed.hydrateErrors.set(`msg_${id}`, new Error("fetch failed"));
+    }
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 0 });
+    expect(feed.hydrateCalls).toEqual(["msg_evt_d1", "msg_evt_d2", "msg_evt_d3"]);
+    feed.hydrateErrors.clear();
+    expect(await reconcile(env, feed, THIN_NOW)).toEqual({ pages: 1, enqueued: 4 });
   });
 
   it("logs a failing cron tick instead of throwing", async () => {
